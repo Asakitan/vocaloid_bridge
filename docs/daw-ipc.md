@@ -236,3 +236,91 @@ with `probe_appcontainer_server_child.go` / `probe_appcontainer_server.cs`,
 then `probe_appcontainer_peer_child.go` / `probe_appcontainer_peer.cs`. Run each
 parent executable with its corresponding child executable path. The peer
 negative cases deliberately wait for timeout before terminating each server.
+
+### Token and cleanup follow-up
+
+The peer probe now records `TokenAppContainerSid` from each restricted child's
+actual process token, and records the termination and wait results for timed-out
+servers. In `artifacts/probe-appcontainer-peer-sid-controls.txt`, the same-SID
+server and client reported identical SIDs and exchanged the two bytes; the
+different-profile client reported a distinct SID and Win32 2, as did the
+full-trust client. Both negative-case servers reported `terminate=True` and
+`wait_result=0`; both profile deletion HRESULTs were zero and desktop close
+returned true. The full-trust process reported `TokenIsAppContainer=0`.
+This receipt does not independently audit deleted profile storage, and its
+case-level results, not the parent exit code, establish the observations.
+
+Microsoft's [named-pipe API documentation](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createnamedpipea)
+specifies `LOCAL` syntax in its AppContainer guidance, while its
+[IPC guidance](https://learn.microsoft.com/en-us/windows/apps/develop/communication/interprocess-communication)
+also distinguishes packaged and full-trust processes and describes sharing
+across packages. Neither document establishes automatic rewriting of a
+non-`LOCAL` name. At the time of that peer receipt, no mapping or vendor protocol
+compatibility had been tested; the subsequent controlled mapping experiments are
+described below. The synthetic exchange is not evidence of an operational DAW,
+plugin or ARA host. Remaining isolation coverage includes all other IPC, discovery, token,
+file, registry, network, licensing and audio paths.
+
+### Explicit synthetic name translation
+
+`tools/probe_appcontainer_mapping.cs` launches only its own native Go child on
+a private desktop using two transient AppContainer profiles. The child accepts
+only names beginning with the random `CodexSynthetic` prefix and explicitly
+translates `\\.\pipe\CodexSynthetic...` to
+`\\.\pipe\LOCAL\CodexSynthetic...` before calling the Win32 API. It logs
+the original and translated names and the actual AppContainer token SID. This
+is application-level opt-in translation in a single executable, **not** an
+interposition mechanism, synthetic DLL, or modification of any plugin.
+
+In `artifacts/probe-appcontainer-mapping-controls.txt`, the raw same-profile
+server failed with access denied and its client saw file-not-found. With
+translation enabled, both same-profile peers reported identical SIDs and each
+completed a one-byte send/receive exchange. A second-profile client with a
+distinct SID and a full-trust client each saw file-not-found; both waiting
+servers reported `terminate=True` and `wait_result=0`. Both profile deletion
+HRESULTs were zero and desktop close returned true. This is evidence for this
+controlled name translation and token configuration only; profile storage was
+not independently audited. The client/server roles and case-level exits in the
+receipt matter; the harness exit alone is not an acceptance result.
+
+This does not establish that a fixed-name binary can be redirected without
+source changes: import-table calls, dynamically resolved APIs, alternate name
+encodings and APIs, spawned processes, collisions, peer authentication and
+other IPC have not been covered. No vendor names or binary were used. A
+separate synthetic DLL and host were not part of this experiment; it cannot
+justify loading the real plugin or claim VST3/ARA compatibility. Compile and run the same way as the peer controls,
+using the `probe_appcontainer_mapping` parent and child filenames instead.
+
+### Synthetic static-import interception
+
+An installed Visual Studio 2022 Build Tools MSVC 14.44 compiler and Windows SDK
+were found locally; no toolchain download, installation or global PATH change
+was needed. `tools/probe_mapping_dll.c` builds a synthetic DLL with static
+`CreateNamedPipeW` and `CreateFileW` imports. The separate
+`tools/probe_mapping_patch.c` locates those two named imports in that module's
+import table and replaces their slots with wrappers that accept only
+`CodexSynthetic` names and insert `LOCAL`. `tools/probe_appcontainer_iat_child.go`
+loads only those two owned DLLs and invokes their exported entry points;
+`tools/probe_appcontainer_mapping.cs` supplies the private desktop, random
+names and profiles. Patch result zero means both slots were found and updated.
+
+The first receipt, `artifacts/probe-appcontainer-iat-controls.txt`, records
+restricted DLL load access denied and does not test the interception. For the
+follow-up, only the two newly compiled DLL files received a temporary explicit
+`ALL APPLICATION PACKAGES` read/execute ACE. In
+`artifacts/probe-appcontainer-iat-controls-acl.txt`, the raw same-SID server
+reported access denied and client reported file-not-found; after patching, the
+same-SID pair each reported exchange success. A distinct-SID client and a
+full-trust client each reported file-not-found; both waiting servers reported
+successful termination and wait. Both profile deletions returned HRESULT zero,
+and desktop close returned true. The temporary ACEs were removed immediately
+afterward; `icacls` showed the same inherited entries as before. The harness's
+case output, not its aggregate exit status, is the evidence.
+
+This proves only this controlled x64 DLL's two static wide-character imports
+and synthetic byte exchange. It does not cover ANSI APIs, delay imports,
+dynamic resolution, other DLLs, child processes, alternate pipe paths,
+initialization-time calls before patching, permissions, races, licensing,
+discovery or other IPC. The code is a test probe, not a general interposer or
+production host; it does not patch or load any Yamaha binary. It does not
+establish real plugin isolation, VST3/ARA behavior or transport synchronization.

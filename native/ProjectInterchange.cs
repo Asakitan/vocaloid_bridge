@@ -82,25 +82,29 @@ internal sealed partial class EngineHost
         bool trackedMutation = false;
         try
         {
+            if (includeTempo && ((archiveStates.TryGetValue(source.Id, out ArchiveState? sourceTempoState) && sourceTempoState.Tempo is not null) ||
+                                 (archiveStates.TryGetValue(target.Id, out ArchiveState? targetTempoState) && targetTempoState.Tempo is not null)))
+                throw new InvalidOperationException("project_preservation: tempo extensions require an explicit merge identity mapping.");
             var globalFields = ArchiveMergePrepare(source, target);
+            var resources = ArchivePrepareResources(source, target, includeTracks);
             if (includeTracks && target.Sequence.NumTrack + source.Sequence.NumTrack > 32)
                 throw new InvalidOperationException("The merged project exceeds the native 32-track limit.");
             bool globalChange = !archiveStates.TryGetValue(target.Id, out ArchiveState? targetArchive)
                 ? globalFields.Root.Count != 0 || globalFields.Master.Count != 0
                 : !JsonNode.DeepEquals(globalFields.Root, targetArchive.Root) || !JsonNode.DeepEquals(globalFields.Master, targetArchive.Master);
-            if ((includeTracks && HasArchiveEntityExtensions(source)) || HasArchiveEntityExtensions(target) || globalChange)
+            if ((includeTracks && HasArchiveEntityExtensions(source)) || HasArchiveEntityExtensions(target) || globalChange || resources.Count != 0)
             {
                 if (includeTracks && source.Sequence.Tracks.Any(track => track.Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi)))
                     throw new InvalidOperationException("project_preservation: extended project merge requires MIDI or AI tracks.");
                 // The native writer cannot safely rebind indistinguishable
                 // tracks with different extension payloads. Verify the merged
                 // snapshot on an independent target before changing this one.
-                PreflightPreservedMerge(target, source, offsetTick, includeTracks, includeTempo, replaceTempo, globalFields, globalChange);
+                PreflightPreservedMerge(target, source, offsetTick, includeTracks, includeTempo, replaceTempo, globalFields, globalChange, resources);
                 // The source directory must remain alive if native duplication
                 // references imported assets, including after a staged failure.
                 touched = true;
                 trackedMutation = true;
-                return MergePreservedProject(target, source, offsetTick, includeTracks, includeTempo, replaceTempo, globalFields, globalChange);
+                return MergePreservedProject(target, source, offsetTick, includeTracks, includeTempo, replaceTempo, globalFields, globalChange, resources);
             }
             if (includeTracks)
             {
@@ -183,21 +187,29 @@ internal sealed partial class EngineHost
     }
 
     private void PreflightPreservedMerge(EngineSession target, EngineSession source, long offsetTick,
-        bool includeTracks, bool includeTempo, bool replaceTempo, (JsonObject Root, JsonObject Master) globalFields, bool globalChange)
+        bool includeTracks, bool includeTempo, bool replaceTempo, (JsonObject Root, JsonObject Master) globalFields, bool globalChange, List<(string Name, string Source)> resources)
     {
         EngineSession candidate = CloneProject(target.Id, null);
         try
         {
             var fields = ((JsonObject)globalFields.Root.DeepClone(), (JsonObject)globalFields.Master.DeepClone());
-            MergePreservedProject(candidate, source, offsetTick, includeTracks, includeTempo, replaceTempo, fields, globalChange);
+            MergePreservedProject(candidate, source, offsetTick, includeTracks, includeTempo, replaceTempo, fields, globalChange, resources);
             EngineSession verified = CloneProject(candidate.Id, null);
-            Close(verified.Id, true);
+            try
+            {
+                if (resources.Count != 0)
+                {
+                    string archive = Path.Combine(verified.Directory, "resource-preflight-" + Guid.NewGuid().ToString("N") + ".vpr");
+                    WriteProjectArchive(verified, verified.Directory, archive, CaptureProjectValidity(verified.Sequence));
+                }
+            }
+            finally { Close(verified.Id, true); }
         }
         finally { Close(candidate.Id, true); }
     }
 
     private object MergePreservedProject(EngineSession target, EngineSession source, long offsetTick,
-        bool includeTracks, bool includeTempo, bool replaceTempo, (JsonObject Root, JsonObject Master) globalFields, bool globalChange)
+        bool includeTracks, bool includeTempo, bool replaceTempo, (JsonObject Root, JsonObject Master) globalFields, bool globalChange, List<(string Name, string Source)> resources)
     {
         bool upgraded = EnsureArchiveEntityTracking(target);
         try
@@ -223,7 +235,7 @@ internal sealed partial class EngineHost
                                 if (!track.MovePanpot(panpot.RelPosTick + offset, panpot))
                                     throw new InvalidOperationException("Native imported-pan offset failed: " + track.LastError);
                         }
-                        ArchiveTransferCopy(source, target, original, track, partOffset: offsetTick);
+                        ArchiveTransferCopy(source, target, original, track, partOffset: offsetTick, mergeResources: true);
                     }
                 }
                 if (includeTempo)
@@ -248,6 +260,7 @@ internal sealed partial class EngineHost
                         clipboard.Dispose();
                     }
                 }
+                ArchiveAddResources(target, resources);
                 if (globalChange)
                 {
                     if (!target.Sequence.IsStaged)

@@ -179,6 +179,12 @@ voice information; this operation does not change licensing or install voices.
 | `time_signature.set` | `numerator`, `denominator`; optional `time_signature_index`, `bar` | Time-signature summary |
 | `time_signature.remove` | `time_signature_index` | `removed` |
 
+For VPRs with unknown `masterTrack.tempo.events` fields, the selected native
+tempo operation carries those fields through moves and value changes; deletion
+followed by recreation does not inherit them. Undo/redo and save/reopen have a
+focused synthetic test. Tempo-map merge with either source or target tempo
+extensions remains guarded until its identity transfer is implemented.
+
 Set with an index edits that event; omitted position preserves its position.
 Without an index, position defaults to zero and the event at that position is
 updated, or a native event is inserted. Tempo summaries contain `tempo_index`,

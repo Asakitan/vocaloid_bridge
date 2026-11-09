@@ -114,12 +114,15 @@ For VPR extensions, the host binds supported unknown properties to observed
 native entity lifetimes and transaction history, then overlays only those
 unknown properties onto native snapshots. MIDI/AI clipboard cut and paste and
 project merge use tracked native transactions and identity mapping. A failed
-cut retains its independent clipboard snapshot and reports its ID. Merge combines
-nonconflicting source root/master extensions in the target history, preflighting
-new nested parents and the merged output in independent snapshots; metadata-only merges without a native
-history entry and opaque resource transfers are explicit errors. Plain projects
-retain their existing operation paths. Extra archive members are
-preserved on save without reviving deleted native-managed audio.
+cut retains its independent clipboard snapshot and reports its ID. Extended paste
+is preflighted on an independent candidate. Merge combines nonconflicting source
+root/master extensions and bounded opaque project resources in the target history,
+preflighting the merged output in independent snapshots. Metadata-only merges
+without a native history entry, clipboard opaque-resource transfer and tempo-map
+merge with tempo extensions are explicit errors. Tempo-event unknown fields have
+operation-specific transitions and history. Plain projects retain their existing
+operation paths. Extra archive members are preserved on save without reviving
+deleted native-managed audio; the output ZIP is checked against extraction limits.
 
 Summaries contain `session_id`, native `title`, native `track_count`, host `dirty`,
 `root_ref`, and nullable `last_saved_path`. Creation uses the real VSM manager,

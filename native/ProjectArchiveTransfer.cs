@@ -4,8 +4,8 @@ using Yamaha.VOCALOID.VSM;
 
 internal sealed partial class EngineHost
 {
-    // Called before any target mutation, including for a source without entity
-    // extensions. Opaque resources have no transfer or collision contract yet.
+    // Clipboard cut/paste still has no opaque-resource transfer contract.
+    // Project merge handles resources separately before target mutation.
     private void ArchiveTransferValidateSource(EngineSession source)
     {
         if (!archiveStates.TryGetValue(source.Id, out ArchiveState? state)) return;
@@ -16,8 +16,8 @@ internal sealed partial class EngineHost
 
     private (JsonObject Root, JsonObject Master) ArchiveMergePrepare(EngineSession source, EngineSession target)
     {
-        ArchiveTransferValidateSource(source);
         archiveStates.TryGetValue(source.Id, out ArchiveState? from);
+        if (from is not null) ArchiveCheck(from);
         archiveStates.TryGetValue(target.Id, out ArchiveState? to);
         if (to is not null) ArchiveCheck(to);
         JsonObject root = to is null ? new JsonObject() : (JsonObject)to.Root.DeepClone();
@@ -62,6 +62,71 @@ internal sealed partial class EngineHost
         return (root, master);
     }
 
+    // Opaque members are project-scoped: no claim is made that they belong to
+    // any imported track. Never replace an existing member or case alias.
+    private List<(string Name, string Source)> ArchivePrepareResources(EngineSession source, EngineSession target, bool includeTracks)
+    {
+        List<(string Name, string Source)> additions = [];
+        if (!archiveStates.TryGetValue(source.Id, out ArchiveState? from) || from.ExtraFiles.Count == 0) return additions;
+        ArchiveCheck(from);
+        if (!includeTracks) throw new InvalidOperationException("project_preservation: opaque resource merge requires track import.");
+        archiveStates.TryGetValue(target.Id, out ArchiveState? to);
+        if (to is not null) ArchiveCheck(to);
+        foreach (string name in from.ExtraFiles)
+        {
+            PathGuard.Under(source.Directory, name);
+            string sourcePath = from.ResourcePaths[name];
+            if (!PathGuard.IsUnder(source.Directory, sourcePath)) throw new IOException("project_preservation: resource escaped source session.");
+            PathGuard.NoLinks(sourcePath);
+            string? same = to?.ExtraFiles.FirstOrDefault(existing => existing.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (same is not null)
+            {
+                if (!same.Equals(name, StringComparison.Ordinal) || !ArchiveFilesEqual(sourcePath, to!.ResourcePaths[same]))
+                    throw new InvalidDataException("project_preservation: opaque member conflict: " + name);
+                continue;
+            }
+            foreach (string existing in to?.ExtraFiles ?? [])
+                if (existing.StartsWith(name + "/", StringComparison.OrdinalIgnoreCase) || name.StartsWith(existing + "/", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("project_preservation: opaque member path conflict: " + name);
+            additions.Add((name, sourcePath));
+        }
+        return additions;
+    }
+
+    private static bool ArchiveFilesEqual(string first, string second)
+    {
+        PathGuard.NoLinks(second);
+        using FileStream a = File.OpenRead(first), b = File.OpenRead(second);
+        if (a.Length != b.Length) return false;
+        byte[] x = new byte[65536], y = new byte[65536];
+        int count;
+        while ((count = a.Read(x, 0, x.Length)) != 0)
+        {
+            b.ReadExactly(y, 0, count);
+            if (!x.AsSpan(0, count).SequenceEqual(y.AsSpan(0, count))) return false;
+        }
+        return true;
+    }
+
+    private void ArchiveAddResources(EngineSession target, List<(string Name, string Source)> additions)
+    {
+        if (additions.Count == 0) return;
+        ArchiveState state = archiveStates[target.Id];
+        if (state.Before is null || !target.Sequence.IsStaged)
+            throw new InvalidOperationException("project_preservation: resource merge requires a native history entry.");
+        string storage = Path.Combine(target.Directory, ".bridge-resources-" + Guid.NewGuid().ToString("N"));
+        PathGuard.CreateDirectory(storage);
+        foreach ((string name, string source) in additions)
+        {
+            string destination = PathGuard.Under(storage, name);
+            PathGuard.CreateDirectory(Path.GetDirectoryName(destination)!);
+            PathGuard.NoLinks(source);
+            File.Copy(source, destination, false);
+            state.ExtraFiles.Add(name);
+            state.ResourcePaths.Add(name, destination);
+        }
+    }
+
     // Call on a freshly returned native duplicate, inside a target archive
     // transaction, after moving a duplicated track's parts for its offset.
     // partOffset applies to track child parts or a directly duplicated part;
@@ -70,11 +135,11 @@ internal sealed partial class EngineHost
     // Caller commits only after every mapping succeeds and rolls both journals
     // back on any exception. Target observer/state must already be initialized.
     private void ArchiveTransferCopy(EngineSession source, EngineSession target,
-        object original, object duplicate, long partOffset = 0, long noteOffset = 0)
+        object original, object duplicate, long partOffset = 0, long noteOffset = 0, bool mergeResources = false)
     {
         if (ReferenceEquals(source, target))
             throw new InvalidOperationException("project_preservation: transfer requires an independent snapshot.");
-        ArchiveTransferValidateSource(source);
+        if (!mergeResources) ArchiveTransferValidateSource(source);
         if (!archiveStates.TryGetValue(target.Id, out ArchiveState? to) || to.Before is null || !to.ObserverAttached)
             throw new InvalidOperationException("project_preservation: transfer target identity transaction is not initialized.");
         archiveStates.TryGetValue(source.Id, out ArchiveState? from);

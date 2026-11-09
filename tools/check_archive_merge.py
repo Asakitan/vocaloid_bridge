@@ -1,6 +1,7 @@
 """Focused synthetic acceptance for archive-aware project merge."""
 import json
 import zipfile
+import wave
 import verify_features as v
 
 
@@ -213,6 +214,130 @@ async def merge_transfer(check):
     finally:
         await check.close(target)
     v.require(source.read_bytes() == original, "Source VPR changed")
+
+
+@v.feature("preservation.merge_resources", "preservation", "score_compose", "project_open",
+           "project_merge", "project_edit", "project_save")
+async def merge_resources(check):
+    seed = await check.call("score_compose", output_name=check.output("resource-seed"), title="Resource fixture", bpm=120,
+                            notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    seed_id = seed["native_session"]["session_id"]
+    _, seed_path = await check.save(seed_id, "resource-seed")
+    await check.close(seed_id)
+    _, base = v.read_vpr(seed_path)
+
+    def fixture(label, resources):
+        path = v.ROOT / "output" / check.output(label)
+        with zipfile.ZipFile(path, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, payload in {**base, **resources}.items(): archive.writestr(name, payload)
+        return path, path.read_bytes()
+
+    source, source_original = fixture("resource-source", {"Extras/import.bin": b"imported", "Extras/shared.bin": b"shared"})
+    target_path, target_original = fixture("resource-target", {"Extras/target.bin": b"target", "Extras/shared.bin": b"shared"})
+    target = (await check.call("project_open", path=str(target_path)))["session_id"]
+    try:
+        await check.edit(target, "tempo.set", start_tick=1920, bpm=90)
+        await check.call("project_merge", session_id=target, path=str(source), offset_tick=9600,
+                         include_tracks=True, include_tempo=False)
+        _, merged_path = await check.save(target, "resources-merged")
+        _, merged = v.read_vpr(merged_path)
+        v.require(merged["Extras/import.bin"] == b"imported" and merged["Extras/shared.bin"] == b"shared" and
+                  merged["Extras/target.bin"] == b"target", "Merged resource contents changed")
+        await check.edit(target, "undo")
+        _, undo_path = await check.save(target, "resources-undo")
+        _, undo = v.read_vpr(undo_path)
+        v.require("Extras/import.bin" not in undo and undo["Extras/shared.bin"] == b"shared" and
+                  undo["Extras/target.bin"] == b"target", "Undo changed baseline resources")
+        await check.edit(target, "undo")
+        _, old_path = await check.save(target, "resources-old-undo")
+        _, old = v.read_vpr(old_path)
+        v.require("Extras/import.bin" not in old and old["Extras/target.bin"] == b"target", "Old undo lost baseline resources")
+        await check.edit(target, "redo")
+        await check.edit(target, "redo")
+        _, redo_path = await check.save(target, "resources-redo")
+        _, redo = v.read_vpr(redo_path)
+        v.require(redo["Extras/import.bin"] == b"imported", "Redo lost imported resource")
+        reopened = (await check.call("project_open", path=str(redo_path)))["session_id"]
+        try:
+            _, reopened_path = await check.save(reopened, "resources-reopened")
+            v.require(v.read_vpr(reopened_path)[1]["Extras/import.bin"] == b"imported", "Reopen lost resource")
+        finally:
+            await check.close(reopened)
+        await check.edit(target, "undo")
+        await check.edit(target, "tempo.set", start_tick=2880, bpm=110)
+        _, branch_path = await check.save(target, "resources-branch")
+        v.require("Extras/import.bin" not in v.read_vpr(branch_path)[1], "New branch resurrected discarded resource")
+    finally:
+        await check.close(target)
+
+    for label, extra in (("bytes", {"Extras/shared.bin": b"different"}),
+                         ("case", {"extras/shared.bin": b"shared"}),
+                         ("prefix", {"Extras/shared.bin/child": b"shared"})):
+        conflict, original = fixture("resource-conflict-" + label, extra)
+        target = (await check.call("project_open", path=str(target_path)))["session_id"]
+        try:
+            before = await check.call("project_status", session_id=target)
+            await check.rejected("project_merge", "opaque member", session_id=target, path=str(conflict),
+                                 include_tracks=True, include_tempo=False)
+            v.require(await check.call("project_status", session_id=target) == before, "Rejected resource merge changed target")
+            _, saved = await check.save(target, "resources-rejected-" + label)
+            v.require(v.read_vpr(saved)[1]["Extras/shared.bin"] == b"shared", "Rejected resource merge replaced target")
+        finally:
+            await check.close(target)
+        v.require(conflict.read_bytes() == original, "Conflict source changed")
+    v.require(source.read_bytes() == source_original and target_path.read_bytes() == target_original,
+              "Resource source or target VPR changed")
+
+
+@v.feature("preservation.merge_resource_native_collision", "preservation", "score_compose", "project_audio",
+           "project_open", "project_merge", "project_edit", "project_save")
+async def merge_resource_native_collision(check):
+    wav_path = v.ROOT / "output" / check.output("collision-input", ".wav")
+    with wave.open(str(wav_path), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(44100)
+        audio.writeframes(b"\x00\x00" * 4410)
+    wav_original = wav_path.read_bytes()
+    target = (await check.call("project_create", title="Native audio collision target"))["session_id"]
+    try:
+        await check.audio(target, "import_audio", path=str(wav_path), name="Collision WAV", position_tick=0)
+        target_json, target_path = await check.save(target, "collision-target-before")
+        _, target_members = v.read_vpr(target_path)
+        audio_names = [part["wav"][key] for track in target_json.get("tracks", [])
+                       for part in track.get("parts", []) if isinstance(part.get("wav"), dict)
+                       for key in ("name", "processedName") if part["wav"].get(key)]
+        audio_paths = ["Project/Audio/" + name for name in audio_names if "Project/Audio/" + name in target_members]
+        v.require(bool(audio_paths), "Native-saved target has no referenced WAV member", audio_names)
+        collision = audio_paths[0]
+        original_payload = target_members[collision]
+
+        seed = await check.call("score_compose", output_name=check.output("collision-source-seed"), title="Collision source", bpm=120,
+                                notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+        source_id = seed["native_session"]["session_id"]
+        try:
+            _, seed_path = await check.save(source_id, "collision-source-seed")
+        finally:
+            await check.close(source_id)
+        _, source_members = v.read_vpr(seed_path)
+        v.require(collision not in source_members, "Synthetic source unexpectedly references collision path")
+        source_members[collision] = b"opaque collision payload"
+        source_path = v.ROOT / "output" / check.output("collision-source")
+        with zipfile.ZipFile(source_path, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, payload in source_members.items(): archive.writestr(name, payload)
+        source_original = source_path.read_bytes()
+        before = await check.call("project_status", session_id=target)
+        await check.rejected("project_merge", "collides with retained member", session_id=target,
+                             path=str(source_path), include_tracks=True, include_tempo=False)
+        v.require(await check.call("project_status", session_id=target) == before,
+                  "Native-output collision changed target state before rejection")
+        _, protected_path = await check.save(target, "collision-target-after")
+        _, protected = v.read_vpr(protected_path)
+        v.require(protected.get(collision) == original_payload, "Native-output collision changed referenced WAV")
+        v.require(source_path.read_bytes() == source_original and wav_path.read_bytes() == wav_original,
+                  "Collision check changed source file or input WAV")
+    finally:
+        await check.close(target)
 
 
 if __name__ == "__main__":

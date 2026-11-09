@@ -23,6 +23,191 @@ EXTRA_AUDIO = "Project/Audio/opaque-extra.bin"
 EXTRA_ROOT = "custom-probe/root.bin"
 
 
+@v.feature("preservation.array_guard", "preservation", "score_compose", "project_open")
+async def array_guard(check):
+    """Unknown array-element fields must be rejected, never silently dropped."""
+    seed = await check.call("score_compose", output_name=check.output("array-guard-seed"),
+                            title="Array guard", bpm=120,
+                            notes=[{"start": 0, "duration": 1, "pitch": 60,
+                                    "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    await check.close(seed["native_session"]["session_id"])
+    sequence, members = v.read_vpr(seed["path"])
+    for label, select in (
+        ("effect-parameter", lambda s: s["tracks"][0]["parts"][0]["audioEffects"][0]["parameters"][0]),
+        ("language", lambda s: s["tracks"][0]["parts"][0]["aiVoice"]["langIDs"][0]),
+    ):
+        fixture = json.loads(json.dumps(sequence))
+        select(fixture)[KEY] = label
+        fixture_members = dict(members)
+        fixture_members["Project/sequence.json"] = json.dumps(fixture, ensure_ascii=False).encode("utf-8")
+        path = v.ROOT / "output" / check.output("array-guard-" + label)
+        with zipfile.ZipFile(path, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, payload in fixture_members.items():
+                archive.writestr(name, payload)
+        original = path.read_bytes()
+        await check.rejected("project_open", "unsupported nested unknown field|unsupported language metadata", path=str(path))
+        v.require(path.read_bytes() == original, "Rejected array fixture was modified")
+        check.evidence("array_guard_" + label, {"path": str(path), "rejected": True})
+
+
+@v.feature("preservation.tempo_array_semantics", "preservation", "score_compose", "project_edit", "project_save")
+async def tempo_array_semantics(check):
+    """Observe serialized tempo transitions without opening user projects."""
+    seed = await check.call("score_compose", output_name=check.output("tempo-array-seed"),
+                            title="Tempo array semantics", bpm=120,
+                            notes=[{"start": 0, "duration": 1, "pitch": 60,
+                                    "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+
+    async def snapshot(label):
+        sequence, path = await check.save(sid, "tempo-array-" + label)
+        result = [(e["pos"], e["value"]) for e in sequence["masterTrack"]["tempo"]["events"]]
+        check.evidence("tempo_" + label, {"path": str(path), "events": result})
+        return result
+
+    await check.edit(sid, "tempo.set", start_tick=480, bpm=130)
+    await check.edit(sid, "tempo.set", start_tick=960, bpm=140)
+    before = await snapshot("before")
+    await check.edit(sid, "tempo.set", tempo_index=1, start_tick=1440, bpm=135)
+    moved = await snapshot("moved")
+    v.require(moved == [(0, 12000), (960, 14000), (1440, 13500)], "Unexpected tempo move")
+    await check.edit(sid, "undo")
+    v.require(await snapshot("undo_move") == before, "Undo did not restore tempo array")
+    await check.edit(sid, "redo")
+    v.require(await snapshot("redo_move") == moved, "Redo did not restore tempo array")
+    await check.edit(sid, "tempo.remove", tempo_index=2)
+    await check.edit(sid, "tempo.set", start_tick=1440, bpm=135)
+    v.require(await snapshot("recreated") == moved, "Recreated tempo serialized differently")
+    await check.close(sid)
+
+
+@v.feature("preservation.tempo_array_roundtrip", "preservation", "score_compose", "project_open", "project_edit", "project_save", "project_clone", "project_clipboard", "project_create")
+async def tempo_array_roundtrip(check):
+    seed = await check.call("score_compose", output_name=check.output("tempo-extension-seed"),
+                            title="Tempo extensions", bpm=120,
+                            notes=[{"start": 0, "duration": 1, "pitch": 60,
+                                    "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+    await check.edit(sid, "tempo.set", start_tick=480, bpm=130)
+    await check.edit(sid, "tempo.set", start_tick=960, bpm=140)
+    sequence, seed_path = await check.save(sid, "tempo-extension-native")
+    await check.close(sid)
+    _, members = v.read_vpr(seed_path)
+    events = sequence["masterTrack"]["tempo"]["events"]
+    for event in events:
+        event[KEY] = {"marker": "event-" + str(event["pos"]), "nested": [True, None]}
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    source = v.ROOT / "output" / check.output("tempo-extension-input")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items():
+            archive.writestr(name, payload)
+    original = source.read_bytes()
+    sid = (await check.call("project_open", path=str(source)))["session_id"]
+
+    async def assert_events(session, label, expected):
+        result, path = await check.save(session, "tempo-extension-" + label)
+        actual = [(event["pos"], event["value"], event.get(KEY))
+                  for event in result["masterTrack"]["tempo"]["events"]]
+        v.require(actual == expected, "Tempo metadata state differs", {"actual": actual, "expected": expected})
+        check.evidence("tempo_extension_" + label, {"path": str(path), "events": actual})
+        return path
+
+    def marker(pos):
+        return {"marker": "event-" + str(pos), "nested": [True, None]}
+    initial = [(0, 12000, marker(0)), (480, 13000, marker(480)), (960, 14000, marker(960))]
+    moved = [(0, 12000, marker(0)), (960, 14000, marker(960)), (1440, 13500, marker(480))]
+    await assert_events(sid, "initial", initial)
+    await check.rejected("project_edit", "tempo destination is ambiguous", session_id=sid,
+                         operation="tempo.set", options={"tempo_index": 1, "start_tick": 960, "bpm": 135})
+    await assert_events(sid, "collision", initial)
+    await check.edit(sid, "tempo.set", tempo_index=1, start_tick=480, bpm=130)
+    await assert_events(sid, "no-op", initial)
+    before = await check.call("project_status", session_id=sid)
+    await check.rejected("project_merge", "tempo extensions require an explicit merge", session_id=sid,
+                         path=str(seed_path), include_tracks=False, include_tempo=True, replace_tempo=True)
+    v.require(await check.call("project_status", session_id=sid) == before, "Rejected tempo merge changed the target")
+    plain = (await check.call("project_open", path=str(seed_path)))["session_id"]
+    try:
+        before = await check.call("project_status", session_id=plain)
+        await check.rejected("project_merge", "tempo extensions require an explicit merge", session_id=plain,
+                             path=str(source), include_tracks=False, include_tempo=True, replace_tempo=True)
+        v.require(await check.call("project_status", session_id=plain) == before, "Rejected tempo merge changed a plain target")
+    finally:
+        await check.close(plain)
+    clip = (await check.call("project_clipboard", session_id=sid, operation="copy",
+                             options={"kind": "tracks", "indices": [0]}))["clipboard_id"]
+    try:
+        target = (await check.call("project_create", title="Tempo clipboard target"))["session_id"]
+        try:
+            await check.call("project_clipboard", session_id=target, operation="paste", options={"clipboard_id": clip})
+            pasted, _ = await check.save(target, "tempo-clipboard-target")
+            v.require(all(KEY not in event for event in pasted["masterTrack"]["tempo"]["events"]),
+                      "Track-only clipboard paste incorrectly transferred project tempo metadata")
+        finally:
+            await check.close(target)
+    finally:
+        await check.call("project_clipboard", operation="clear", options={"clipboard_id": clip})
+    await check.edit(sid, "tempo.set", tempo_index=1, start_tick=1440, bpm=135)
+    await assert_events(sid, "moved", moved)
+    await check.edit(sid, "undo")
+    await assert_events(sid, "undo", initial)
+    await check.edit(sid, "redo")
+    await assert_events(sid, "redo", moved)
+    clone = (await check.call("project_clone", session_id=sid))["session_id"]
+    await check.edit(sid, "tempo.remove", tempo_index=2)
+    await check.edit(sid, "tempo.set", start_tick=1440, bpm=135)
+    recreated = moved[:-1] + [(1440, 13500, None)]
+    path = await assert_events(sid, "recreated", recreated)
+    await check.edit(sid, "undo")
+    await assert_events(sid, "undo-recreate", moved[:-1])
+    await check.edit(sid, "undo")
+    await assert_events(sid, "undo-remove", moved)
+    await check.edit(sid, "redo")
+    await check.edit(sid, "redo")
+    path = await assert_events(sid, "redo-recreate", recreated)
+    await assert_events(clone, "clone", moved)
+    reopened = (await check.call("project_open", path=str(path)))["session_id"]
+    await assert_events(reopened, "reopened", recreated)
+    v.require(source.read_bytes() == original, "Source project changed")
+    for session in (reopened, clone, sid):
+        await check.close(session)
+
+
+@v.feature("preservation.tempo_only_similar_tracks", "preservation", "score_compose", "project_open", "project_edit", "project_save")
+async def tempo_only_similar_tracks(check):
+    seed = await check.call("score_compose", output_name=check.output("tempo-similar-seed"),
+                            title="Tempo-only metadata", bpm=120,
+                            notes=[{"start": 0, "duration": 1, "pitch": 60,
+                                    "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+    await check.edit(sid, "track.duplicate", track_index=0)
+    await check.edit(sid, "automation.set", scope="track_volume", track_index=1,
+                     points=[{"tick": 0, "value": -120}], replace=True)
+    sequence, seed_path = await check.save(sid, "tempo-similar-native")
+    await check.close(sid)
+    v.require(sequence["tracks"][0]["volume"] != sequence["tracks"][1]["volume"],
+              "Fixture does not contain different known track values")
+    _, members = v.read_vpr(seed_path)
+    sequence["masterTrack"]["tempo"]["events"][0][KEY] = "tempo-only"
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    source = v.ROOT / "output" / check.output("tempo-similar-input")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    original = source.read_bytes()
+    target = (await check.call("project_open", path=str(source)))["session_id"]
+    try:
+        await check.edit(target, "tempo.set", tempo_index=0, start_tick=0, bpm=125)
+        saved, path = await check.save(target, "tempo-similar-saved")
+        v.require(saved["masterTrack"]["tempo"]["events"][0][KEY] == "tempo-only" and
+                  saved["tracks"][0]["volume"] != saved["tracks"][1]["volume"],
+                  "Tempo-only extension or known track values were lost")
+        reopened = (await check.call("project_open", path=str(path)))["session_id"]
+        await check.close(reopened)
+    finally:
+        await check.close(target)
+    v.require(source.read_bytes() == original, "Tempo-only source changed")
+
+
 def properties(sequence, members):
     track = sequence["tracks"][0]
     part = track["parts"][0]

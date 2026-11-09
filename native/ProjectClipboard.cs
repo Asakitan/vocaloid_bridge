@@ -206,7 +206,8 @@ internal sealed partial class EngineHost
         finally { target.InvalidateChildren(); }
     }
 
-    private object PastePreservedClipboard(EngineSession target, ProjectClipboardData stored, JsonElement options, long offset)
+    private object PastePreservedClipboard(EngineSession target, ProjectClipboardData stored, JsonElement options, long offset,
+        bool preflight = true)
     {
         ArchiveTransferValidateSource(stored.Snapshot);
         WIVSMTrack? targetTrack = null;
@@ -234,6 +235,26 @@ internal sealed partial class EngineHost
             WIVSMMidiPart sourcePart = ClipboardMidiPart(stored.Snapshot, stored.SourceTrackIndex, stored.SourcePartIndex);
             if (sourcePart.IsAi != targetPart.IsAi)
                 throw new ArgumentException("Clipboard note and target part must use the same native voice type.");
+        }
+
+        if (preflight)
+        {
+            // A successful native duplicate can still produce an archive whose
+            // extended entities cannot be rebound after save/reopen. Exercise
+            // the same paste and snapshot on an independent target first.
+            EngineSession candidate = CloneProject(target.Id, null);
+            try
+            {
+                PastePreservedClipboard(candidate, stored, options, offset, false);
+                EngineSession verified = CloneProject(candidate.Id, null);
+                Close(verified.Id, true);
+            }
+            finally { Close(candidate.Id, true); }
+            // Reacquire target wrappers after saving the independent snapshot.
+            if (stored.Kind == "parts")
+                targetTrack = ClipboardTrack(target, ClipboardIndex(options, "track_index", 0));
+            else if (stored.Kind == "notes")
+                targetPart = ClipboardMidiPart(target, ClipboardIndex(options, "track_index", 0), ClipboardIndex(options, "part_index", 0));
         }
 
         bool upgraded = EnsureArchiveEntityTracking(target);
@@ -285,7 +306,7 @@ internal sealed partial class EngineHost
                 }
                 return new { session_id = target.Id, clipboard_id = stored.Id, native = true, pasted = inserted };
             });
-            stored.Pasted = true;
+            if (preflight) stored.Pasted = true;
             return result;
         }
         catch (Exception error)

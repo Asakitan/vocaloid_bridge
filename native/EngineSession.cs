@@ -258,6 +258,19 @@ internal sealed partial class EngineHost : IDisposable
         ApplyArchivePreservation(session, stage);
         ApplyFrozenAuthoringState(session, stage);
         string archive = Path.Combine(stage, "saved.vpr");
+        WriteProjectArchive(session, stage, archive, validity);
+        PathGuard.NoLinks(destination);
+        File.Move(archive, destination, overwrite);
+        session.LastSavedPath = destination;
+        session.Dirty = false;
+        return new { session_id = session.Id, path = destination, saved = true, native = true,
+                     bridge_phoneme_validity_count = validity.Notes.Count };
+    }
+
+    private void WriteProjectArchive(EngineSession session, string stage, string archive, ProjectValidityMetadata validity)
+    {
+        string project = Path.Combine(stage, "Project");
+        PathGuard.TreeNoLinks(project);
         ZipFile.CreateFromDirectory(project, archive, CompressionLevel.Optimal, true);
         if (validity.Notes.Count != 0)
         {
@@ -266,12 +279,42 @@ internal sealed partial class EngineHost : IDisposable
             JsonSerializer.Serialize(output, validity);
         }
         AddOuterArchiveMembers(session, stage, archive);
-        PathGuard.NoLinks(destination);
-        File.Move(archive, destination, overwrite);
-        session.LastSavedPath = destination;
-        session.Dirty = false;
-        return new { session_id = session.Id, path = destination, saved = true, native = true,
-                     bridge_phoneme_validity_count = validity.Notes.Count };
+        ValidateArchiveExport(archive, stage);
+    }
+
+    // Check the actual ZIP central directory against the same extraction bounds
+    // before publishing it. The optional limits support tiny synthetic tests.
+    private static void ValidateArchiveExport(string path, string root, int maxEntries = 16384, long maxBytes = MaxArchiveBytes)
+    {
+        if (maxEntries < 0 || maxBytes < 0) throw new ArgumentOutOfRangeException("archive limits");
+        using ZipArchive archive = ZipFile.OpenRead(path);
+        if (archive.Entries.Count > maxEntries) throw new InvalidDataException("VPR exceeds the archive entry limit.");
+        HashSet<string> names = new(StringComparer.OrdinalIgnoreCase), files = new(StringComparer.OrdinalIgnoreCase);
+        long total = 0;
+        foreach (ZipArchiveEntry entry in archive.Entries)
+        {
+            string name = entry.FullName.Replace('\\', '/');
+            bool isDirectory = name.EndsWith('/');
+            string destination = PathGuard.Under(root, isDirectory ? name[..^1] : name);
+            int unixType = (entry.ExternalAttributes >> 16) & 0xf000;
+            if ((unixType != 0 && unixType != 0x8000 && unixType != 0x4000) ||
+                (entry.ExternalAttributes & (int)FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException("VPR contains a link or special filesystem entry.");
+            if (!names.Add(destination)) throw new InvalidDataException("VPR contains duplicate case-insensitive paths.");
+            if (entry.Length < 0 || entry.Length > maxBytes - total) throw new InvalidDataException("VPR exceeds the archive extraction size limit.");
+            total += entry.Length;
+            if (isDirectory && entry.Length != 0) throw new InvalidDataException("VPR directory entry has a payload.");
+            if (!isDirectory) files.Add(destination);
+        }
+        foreach (string name in names)
+        {
+            string? parent = Path.GetDirectoryName(name);
+            while (parent is not null && PathGuard.IsUnder(root, parent))
+            {
+                if (files.Contains(parent)) throw new InvalidDataException("VPR contains a file/directory path conflict.");
+                parent = Path.GetDirectoryName(parent);
+            }
+        }
     }
 
     private static ProjectValidityMetadata CaptureProjectValidity(WIVSMSequence sequence)

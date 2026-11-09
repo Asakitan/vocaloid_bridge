@@ -750,7 +750,7 @@ internal sealed partial class EngineHost
         throw new InvalidOperationException("Native tempo is no longer attached.");
     }
 
-    private static object ScoreTempoEdit(EngineSession session, string operation, JsonElement options)
+    private object ScoreTempoEdit(EngineSession session, string operation, JsonElement options)
     {
         WIVSMSequence sequence = session.Sequence;
         WIVSMTempo? tempo = null;
@@ -765,9 +765,12 @@ internal sealed partial class EngineHost
                 throw new ArgumentException("tempo.remove requires tempo_index.");
             if (tempo.RelPosTick.Value == 0)
                 throw new ArgumentException("The initial tempo cannot be removed; update it with tempo.set.");
+            int oldPosition = checked((int)tempo.RelPosTick.Value);
+            ArchiveTempoPreflight(session, oldPosition, null);
             return ScoreMutate(session, operation, () =>
             {
                 ScoreRequire(sequence.RemoveTempo(tempo), operation, sequence);
+                ArchiveTempoTransition(session, oldPosition, null, null);
                 return new { removed = true };
             });
         }
@@ -776,6 +779,8 @@ internal sealed partial class EngineHost
             throw new ArgumentException("The initial tempo must remain at tick zero.");
         int value = ScoreBpm(options, "bpm", sequence);
         tempo ??= sequence.TemposEnumerator.FirstOrDefault(item => item.RelPosTick.Value == start);
+        int? previousPosition = tempo is null ? null : checked((int)tempo.RelPosTick.Value);
+        ArchiveTempoPreflight(session, previousPosition, start);
         return ScoreMutate(session, operation, () =>
         {
             WIVSMTempo edited = tempo ?? sequence.InsertTempo(new VSMRelTick(start), value)
@@ -787,6 +792,7 @@ internal sealed partial class EngineHost
                 edited.Value = value;
                 ScoreRequire(edited.Value == value, operation, sequence);
             }
+            ArchiveTempoTransition(session, previousPosition, start, value);
             return ScoreTempoSummary(edited, ScoreTempoIndex(sequence, edited));
         });
     }

@@ -25,7 +25,7 @@ on an independent candidate first, rejecting the tested indistinguishable-track
 conflict before modifying the target; this adds native copy and save overhead.
 Global fields follow merge undo/redo and rollback,
 and are project-level rather than owned by an imported track. Source opaque
-archive resources are rejected before mutation. The expanded global merge
+archive resources follow the track-inclusive merge contract below. The expanded global merge
 behavior, including newly introduced nested fields and no-history protection,
 passed its focused native MCP run in
 `artifacts/feature-acceptance-5a2c12f87c28/summary.json`.
@@ -212,3 +212,29 @@ through the current native API, rather than depending on an old generated
 output. `artifacts/feature-acceptance-2ccd799e0d5e/` records this variant and
 the current operation-catalog check. The genuine PPSF V2 input is still
 required for the voice-loss save/clone checks.
+
+## Opaque archive resources in project merge
+
+Track-inclusive project merge treats opaque, unreferenced ZIP members as
+project-scoped data. It does not infer ownership by a track or claim support
+for transferring native-managed audio. A source with opaque members requires
+track import; clipboard transfer retains its separate rejection boundary.
+Identical names and identical bytes are shared; differing bytes, case-only
+name differences, and file/directory prefix conflicts are rejected. Paths are
+validated with the existing session path and link checks. Conflicts with
+native output are rejected during the independent candidate save before the
+target merge. No existing member is overwritten.
+
+New resources are copied to private target-session storage and their mapping
+is journaled with the native merge; additions require a native history entry.
+Undo, redo, rollback, and redo-clearing branches restore the corresponding
+mapping. Private copies remain until session cleanup so redo can restore
+them. The source project and existing destination files are not modified.
+`artifacts/feature-acceptance-a2ec5efb0ad1/summary.json` verifies the above
+behavior on synthetic AI projects, including a collision with a native WAV;
+it is not acceptance evidence for arbitrary project formats. The independent
+candidate is packed and checked against the same entry-count and uncompressed
+size limits as VPR extraction before the real target is modified. Successful
+save also checks its actual ZIP central directory before publication. Repeated
+undone or abandoned additions can consume session-private disk space until the
+session closes, even after their history branch is discarded.

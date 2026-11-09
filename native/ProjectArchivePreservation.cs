@@ -9,7 +9,8 @@ internal sealed partial class EngineHost
 {
     private readonly record struct ArchiveEntity(string Kind, nint Pointer);
     private sealed record ArchiveEntry(JsonObject Extra, ArchiveEntity? Parent);
-    private sealed record ArchiveHistory(Dictionary<ArchiveEntity, ArchiveEntry> Live, JsonObject Root, JsonObject Master);
+    private sealed record ArchiveHistory(Dictionary<ArchiveEntity, ArchiveEntry> Live, JsonObject Root, JsonObject Master, Dictionary<string, string> Resources,
+        Dictionary<int, ProjectArchiveArrays.Tempo>? Tempo);
 
     private sealed class ArchiveState
     {
@@ -27,7 +28,13 @@ internal sealed partial class EngineHost
         internal JsonObject? UpgradeRoot;
         internal JsonObject? UpgradeMaster;
         internal string? Action;
-        internal readonly List<string> ExtraFiles = [];
+        internal List<string> ExtraFiles = [];
+        internal Dictionary<string, string> ResourcePaths = new(StringComparer.Ordinal);
+        internal Dictionary<string, string>? BeforeResources;
+        internal Dictionary<string, string>? UpgradeResources;
+        internal Dictionary<int, ProjectArchiveArrays.Tempo>? Tempo;
+        internal Dictionary<int, ProjectArchiveArrays.Tempo>? BeforeTempo;
+        internal Dictionary<int, ProjectArchiveArrays.Tempo>? UpgradeTempo;
         internal string? Invalid;
         internal bool HasEntityExtensions;
         internal bool ObserverAttached;
@@ -117,7 +124,7 @@ internal sealed partial class EngineHost
     // silently copying stale structures or losing fields. The installed schema's
     // langIDs array omits items; its only declared member is handled explicitly.
     private static void ArchiveValidateNested(JsonNode? node, JsonObject schema, string path,
-        bool owner = false)
+        bool owner = false, bool tempoExtensions = false)
     {
         if (node is null) return;
         JsonObject resolved = ArchiveResolveSchema(schema, ArchiveSchema());
@@ -136,13 +143,14 @@ internal sealed partial class EngineHost
                 if ((path == "" && (key == "masterTrack" || key == "tracks")) ||
                     (path == "/tracks[]" && key == "parts") ||
                     (path == "/tracks[]/parts[]" && key == "notes")) continue;
-                ArchiveValidateNested(child, childSchema, path + "/" + key, owner && child is JsonObject);
+                if (tempoExtensions && path == "/masterTrack/tempo" && key == "events") continue;
+                ArchiveValidateNested(child, childSchema, path + "/" + key, owner && child is JsonObject, tempoExtensions);
             }
         }
         else if (node is JsonArray array)
         {
             if (resolved["items"] is JsonObject items)
-                foreach (JsonNode? child in array) ArchiveValidateNested(child, items, path + "[]");
+                foreach (JsonNode? child in array) ArchiveValidateNested(child, items, path + "[]", tempoExtensions: tempoExtensions);
             else if (path.EndsWith("/langIDs", StringComparison.Ordinal) && resolved["langID"] is JsonObject)
             {
                 foreach (JsonNode? child in array)
@@ -234,8 +242,24 @@ internal sealed partial class EngineHost
         {
             state.Root = ArchiveUnknownFields(root, schema, "");
             state.Master = ArchiveUnknownFields(master, masterSchema, "/masterTrack");
+            JsonArray tempoEvents = ArchiveArray(master["tempo"]?["events"], "/masterTrack/tempo/events");
+            bool hasTempoExtensions = tempoEvents.Any(node => node is JsonObject value &&
+                value.Any(pair => pair.Key is not ("pos" or "value")));
+            if (hasTempoExtensions)
+            {
+                JsonObject tempoItemSchema = ArchiveResolveSchema(ArchiveItemSchema(ArchivePropertySchema(
+                    ArchivePropertySchema(masterSchema, "tempo"), "events")), schema);
+                JsonObject tempoProperties = tempoItemSchema["properties"] as JsonObject
+                    ?? throw new InvalidDataException("project_preservation: missing tempo event schema.");
+                if (!tempoProperties.ContainsKey("pos") || !tempoProperties.ContainsKey("value") || tempoProperties.Count != 2)
+                    throw new InvalidDataException("project_preservation: unsupported tempo event schema.");
+                Dictionary<int, ProjectArchiveArrays.Tempo> tempo = ProjectArchiveArrays.ReadTempo(tempoEvents, true);
+                ProjectArchiveArrays.ValidateTempo(tempo, ArchiveNativeTempos(session.Sequence));
+                state.Tempo = tempo;
+                state.HasEntityExtensions = true;
+            }
             ArchiveValidateNested(root, schema, "", true);
-            ArchiveValidateNested(master, masterSchema, "/masterTrack", true);
+            ArchiveValidateNested(master, masterSchema, "/masterTrack", true, hasTempoExtensions);
             JsonArray tracks = ArchiveArray(root["tracks"], "/tracks");
             if ((ulong)tracks.Count != session.Sequence.NumTrack)
                 throw new InvalidDataException("project_preservation: track count changed while loading.");
@@ -272,7 +296,7 @@ internal sealed partial class EngineHost
                     }
                 }
             }
-            if (state.HasEntityExtensions)
+            if (state.Live.Values.Any(entry => entry.Extra.Count != 0))
             {
                 ArchiveValidateUnambiguous(tracks);
                 for (int index = 0; index < tracks.Count; index++)
@@ -302,6 +326,8 @@ internal sealed partial class EngineHost
                 }
                 state.ExtraFiles.Add(relative);
             }
+            foreach (string relative in state.ExtraFiles)
+                state.ResourcePaths.Add(relative, PathGuard.Under(session.Directory, relative));
             if (!state.HasEntityExtensions) state.Live.Clear();
             if (!state.HasEntityExtensions && state.Root.Count == 0 && state.Master.Count == 0 && state.ExtraFiles.Count == 0)
             {
@@ -373,6 +399,8 @@ internal sealed partial class EngineHost
             state.PreUpgradeEmptyHistory = true;
             state.UpgradeRoot = (JsonObject)state.Root.DeepClone();
             state.UpgradeMaster = (JsonObject)state.Master.DeepClone();
+            state.UpgradeResources = new(state.ResourcePaths, StringComparer.Ordinal);
+            state.UpgradeTempo = state.Tempo;
             session.ArchiveBegin = operation =>
             {
                 RequireArchiveMutationSupported(session, operation);
@@ -405,7 +433,8 @@ internal sealed partial class EngineHost
         state.ObserverAttached = false;
         state.HasEntityExtensions = false;
         state.PreUpgradeEmptyHistory = false;
-        state.UpgradeRoot = null; state.UpgradeMaster = null;
+        state.UpgradeRoot = null; state.UpgradeMaster = null; state.UpgradeResources = null;
+        state.UpgradeTempo = null;
         state.Live.Clear();
         session.ArchiveBegin = null; session.ArchiveEnd = null; session.ArchiveCopy = null;
         if (state.Root.Count == 0 && state.Master.Count == 0 && state.ExtraFiles.Count == 0)
@@ -487,6 +516,35 @@ internal sealed partial class EngineHost
 
     private bool HasArchiveEntityExtensions(EngineSession session) =>
         archiveStates.TryGetValue(session.Id, out ArchiveState? state) && state.HasEntityExtensions;
+
+    private static JsonArray ArchiveNativeTempos(WIVSMSequence sequence)
+    {
+        JsonArray result = new();
+        for (ulong index = 0; index < sequence.NumTempos; index++)
+        {
+            WIVSMTempo item = sequence.GetTempo(index) ?? throw new InvalidDataException("project_preservation: missing native tempo.");
+            result.Add(new JsonObject { ["pos"] = checked((int)item.RelPosTick.Value), ["value"] = item.Value });
+        }
+        return result;
+    }
+
+    private void ArchiveTempoPreflight(EngineSession session, int? oldPosition, int? newPosition)
+    {
+        if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state) || state.Tempo is null) return;
+        ArchiveCheck(state);
+        ProjectArchiveArrays.ValidateTempo(state.Tempo, ArchiveNativeTempos(session.Sequence));
+        if (oldPosition is int old && !state.Tempo.ContainsKey(old))
+            throw new InvalidDataException("project_preservation: selected tempo identity is absent.");
+        if (newPosition is int next && next != oldPosition && state.Tempo.ContainsKey(next))
+            throw new InvalidDataException("project_preservation: tempo destination is ambiguous.");
+    }
+
+    private void ArchiveTempoTransition(EngineSession session, int? oldPosition, int? newPosition, int? newValue)
+    {
+        if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state) || state.Tempo is null) return;
+        if (state.Before is null) throw new InvalidOperationException("project_preservation: tempo transition outside mutation boundary.");
+        state.Tempo = ProjectArchiveArrays.TempoTransition(state.Tempo, ArchiveNativeTempos(session.Sequence), oldPosition, newPosition, newValue);
+    }
 
     private readonly record struct ArchiveNoteSignature(long Position, long Duration, int Number, int Velocity,
         string Lyric, string Phonemes, int Language, bool Valid);
@@ -771,6 +829,8 @@ internal sealed partial class EngineHost
         state.Before = new(state.Live);
         state.BeforeRoot = (JsonObject)state.Root.DeepClone();
         state.BeforeMaster = (JsonObject)state.Master.DeepClone();
+        state.BeforeResources = new(state.ResourcePaths, StringComparer.Ordinal);
+        state.BeforeTempo = state.Tempo;
         state.Action = action;
     }
 
@@ -783,16 +843,21 @@ internal sealed partial class EngineHost
             ?? throw new InvalidOperationException("project_preservation: mutation boundary was not started.");
         JsonObject beforeRoot = state.BeforeRoot ?? throw new InvalidOperationException("project_preservation: missing root history snapshot.");
         JsonObject beforeMaster = state.BeforeMaster ?? throw new InvalidOperationException("project_preservation: missing master history snapshot.");
+        Dictionary<string, string> beforeResources = state.BeforeResources ?? throw new InvalidOperationException("project_preservation: missing resource history snapshot.");
+        Dictionary<int, ProjectArchiveArrays.Tempo>? beforeTempo = state.BeforeTempo;
         state.Before = null;
-        state.BeforeRoot = null; state.BeforeMaster = null;
-        ArchiveHistory HistorySnapshot(Dictionary<ArchiveEntity, ArchiveEntry> snapshot, JsonObject root, JsonObject master) =>
-            new(state.PreUpgradeEmptyHistory && snapshot.Values.All(entry => entry.Extra.Count == 0) ? EmptyHistoryMarker : snapshot, root, master);
-        ArchiveHistory currentBefore = HistorySnapshot(before, beforeRoot, beforeMaster);
+        state.BeforeRoot = null; state.BeforeMaster = null; state.BeforeResources = null; state.BeforeTempo = null;
+        ArchiveHistory HistorySnapshot(Dictionary<ArchiveEntity, ArchiveEntry> snapshot, JsonObject root, JsonObject master, Dictionary<string, string> resources, Dictionary<int, ProjectArchiveArrays.Tempo>? tempo) =>
+            new(state.PreUpgradeEmptyHistory && snapshot.Values.All(entry => entry.Extra.Count == 0) ? EmptyHistoryMarker : snapshot, root, master, resources, tempo);
+        ArchiveHistory currentBefore = HistorySnapshot(before, beforeRoot, beforeMaster, beforeResources, beforeTempo);
         void Restore(ArchiveHistory history)
         {
             state.Live = history.Live;
             state.Root = history.Root;
             state.Master = history.Master;
+            state.ResourcePaths = history.Resources;
+            state.Tempo = history.Tempo;
+            state.ExtraFiles = history.Resources.Keys.ToList();
         }
         bool rebindEmpty = false;
         switch (action)
@@ -803,16 +868,16 @@ internal sealed partial class EngineHost
                 { state.Invalid = "untracked undo"; break; }
                 state.Redo.Push(currentBefore);
                 Restore(state.Undo.Count == 0
-                    ? new ArchiveHistory(EmptyHistoryMarker, (JsonObject)state.UpgradeRoot!.DeepClone(), (JsonObject)state.UpgradeMaster!.DeepClone())
+                    ? new ArchiveHistory(EmptyHistoryMarker, (JsonObject)state.UpgradeRoot!.DeepClone(), (JsonObject)state.UpgradeMaster!.DeepClone(), new(state.UpgradeResources!, StringComparer.Ordinal), state.UpgradeTempo)
                     : state.Undo.Pop());
                 rebindEmpty = ReferenceEquals(state.Live, EmptyHistoryMarker); break;
             case "redo":
                 if (state.Redo.Count == 0) { state.Invalid = "untracked redo"; break; }
                 state.Undo.Push(currentBefore); Restore(state.Redo.Pop());
                 rebindEmpty = ReferenceEquals(state.Live, EmptyHistoryMarker); break;
-            case "rollback": state.Live = before; state.Root = beforeRoot; state.Master = beforeMaster; break;
+            case "rollback": state.Live = before; state.Root = beforeRoot; state.Master = beforeMaster; state.ResourcePaths = beforeResources; state.Tempo = beforeTempo; state.ExtraFiles = beforeResources.Keys.ToList(); break;
             case "sync":
-                state.Root = beforeRoot; state.Master = beforeMaster;
+                state.Root = beforeRoot; state.Master = beforeMaster; state.ResourcePaths = beforeResources; state.Tempo = beforeTempo; state.ExtraFiles = beforeResources.Keys.ToList();
                 if (!before.Keys.ToHashSet().SetEquals(state.Live.Keys)) { state.Undo.Clear(); state.Redo.Clear(); state.PreUpgradeEmptyHistory = false; }
                 break;
             default: state.Invalid = "unknown mutation boundary"; break;
@@ -829,6 +894,7 @@ internal sealed partial class EngineHost
             catch { state.Invalid = "empty-history identity rebinding failed"; throw; }
         }
         else ArchiveRefreshParents(state, preserveExisting ? before : null, action is "undo" or "redo");
+        if (state.Tempo is not null) ProjectArchiveArrays.ValidateTempo(state.Tempo, ArchiveNativeTempos(session.Sequence));
         int limit = (int)Math.Min(state.Session.Sequence.GetMaxUndoCount(), 65536UL);
         if (state.Undo.Count > limit) state.PreUpgradeEmptyHistory = false;
         TrimArchiveHistory(state.Undo, limit);
@@ -920,10 +986,16 @@ internal sealed partial class EngineHost
         JsonObject root = ArchiveObject(JsonNode.Parse(File.ReadAllText(path)), "");
         JsonObject master = ArchiveObject(root["masterTrack"], "/masterTrack");
         ArchiveOverlay(root, state.Root); ArchiveOverlay(master, state.Master);
+        if (state.Tempo is not null)
+        {
+            ProjectArchiveArrays.ValidateTempo(state.Tempo, ArchiveNativeTempos(session.Sequence));
+            ProjectArchiveArrays.OverlayTempo(ArchiveArray(master["tempo"]?["events"], "/masterTrack/tempo/events"), state.Tempo);
+        }
         JsonArray tracks = ArchiveArray(root["tracks"], "/tracks");
         if ((ulong)tracks.Count != session.Sequence.NumTrack) throw new InvalidDataException("project_preservation: snapshot track count changed.");
         if (state.HasEntityExtensions)
         {
+        bool hasEntityPayload = state.Live.Values.Any(entry => entry.Extra.Count != 0);
         HashSet<ArchiveEntity> seen = [];
         void Overlay(object entity, JsonObject target)
         {
@@ -935,7 +1007,7 @@ internal sealed partial class EngineHost
             JsonObject trackJson = ArchiveObject(tracks[ti], "/tracks[]");
             WIVSMTrack track = session.Sequence.GetTrack((ulong)ti) ?? throw new InvalidDataException("project_preservation: missing snapshot track.");
             ArchiveValidateTrack(track, trackJson);
-            ArchiveValidateTrackDetails(track, trackJson);
+            if (hasEntityPayload) ArchiveValidateTrackDetails(track, trackJson);
             Overlay(track, trackJson);
             JsonArray parts = ArchiveArray(trackJson["parts"], "parts");
             if ((ulong)parts.Count != track.NumParts) throw new InvalidDataException("project_preservation: snapshot part count changed.");
@@ -958,12 +1030,13 @@ internal sealed partial class EngineHost
         }
         if (seen.Count != state.Live.Count)
             throw new InvalidDataException("project_preservation: tracked object is no longer present; refusing ambiguous attachment.");
-        ArchiveValidateUnambiguous(tracks);
+        if (hasEntityPayload) ArchiveValidateUnambiguous(tracks);
         }
         File.WriteAllText(path, root.ToJsonString());
         foreach (string relative in state.ExtraFiles)
         {
-            string source = PathGuard.Under(session.Directory, relative);
+            string source = state.ResourcePaths[relative];
+            if (!PathGuard.IsUnder(session.Directory, source)) throw new IOException("project_preservation: resource escaped session directory.");
             string target = PathGuard.Under(stageRoot, relative);
             PathGuard.NoLinks(source); PathGuard.CreateDirectory(Path.GetDirectoryName(target)!);
             if (File.Exists(target)) throw new IOException("project_preservation: native output collides with retained member: " + relative);

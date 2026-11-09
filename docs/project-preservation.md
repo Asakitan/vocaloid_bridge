@@ -70,6 +70,50 @@ ambiguous. `artifacts/feature-acceptance-647c107fc2bd/preservation.duplicates.js
 records same-name track, part and note copies, child undo/redo, source-independent
 clone and rejection of divergent unknown fields on indistinguishable tracks.
 
+## Non-entity array investigation
+
+The guard rejects unknown properties in unsupported element arrays, including
+`parts[].audioEffects[].parameters` and `parts[].aiVoice.langIDs`.
+`preservation.array_guard` constructs each extension separately and expects
+rejection without input modification. A focused private-MCP run
+passed these guards, an additional pre-integration tempo guard, and transport cleanup, as recorded in
+`artifacts/feature-acceptance-c07d27541b4c/summary.json`. An earlier sandboxed
+attempt stopped before process startup on an access-denied artifact directory.
+
+Matching elements by index or by a complete known-value signature is insufficient:
+reordering changes indices, editing changes signatures, and a delete followed by
+same-value insertion has the same serialized before/after state as no deletion.
+Duplicate signatures with distinct extensions are likewise ambiguous. A safe
+implementation needs per-array identity or operation-specific pre/post mapping,
+transaction history for removal and reinsertion, explicit copy/transfer mapping,
+and rejection before mutation when unique correspondence is not established. It
+must apply unknown leaves only, never copy known values from the original element.
+These rules remain a requirement for arrays outside the tempo-specific change below.
+
+A focused private-MCP probe (`preservation.tempo_array_semantics`, receipt
+`artifacts/feature-acceptance-dca2b07208c6/summary.json`) observed a tempo
+move across another event, undo/redo, and deletion followed by same-value
+recreation. The last state serialized identically to the earlier moved state;
+the result does not establish native pointer or notification stability.
+
+`native/ProjectArchiveArrays.cs` contains a tempo-only transaction
+primitive. Given an explicitly selected source and destination, it preserves
+only unknown leaves, validates the entire observed native post-state, rejects
+duplicate positions and destination collisions, and drops metadata on deletion
+so reinsertion starts empty. The standalone in-memory
+`tools/check_tempo_array_helper.ps1` probe passed for move, reorder, known-value
+preservation, deletion/recreation, snapshot isolation and duplicate rejection.
+The current source connects schema-aware capture, native-operation mapping before
+commit, history/rollback snapshots and save/clone overlay. Tempo merges with
+extensions are guarded until an explicit transfer mapping exists. The original
+`preservation.tempo_array_roundtrip` red result on the old binary is retained in
+`artifacts/feature-acceptance-39d061aa7454/summary.json`. The focused native MCP
+run `artifacts/feature-acceptance-a2ec5efb0ad1/summary.json` passes tempo extension
+editing, collision rejection, undo/redo, deletion and same-value recreation,
+clone, save/reopen, a track-only clipboard transfer, and the source guard. A
+separate case verifies that tempo-only metadata does not require unrelated
+same-shaped tracks with different known values to be treated as ambiguous.
+
 ## Implemented scope and validation
 
 `native/ProjectArchivePreservation.cs` is integrated into open, save and clone.
@@ -91,7 +135,7 @@ copied from the source. The focused run
 `masterTrack.loop` and `note.exp`, including escaped pointer characters and a
 structured value, while a native Accent change to 51 remained intact across
 save, reopen and source-independent clone. Unknown fields inside non-entity
-arrays remain outside this support.
+arrays other than tempo events remain outside this support.
 
 `artifacts/feature-acceptance-f0e3121b86c8/` additionally verifies retained
 extensions across title, tempo, loop, tuning, batch-note, VoiceColor and vibrato
@@ -122,7 +166,7 @@ tracks with the same type/name/color, mixer flags and part/note shape when their
 complete serialized data differs; identical tracks with identical extension
 data may coexist. Duplicate part name/position/duration signatures and duplicate
 note identity signatures remain rejected. Unsupported unknown fields
-inside array elements are also rejected. With entity extensions present,
+inside other array elements are also rejected. With entity or tempo extensions present,
 unverified raw/native mutations, library/audio writes, and score operations
 outside the explicitly tracked subset are rejected. MIDI/AI clipboard cut/paste
 and track merge now use identity transactions. Source root/master fields with
@@ -132,9 +176,12 @@ global-only merges without a native history entry are rejected. The focused
 `artifacts/feature-acceptance-5a2c12f87c28/summary.json` verifies direct and
 nested additions, save/reopen, undo/redo, source protection and rejection of
 an indistinguishable-track conflict on an independent candidate before target
-mutation. Other edit paths can still discover such ambiguity only at save.
-Opaque-resource
-transfer has separate restrictions. The focused cases in
+mutation. Extension-aware clipboard paste now performs the same candidate
+validation; `artifacts/feature-acceptance-a2ec5efb0ad1/summary.json` verifies
+rejection before mutation and successful unambiguous and equal-data pastes.
+Other edit paths can still discover such ambiguity only at save. Opaque-resource
+merge has the bounded project-level semantics in `docs/interchange-operations.md`;
+clipboard resource transfer remains guarded. The focused cases in
 `artifacts/feature-acceptance-e57fec059ac3/summary.json` and
 `artifacts/feature-acceptance-4cb5b47a3915/summary.json` verify those bounded
 paths, not every source format, larger history permutation or resource case.

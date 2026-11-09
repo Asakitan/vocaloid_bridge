@@ -11,6 +11,7 @@ import check_track_freeze
 import check_midi_recording_case
 import check_clipboard_extension_guard
 import check_archive_transfer
+import check_clipboard_ambiguity
 import check_clipboard_extended_cut
 import check_archive_merge
 

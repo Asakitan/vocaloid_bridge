@@ -64,7 +64,8 @@ def _invalid_constant(value: str) -> None:
     raise ValueError(f"nonfinite JSON number: {value}")
 
 
-def _validate_phoneme_validity(data: dict, payload: bytes) -> None:
+def _validate_phoneme_validity(data: dict, payload: bytes,
+                               note_origins: tuple[int, int, list[int | None]] | None = None) -> None:
     try:
         metadata = json.loads(payload, parse_constant=_invalid_constant)
         if (not isinstance(metadata, dict) or metadata.get("Format") != "vocaloid-bridge-phoneme-validity"
@@ -81,6 +82,10 @@ def _validate_phoneme_validity(data: dict, payload: bytes) -> None:
             if expected["IsValid"] is not False:
                 raise ValueError("invalid note validity")
             track_index, part_index, note_index = indices
+            if note_origins is not None and (track_index, part_index) == note_origins[:2]:
+                origins = note_origins[2]
+                if note_index >= len(origins) or origins[note_index] != note_index:
+                    raise ValueError("referenced note identity changed")
             note = data["tracks"][track_index]["parts"][part_index]["notes"][note_index]
             fields = (("pos", "Position"), ("duration", "Duration"), ("number", "Number"),
                       ("lyric", "Lyric"), ("phoneme", "Phonemes"), ("langID", "LanguageId"))
@@ -111,42 +116,118 @@ def _part(data: dict, track_index: int, part_index: int) -> tuple[dict, dict]:
     return track, parts[part_index]
 
 
-def _replace_notes(data: dict, notes: list[dict], track_index: int, part_index: int) -> None:
+def _extended_points(value: Any) -> bool:
+    return isinstance(value, list) and any(
+        isinstance(item, dict) and any(key not in {"pos", "value"} for key in item)
+        for item in value)
+
+
+def _guard_note_replacement(data: dict) -> None:
+    """Keep file-level note replacement inside the existing extension boundaries."""
+    tracks = data.get("tracks")
+    if not isinstance(tracks, list):
+        return
+    for track in tracks:
+        if not isinstance(track, dict):
+            continue
+        for name in ("volume", "panpot"):
+            lane = track.get(name)
+            if isinstance(lane, dict) and _extended_points(lane.get("events")):
+                raise ValueError("note replacement is guarded for track automation extensions")
+        parts = track.get("parts")
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            controllers = part.get("controllers")
+            if isinstance(controllers, list) and any(
+                    isinstance(lane, dict) and _extended_points(lane.get("events")) for lane in controllers):
+                raise ValueError("note replacement is guarded for controller extensions")
+            existing_notes = part.get("notes")
+            if isinstance(existing_notes, list) and any(
+                    isinstance(note, dict) and _extended_points(note.get("directPitches")) for note in existing_notes):
+                raise ValueError("note replacement is guarded for direct pitch item extensions")
+
+
+def _note_snapshot_equal(expected: dict, actual: dict) -> bool:
+    # JSON distinguishes booleans from numbers, unlike Python's ==.
+    try:
+        options = {"ensure_ascii": False, "allow_nan": False, "sort_keys": True, "separators": (",", ":")}
+        return json.dumps(expected, **options) == json.dumps(actual, **options)
+    except (TypeError, ValueError):
+        return False
+
+
+def _replace_notes(data: dict, notes: list[dict], track_index: int, part_index: int) -> list[int | None]:
     track, part = _part(data, track_index, part_index)
+    _guard_note_replacement(data)
     prepared = _notes(notes, monophonic=True)
     prototypes = part.get("notes", [])
     if not isinstance(prototypes, list):
         raise ValueError("part.notes must be a list")
-    if prototypes:
+    is_ai = track.get("type") == 2 and isinstance(part.get("aiVoice"), dict)
+    if not is_ai and prototypes:
         if not isinstance(prototypes[0], dict) or not _NOTE_FIELDS <= prototypes[0].keys():
             raise ValueError("template note lacks the verified native note fields")
-        prototype = prototypes[0]
-    elif track.get("type") == 2 and isinstance(part.get("aiVoice"), dict):
-        prototype = _EDITOR_AI_NOTE
-    elif prepared:
+        legacy_prototype = prototypes[0]
+    elif not is_ai and prepared:
         raise ValueError("no native note prototype; use an editor-authored AI or populated vocal template")
     else:
-        prototype = {}
+        legacy_prototype = {}
     available_languages = {entry.get("langID") for entry in part.get("aiVoice", {}).get("langIDs", []) if isinstance(entry, dict)}
     native_notes = []
+    origins: list[int | None] = []
+    used: set[int] = set()
     for note in prepared:
         extras = note.get("raw", {})
         if _NOTE_FIELDS.intersection(extras):
             raise ValueError("raw extras cannot override timing, pitch, lyric, phoneme, velocity or langID")
-        native = deepcopy(prototype)
+        selected = note.get("source")
+        source_index = None
+        if selected is not None:
+            if not is_ai:
+                raise ValueError("note source selector requires an AI part")
+            if not isinstance(selected, dict) or set(selected) != {"index", "expected"}:
+                raise ValueError("note source selector requires index and expected")
+            source_index = selected["index"]
+            if (isinstance(source_index, bool) or not isinstance(source_index, int) or
+                    not 0 <= source_index < len(prototypes) or source_index in used):
+                raise ValueError("note source selector index is invalid or repeated")
+            source_note = prototypes[source_index]
+            if (not isinstance(source_note, dict) or not _NOTE_FIELDS <= source_note.keys() or
+                    not isinstance(selected["expected"], dict) or
+                    not _note_snapshot_equal(selected["expected"], source_note)):
+                raise ValueError("note source selector snapshot is stale or invalid")
+            used.add(source_index)
+            native = deepcopy(source_note)
+        elif is_ai:
+            native = deepcopy(_EDITOR_AI_NOTE)
+            # Preserve the established part language default, not a note's opaque fields.
+            if prototypes and isinstance(prototypes[0], dict):
+                native["langID"] = prototypes[0].get("langID", native["langID"])
+        else:
+            native = deepcopy(legacy_prototype)
         _merge(native, extras)
-        native.update(pos=note["_pos"], duration=note["_duration"], number=note["pitch"],
-                      lyric=note["lyric"], phoneme=note.get("phoneme", ""))
+        native.update(pos=note["_pos"], duration=note["_duration"], number=note["pitch"], lyric=note["lyric"])
         native["velocity"] = _integer(note.get("velocity", native.get("velocity", 64)), "note.velocity", 1, 127)
         native["langID"] = _integer(note.get("lang_id", native.get("langID", 0)), "note.lang_id", 0, 127)
         if available_languages and native["langID"] not in available_languages:
             raise ValueError("note.lang_id is absent from this part's aiVoice.langIDs")
+        if ("phoneme" not in note and source_index is not None and
+                note["lyric"] == prototypes[source_index]["lyric"] and
+                native["langID"] == prototypes[source_index]["langID"]):
+            native["phoneme"] = prototypes[source_index]["phoneme"]
+        else:
+            native["phoneme"] = note.get("phoneme", "")
         native_notes.append(native)
+        origins.append(source_index)
     duration = part.get("duration", 0)
     if isinstance(duration, bool) or not isinstance(duration, int) or duration < 0:
         raise ValueError("native part.duration must be a nonnegative integer")
     part["notes"] = native_notes
     part["duration"] = max(duration, max((note["pos"] + note["duration"] for note in native_notes), default=0))
+    return origins
 
 
 def _tempo_events(data: dict, events: list[dict]) -> None:
@@ -238,7 +319,8 @@ class ProjectStore:
             raise ValueError("pointer must be an RFC 6901 string")
         return jsonpointer.resolve_pointer(self.read(path), pointer)
 
-    def _write_archive(self, archive: zipfile.ZipFile, data: dict, output_name: str) -> dict:
+    def _write_archive(self, archive: zipfile.ZipFile, data: dict, output_name: str,
+                       note_origins: tuple[int, int, list[int | None]] | None = None) -> dict:
         if not isinstance(data, dict):
             raise ValueError("project data must be an object")
         serialized = json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
@@ -248,7 +330,7 @@ class ProjectStore:
         if validity_count > 1:
             raise ValueError("VPR has duplicate phoneme-validity metadata")
         if validity_count:
-            _validate_phoneme_validity(data, archive.read(PHONEME_VALIDITY_MEMBER))
+            _validate_phoneme_validity(data, archive.read(PHONEME_VALIDITY_MEMBER), note_origins)
         with _exclusive_output(self.workspace, output_name, (".vpr",)) as (destination, handle):
             with zipfile.ZipFile(handle, "w") as result:
                 result.comment = archive.comment
@@ -268,12 +350,21 @@ class ProjectStore:
             data = jsonpatch.JsonPatch(deepcopy(operations)).apply(self._read_archive(archive), in_place=False)
             return self._write_archive(archive, data, output_name)
 
+    def _read_note_edit_archive(self, archive: zipfile.ZipFile) -> dict:
+        data = self._read_archive(archive)
+        count = archive.namelist().count(PHONEME_VALIDITY_MEMBER)
+        if count > 1:
+            raise ValueError("VPR has duplicate phoneme-validity metadata")
+        if count:
+            _validate_phoneme_validity(data, archive.read(PHONEME_VALIDITY_MEMBER))
+        return data
+
     def compose(self, template: str, output_name: str, title: str, bpm: float, notes: list[dict],
                 track_index: int = 0, part_index: int = 0, voice_comp_id: str | None = None) -> dict:
         if not isinstance(title, str):
             raise ValueError("title must be a string")
         with _source_archive(self.workspace, template) as archive:
-            data = self._read_archive(archive)
+            data = self._read_note_edit_archive(archive)
             _, part = _part(data, track_index, part_index)
             if voice_comp_id is not None:
                 if not isinstance(voice_comp_id, str) or not voice_comp_id:
@@ -284,16 +375,16 @@ class ProjectStore:
                 if not isinstance(part.get("aiVoice"), dict):
                     raise ValueError("selected part has no aiVoice")
                 part["aiVoice"]["compID"] = voice_comp_id
-            _replace_notes(data, notes, track_index, part_index)
+            origins = _replace_notes(data, notes, track_index, part_index)
             _tempo_events(data, [{"start": 0, "bpm": bpm}])
             data["title"] = title
-            return self._write_archive(archive, data, output_name)
+            return self._write_archive(archive, data, output_name, (track_index, part_index, origins))
 
     def edit_notes(self, source: str, output_name: str, notes: list[dict], track_index: int = 0, part_index: int = 0) -> dict:
         with _source_archive(self.workspace, source) as archive:
-            data = self._read_archive(archive)
-            _replace_notes(data, notes, track_index, part_index)
-            return self._write_archive(archive, data, output_name)
+            data = self._read_note_edit_archive(archive)
+            origins = _replace_notes(data, notes, track_index, part_index)
+            return self._write_archive(archive, data, output_name, (track_index, part_index, origins))
 
     def set_curve(self, source: str, output_name: str, controller: str, events: list[dict],
                   track_index: int = 0, part_index: int = 0) -> dict:

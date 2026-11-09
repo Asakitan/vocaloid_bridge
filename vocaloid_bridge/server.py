@@ -301,6 +301,7 @@ async def score_compose(output_name: str, title: str, bpm: float, notes: list[di
                         voice_comp_id: str | None = None) -> dict[str, Any]:
     """Author and open a vocal score. Notes use quarter-note start/duration, MIDI pitch, lyric,
     optional phoneme, lang_id (0 Japanese, 1 English, 4 Chinese) and native raw expression data.
+    AI notes may select one template note with source={index, expected}; unselected notes are new.
     Uses an editor-authored template, then verifies loading in the real native engine.
     """
     result = STORE.compose(template or str(TEMPLATE), output_name, title, bpm, notes,
@@ -330,7 +331,10 @@ def score_patch(path: str, output_name: str, operations: list[dict[str, Any]]) -
 @mcp.tool()
 def score_replace_notes(path: str, output_name: str, notes: list[dict[str, Any]],
                         track_index: int = 0, part_index: int = 0) -> dict[str, Any]:
-    """Create a revised score with explicit beat-based notes and unchanged non-note project data."""
+    """Create a revised score with explicit beat-based notes and unchanged non-note project data.
+    For AI notes, source={index, expected} preserves one inspected source note; omit source for a new note.
+    Source snapshots must match exactly and be selected only once; guarded extension projects remain guarded.
+    """
     return STORE.edit_notes(path, output_name, notes, track_index, part_index)
 
 

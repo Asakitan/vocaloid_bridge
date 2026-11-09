@@ -88,8 +88,8 @@ member ordering, member payloads other than that JSON, member metadata supported
 by `zipfile`, and the archive comment. Embedded audio is copied without decoding.
 Only the sequence JSON is reserialized; ZIP compression and JSON whitespace may
 change. Unknown JSON fields outside explicitly replaced structures remain present.
-The note replacement prototype behavior below can copy an unknown note field to
-other notes. No archive member is extracted to the filesystem.
+AI replacement notes use the explicit identity policy below. No archive member
+is extracted to the filesystem.
 
 ## Notes and Voices
 
@@ -117,24 +117,54 @@ Velocity must be an integer 1..127 when supplied. VPR notes may not overlap befo
 or after quantization; decimal beat comparisons avoid binary floating-point false
 overlaps. MIDI tracks may be polyphonic.
 
-The selected part's first native note supplies defaults. For an empty type-2 AI
-part with `aiVoice`, defaults come from the exact observed `editor-note.vpr` schema
-embedded in the implementation. Other empty track types require a native prototype.
-Defaults include `exp`, `aiExp`, `singingSkill`, `vibrato`, protection flags, language,
-and velocity. Unknown prototype fields are copied to each replacement note, even
-when another original note has different fields. A synthetic red regression and
-the unresolved identity policy are documented in [file-note identity](file-notes-25.md). Nested `raw` dictionaries
-merge into these defaults, while lists/scalars replace their corresponding values.
-Raw extras cannot override native core fields `pos`, `duration`, `number`, `lyric`,
-`phoneme`, `velocity`, or `langID`; use their validated beat-note inputs instead.
-Nested native expression/vibrato durations are retained, not automatically scaled.
+For a type-2 AI part with `aiVoice`, every input note without a `source` selector
+is a new note using the observed editor-authored AI baseline. It does not inherit
+another note's unknown fields, velocity, expressions or vibrato; default velocity
+is 64. An omitted language defaults to the first source note's `langID` when
+available, or the baseline language 0 when there is no first source note. The
+result must belong to a populated `aiVoice.langIDs` list.
 
-An omitted phoneme is written as `""`, never copied from an unrelated prototype
-lyric. The layer does not generate phonemes; editor acceptance or recomputation of
-an empty phoneme still requires the parent's editor test. Explicit phonemes are
-preserved verbatim. `lang_id` defaults to the prototype's `langID` and must belong
-to a populated `aiVoice.langIDs` list. The fixture contains language IDs 0, 1, and 4;
-language selection is explicit, not inferred from lyric text.
+To retain a particular existing AI note's fields across a move or edit, supply
+`source: {"index": INDEX, "expected": NOTE}`. `INDEX` is the original note index
+before replacement, and `NOTE` must be the full JSON object inspected from that
+source. A source index may be used once; stale snapshots, invalid indices and
+duplicate claims are rejected before output creation. Matching is strict JSON,
+including the distinction between `false` and `0`. A note without a selector,
+including one at the same tick as an old note, is new; all unselected source notes
+are removed. This is a file-level identity policy, not a native object identity.
+
+For example, `old_note` below is obtained from the same source archive:
+
+```python
+old_note = store.inspect(source, "/tracks/0/parts/0/notes/0")
+store.edit_notes(source, "edited.vpr", [{
+    "start": 1, "duration": 0.5, "pitch": 60,
+    "lyric": "あ", "phoneme": "a",
+    "source": {"index": 0, "expected": old_note}
+}])
+```
+
+A selected source note retains its own velocity, language, expression, vibrato and
+unknown fields unless the caller explicitly changes them. Nested `raw` dictionaries
+merge recursively, while lists/scalars replace their corresponding values. Raw
+extras cannot override `pos`, `duration`, `number`, `lyric`, `phoneme`, `velocity`,
+or `langID`; use the validated beat-note inputs instead. Nested native
+expression/vibrato durations are retained, not automatically scaled.
+
+For a selected source note with unchanged lyric and language, omitted `phoneme`
+retains that note's original phoneme. Otherwise omission writes `""`. The layer
+does not generate phonemes. In the tested AI voice an empty phoneme caused native
+open to report a note-count mismatch; give an explicitly valid phoneme for a new
+or lyric-changed note until conversion is established. The observation is not a
+universal claim about all voices or phonemes. See [AI default evidence](ai-note-defaults-26.md).
+
+If a phoneme-validity sidecar refers to this part, each referenced note must retain
+both its source index at the same output index and the referenced fields; conflicts
+are rejected rather than remapped. File-level note replacement also rejects source
+projects containing tracked controller-event, track volume/pan-event or direct-pitch
+item extensions, keeping the existing guarded boundaries. Other populated vocal
+track types retain their prior first-note prototype behavior; source selectors are
+specific to AI parts.
 
 `edit_notes` replaces the selected part's note list. `compose` also sets the project
 title, replaces the tempo map with the supplied BPM at beat zero, and optionally

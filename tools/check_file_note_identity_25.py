@@ -1,4 +1,4 @@
-"""Red regression for file-note identity on an isolated synthetic AI VPR."""
+"""Historical red probe for an unadopted tick-identity policy; not a release gate."""
 from copy import deepcopy
 import json
 from pathlib import Path

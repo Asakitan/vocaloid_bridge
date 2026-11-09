@@ -33,7 +33,7 @@ powershell -NoProfile -File .\tools\setup.ps1
 
 这些条目均使用 `E:/VC/vocaloid_bridge/.venv/Scripts/python.exe -m vocaloid_bridge`，并显式设置 `VOCALOID_WORKSPACE`、`PYTHONPATH` 为 `E:/VC/vocaloid_bridge`，`PYTHONUTF8` 为 `1`。从其他目录启动时，输出仍写到本项目的 `output`。Codex 的 `tool_timeout_sec` 为 180。
 
-Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.17.3 提供 37 个工具和 125 个结构化操作，独立 stdio 客户端的定向测试已通过。本对话现有连接仍报告 Python MCP 0.4.0；其运行中的原生宿主此前经比对为 0.5.0 构建，尚未载入 0.17.3。重新连接后应核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
+Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.18.0 提供 37 个工具和 125 个结构化操作，独立 stdio 客户端的定向测试已通过。本对话现有连接仍报告 Python MCP 0.4.0；其运行中的原生宿主此前经比对为 0.5.0 构建，尚未载入 0.18.0。重新连接后应核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
 
 ## 工具
 
@@ -139,6 +139,8 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 0.17.2 修正文件级速度和控制曲线事件未知字段被错误复制的问题，并使单独的同名轨道更新保持原有脏状态。[定向回执](artifacts/feature-acceptance-f4c4b6029e12/summary.json) 为 9 个功能用例及清理共 10 通过；重复位置、原生保存重开和既有守卫均有受测证据，完整目标仍在继续。
 
 0.17.3 对文件级工程编辑使用同一只读源句柄，避免受测并发替换导致乐谱和资源混合版本；轨道名称、颜色、静音、独奏和总线的同值组合保持原有脏状态。[定向回执](artifacts/feature-acceptance-3fc96299dad5/summary.json) 为 8 个功能用例及清理共 9 通过。音符原型字段错贴和普通素材属性未知字段丢失仍待处理，见 [STATUS](STATUS.md)。
+
+0.18.0 的 AI 文件音符支持 `source={index, expected}` 显式保留源音符，新音符不再复制首音符未知字段；省略选择器代表新建音符。[音符回执](artifacts/feature-acceptance-57ffec017ade/summary.json) 和 [生命周期回执](artifacts/feature-acceptance-4768f923d99b/summary.json) 分别记录定向用例。受测声库中新音符的空音素重开失败，仍需显式有效音素，详见 [音符契约](docs/note-identity-26.md)。
 
 原生混缩输出整工程或所选整轨，各分轨保留自己的时长；分轨不使用主效果和主音量自动化。`start_seconds`、`end_seconds` 和 `tail_seconds` 不受此原生入口支持，传入会明确报错。素材属性写入独立的 `property.json`；新建自有素材可在 `.vsclip` 中附加桥接元数据。
 

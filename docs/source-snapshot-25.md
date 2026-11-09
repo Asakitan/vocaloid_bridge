@@ -12,8 +12,8 @@ and does not establish when the caller obtained that data. An existing conflicti
 writer causes the source open to fail before output creation.
 
 This is a Windows file-level policy, not a native project transaction or a
-replacement for the archive-extension guards. It does not change output exclusivity
-or the validity-sidecar check. The probe does not establish behavior for every
+replacement for the archive-extension guards. The source-handle change itself did not change output exclusivity
+or the validity-sidecar check; session 26 added a separate note-identity check. The probe does not establish behavior for every
 filesystem, remote share, writable mapping, crash or path-race condition. The
 platform sharing contract is documented by [CreateFile](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea).
 

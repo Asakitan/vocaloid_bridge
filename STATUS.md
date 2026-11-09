@@ -1,6 +1,6 @@
 # 当前状态
 
-日期：2026-11-10。版本：0.17.3。完整目标继续进行，不把受测范围扩大为所有输入与环境组合。
+日期：2026-11-10。版本：0.18.0。完整目标继续进行，不把受测范围扩大为所有输入与环境组合。
 
 用户明确选择仅使用 VOCALOID:AI 声库，不安装经典试用。未指定类型的 `track.create` 默认创建 `MidiAi`；显式经典轨及旧工程的源文件与身份保护保留。较早的功能和验证历史见 [会话索引](docs/session-log/README.md)。
 
@@ -8,6 +8,7 @@
 
 - 37 个 MCP 工具，68 个乐谱、16 个音频、30 个素材、5 个剪贴板和 6 个 MIDI 录制操作，共 125 个；创建、打开、编辑、保存、关闭、克隆和恢复保留。会话 23 补齐其中 18 个原先为空的契约行，并补充音符、控制器、声库、音频和素材操作的公共选择器；生成器按操作首列精确匹配并拒绝缺项；可发现不等于所有输入与环境均已验收。
 - 工程未知字段、固定嵌套对象、额外 ZIP 资源及受测 AI 实体扩展按原生身份与历史保存；受测 tempo/拍号扩展插入和部分删除、音高项扩展编辑与复制、主音量及轨道音量/声像项扩展编辑有定向证据。
+- 会话 26 的 AI 文件音符使用 `source={index, expected}` 显式保留指定源音符，省略选择器表示新音符；选择器做严格快照和一对一检查，音素 sidecar 再核对来源索引及字段。先前被审查拦截的扩展项目守卫保持，并在文件音符替换入口检测相关扩展。
 - 会话 25 以同一只读源句柄贯穿文件级序列读取、修改和资源复制；受测并发写入/替换受到文件共享模式限制，已有写句柄时在创建输出前报错。`track.update` 的名称、颜色、静音、独奏和总线同值组合保持 clean/dirty 状态，`midi_recording` 仍走原 setter。
 - 会话 24 修正文件级 `score_tempo` 和 `score_curve` 的事件未知字段错贴：原有 tick 保留自身字段，删除点丢弃字段，新点不继承字段；重复源位置在输出创建前拒绝。单独传入相同名称的 `track.update` 保持 clean/dirty 状态，且仍检查原生暂存变更。
 - 会话 21 新增轨道音量/声像项的 owner 与完整点集事务：同 tick 更新保留未知字段，删除后重建不继承字段；受测轨道属性/重排、undo/redo、保存、克隆及重开通过。跨工程及未验证的轨道变更仍受保护。
@@ -16,26 +17,26 @@
 
 ## 本轮证据
 
-构建前 Roslyn 语义检查覆盖 26 个 C# 源文件、生成的全局 using 文件及 208 个引用，Python AST 覆盖 86 个文件，操作目录检查通过；一次 Release 构建为 0 警告、0 错误。只运行改动相关检查，未重跑完整历史套件。
+本轮只改 Python、测试和文档，没有修改或构建 C#；Python AST 覆盖 91 个文件且无错误，操作目录检查通过。真实 MCP 验收使用前轮已构建原生宿主。
 
 | 范围 | 回执 | 结果 |
 | --- | --- | --- |
-| 后台生命周期、轨道、文件编辑及既有守卫 | `artifacts/feature-acceptance-3fc96299dad5/summary.json` | 8 个功能用例及清理共 9 通过；独立 stdio 返回 0.17.3，无自有前台切换或遗留会话 |
-| 源版本竞争 | `artifacts/source-snapshot-25-cdvpdpa1/receipt.json`、`artifacts/source-snapshot-25-uvxy01h9/receipt.json` | 旧版混合 A 乐谱和 B 资源；新版受测写入与替换冲突、已有写句柄和校验失败释放符合预期 |
-| 轨道字段与录音 | `artifacts/feature-acceptance-81a85f628a55/summary.json`、`artifacts/feature-acceptance-e4e3e4128287/summary.json` | 旧同值字段置脏；另一轮观察 `midi_recording=true` 重开恢复 false，保留原 setter，不称持久化 |
-| 文件音符原型 | `tools/check_file_note_identity_25.py` | 合成红基线：A、B 两个音符及新音符输出标记 A/A/A；身份映射和新音符原生默认值待设计 |
-| 合成素材锁 | `artifacts/media-atomic-25-a5cd2aa12cbf4df5b0d324e8692fc427/receipt.json` | 受测首字节锁下打开截断导致空文件；只共享读句柄下写入/替换失败，原生刷新及恢复未验 |
-| 0.17.2 文件事件与轨道 | `artifacts/feature-acceptance-f4c4b6029e12/summary.json` | 9 个功能用例及清理共 10 通过，历史批次不与本轮相加 |
+| 文件音符身份及 sidecar | `artifacts/feature-acceptance-57ffec017ade/summary.json` | 1 个功能用例及清理通过；受测显式来源、移动、排序、新建、raw、重开、失效/重复快照和 sidecar 同字段异身份检查通过 |
+| 生命周期、文件编辑、无效音素和既有守卫 | `artifacts/feature-acceptance-4768f923d99b/summary.json` | 4 个功能用例及清理共 5 通过；独立 stdio 0.18.0，无自有前台切换或遗留会话 |
+| 旧版音符错贴 | `artifacts/feature-acceptance-79599f48f49f/summary.json` | 原请求期望 B/新/A，旧版实际 A/A/A 且 velocity 均为 70；先前 `4fbd9aaf25c3` 是探针对列表内容块的解析假设错误 |
+| AI 默认音素与原生歌词转换 | `artifacts/feature-acceptance-f4436a433348/ai_defaults26.json`、`artifacts/feature-acceptance-1ca9890042f3/ai_lyrics26.json` | 空音素及缺失 velocity 的单变量原生打开失败；日英转换有受测正例，中文与不可转换输入保留旧音素但调用成功，清理通过 |
+| 合成素材同句柄 | `artifacts/media-handle-26-349c07fdd1874a6c9e3fc24d73e16b33/receipt.json` | 已持有目标可重命名自身，但候选覆盖被拒；原生刷新、完整事务和崩溃恢复未建立 |
+| 0.17.3 生命周期与文件编辑 | `artifacts/feature-acceptance-3fc96299dad5/summary.json` | 8 个功能用例及清理共 9 通过；历史批次不与本轮相加 |
 
 更多历史回执及失败见 [会话索引](docs/session-log/README.md)。真实 PPSF3 样本、原生合成和 AI 声库证据见 [会话 07](docs/session-log/session-07.md)。
 
 ## 保留边界
 
 1. **未知字段与审查**：`directPitches` 项的删除、拆合和跨工程仍受保护。自动审查拦截了单独解除四个删除守卫的请求：目标绑定删除钩子尚未集成，可能丢失元数据；守卫保持原位，未集成候选也未进入编译。会话 22 的轨道自动化/控制器扩展普通编辑组合守卫放宽也被拦截，原因是候选仍为红基线、原生身份与失败回滚证据不足，可能静默丢失元数据；相关守卫未改变。会话 23 的占用拍号边界守卫放宽同样被自动审查拦截：未知字段往返与原生失败回滚尚未建立，存在元数据丢失风险，且需针对该守卫单项批准。控制器扩展跨工程、扩展工程音频写入及带归档元数据素材属性更新的既有审查守卫保持原位，相关事务需要足够原生证据和单项审批。
-2. **文件级音符替换**：合成测试已复现 `score_replace_notes` 把首音符未知字段和默认 velocity 复制到其他音符及新音符；身份映射与新音符默认值尚未确定，生产行为未改。涉及 `directPitches` 时继续遵守已有审查边界。
+2. **文件音符与歌词**：AI 音符已有受测显式源身份策略；省略选择器即创建新音符，并非按 tick 推断保留。新音符或改词音符省略 phoneme 仍写空字符串，受测声库原生打开失败。原生 `lyrics_apply` 对两个 `can_convert=false` 输入仍返回成功、保留旧音素并报告有效，自动转换不得仅依赖该成功标志。原始 JSON Patch 的同字段异身份 sidecar 安全性仍未证明。
 3. **普通素材属性**：生产 `media_update` 会丢失受测 `property.json` 未知字段。独立进程探针已证实检查后到替换前的并发写入可被覆盖；锁定素材时刷新返回成功值但枚举漏项且旧引用失效，解锁重刷只观察到新枚举恢复。通用数组身份、竞争隔离、失败后完整恢复和崩溃持久性尚未建立。详见 [素材属性调查](docs/media-property-21.md) 和 [刷新探针](docs/media-failure-22.md)。
 4. **时间与迁移**：拍号生成时开始位置碰撞、初始 tempo 删除、controller/音频/音高项/主音量项/轨道自动化项扩展的时间编辑，以及轨道自动化项跨工程传输等仍受保护。tempo/拍号扩展在无原生暂存变更时仍有合并限制；不宣称任意 VPR 无损编辑。详见 [工程保留](docs/project-preservation.md)。
 5. **设备与宿主**：物理 MIDI 采集和设备错误、真实 DAW 固定管道隔离与同步、实际听音质量仍未完成验收。内部声乐合成明确要求 44100 Hz，混缩输出采样率独立。
-6. **录音与客户端**：录音开关的 `true` 状态在一项普通 AI 工程保存重开后恢复 false，持久语义待确认。新独立 stdio 连接实测 0.17.3；本对话连接本轮仍报告 Python MCP 0.4.0、0 会话，原生宿主此前比对为 0.5.0。可见的 app-server 全局刷新没有线程或服务选择参数，可能影响其他会话，本轮未执行；没有操作用户前台编辑器。
+6. **录音与客户端**：录音开关的 `true` 状态在一项普通 AI 工程保存重开后恢复 false，持久语义待确认。新独立 stdio 连接实测 0.18.0；本对话连接本轮仍报告 Python MCP 0.4.0、0 会话，原生宿主此前比对为 0.5.0。可见的 app-server 全局刷新没有线程或服务选择参数，可能影响其他会话，本轮未执行；没有操作用户前台编辑器。
 
-当前模块状态见 [功能矩阵](docs/feature-matrix.md)、[会话 25](docs/session-log/session-25.md) 和 [TODO](TODO.md)。
+当前模块状态见 [功能矩阵](docs/feature-matrix.md)、[会话 26](docs/session-log/session-26.md) 和 [TODO](TODO.md)。

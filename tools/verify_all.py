@@ -37,6 +37,7 @@ import check_extension_edit_guards_22
 import check_file_event_identity_24
 import check_score_noop_24
 import check_score_noop_25
+import check_file_notes_26
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining

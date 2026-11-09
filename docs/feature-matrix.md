@@ -66,12 +66,12 @@ V 不由工具数量或能够枚举签名推导。当前为 37 个工具、125 �
 | R-06 | 时间范围插入空白、删除时间 | project_edit time.insert / time.delete；受测 tempo/拍号扩展事件可随插入移动，部分删除及未占用位置的新生成 tempo/拍号边界已有映射；拍号起始位置碰撞仍受保护；跨 MIDI 片段内部边界须先分割，音频及其他扩展组合仍受保护 | V | 18 |
 | R-07 | 选区与多选状态 | project_edit selection.get / selection.set | V | 12,17 |
 | R-08 | 事件剪切、复制和跨工程粘贴 | project_clipboard；MIDI 轨道和音符样本，源关闭后仍可粘贴 | V | 12,17 |
-| N-01 | 音符枚举、增加、删除 | project_edit note.list / add / remove | V | 39,45-49 |
+| N-01 | 音符枚举、增加、删除 | project_edit note.list / add / remove；受测 AI 首音符自动转换、截断回滚及单步历史 | V | 39,45-49 |
 | N-02 | 音高、时值、力度、位置 | project_edit note.update | V | 45-49,59 |
 | N-03 | 音符复制、分割、连接 | project_edit note.duplicate / note.split / note.join | V | 17-18,45 |
 | N-04 | 多音符批量移调与编辑 | project_edit note.batch_update；歌词文字和移调，保存重开已验 | V | 49 |
 | N-05 | 歌词、音素、语言与保护 | project_edit note.add / update | V | 48-49,57 |
-| N-06 | 逐音节写入与延音连音 | project_library lyrics_apply 原生音节分配；应用和重置前检查暂存状态，批量文字另见 note.batch_update | V | 19,48 |
+| N-06 | 逐音节写入与延音连音 | project_library lyrics_apply 原生音节分配；应用/重置使用乐谱事务与撤销历史，批量文字另见 note.batch_update | V | 19,48 |
 | N-07 | 歌词转音素、候选音素 | project_library 原生 G2PA；日语可合法返回空候选 | V | 19,48,57 |
 | N-08 | 元音、辅音时序编辑 | phoneme_timing.get/set/reset；原生渲染后生成位置，保存重开再渲染读回通过 | V | 40,59 |
 
@@ -138,7 +138,7 @@ V 不由工具数量或能够枚举签名推导。当前为 37 个工具、125 �
 | L-01 | 媒体库列表、分类及搜索 | project_library 媒体接口 | V | 68-69 |
 | L-02 | 媒体关键词与标签 | project_library 媒体接口；独立 property.json 持久化 | V | 69 |
 | L-03 | 将 MIDI 媒体粘贴到工程 | project_library media_import；受测 AI 片段/音符未知字段及历史已验，controller 扩展素材仍受保护 | V | 69 |
-| L-04 | 保存 MIDI 片段为媒体、修改属性 | project_library media_capture / media_update；仅工作区自有媒体，带归档元数据的属性修改受保护；隔离探针发现原生保存会丢弃未知 property 字段 | V | 19,71 |
+| L-04 | 保存 MIDI 片段为媒体、修改属性 | project_library media_capture / media_update；仅工作区自有媒体；普通属性经独立原生进程序列化并保留受测未知字段，带归档元数据的修改仍受保护 | V | 19,71 |
 | L-05 | 删除工作区自有媒体 | project_library media_delete；禁止删除用户原有素材 | V | 71 |
 | L-06 | 预设目录及音素语言信息 | project_library 目录查询已有原生返回值；具体经典效果的声音边界另见 C-11 | V | 53-58,77-91 |
 | L-07 | 五种语言静态音素符号表 | project_library phoneme_table；手册参考数据，非原生动态枚举 | V | 77-91 |
@@ -161,6 +161,6 @@ V 不由工具数量或能够枚举签名推导。当前为 37 个工具、125 �
 
 所有可在当前约束内独立完成的功能都必须有实际入口和验收证据；M/I 行不能算作 V。E/X 不是成功，也不是静默回退。完整覆盖率以本文件及实际程序集目录共同核对，不以新增工具数量判断。
 
-仍待完成：`note.add` 的截断/首音符处理及完整音质验证；`score_compose` 与 `score_replace_notes` 的受测 asa 单音节及普通源选择器已有定向转换/往返证据，其他声库、扩展源及更多 JSON Patch、sidecar 和原生历史组合仍待验证。控制器扩展跨工程迁移及素材往返、拍号生成边界碰撞及音频、控制器、音高项和音量项扩展的工程时间编辑和扩展音频导入/编辑、带归档元数据的素材属性更新及未知 property 字段保留、音高项扩展拆合/删除/跨工程和其他非实体数组、更多音频资源组合、无原生暂存变更时的 tempo/拍号扩展合并、物理 MIDI 设备采集与驱动错误通知、DAW 宿主同步仍待完成。用户仅使用 AI 声库，经典功能行保留兼容性信息而非本轮试用安装目标。原生设备传输和扩展工程快照传输已作静音验收，会话冻结及受支持的未知字段保留已具备入口和证据。内部合成率与输出率、离线求和与外部路由继续区分；静态音素表不是具体声库能力枚举，任意秒区间和尾长也不是当前原生混缩入口。前台窗口从未加入调用面。
+仍待完成：更多 AI 声库、完整音质、歌词短语覆盖及原生提交/回滚失败边界；`score_compose` 与 `score_replace_notes` 的受测 asa 单音节及普通源选择器已有定向转换/往返证据，其他声库、扩展源及更多 JSON Patch、sidecar 和原生历史组合仍待验证。控制器扩展跨工程迁移及素材往返、拍号生成边界碰撞及音频、控制器、音高项和音量项扩展的工程时间编辑和扩展音频导入/编辑、带归档元数据的素材属性更新及普通属性提交后异常/崩溃恢复、音高项扩展拆合/删除/跨工程和其他非实体数组、更多音频资源组合、无原生暂存变更时的 tempo/拍号扩展合并、物理 MIDI 设备采集与驱动错误通知、DAW 宿主同步仍待完成。用户仅使用 AI 声库，经典功能行保留兼容性信息而非本轮试用安装目标。原生设备传输和扩展工程快照传输已作静音验收，会话冻结及受支持的未知字段保留已具备入口和证据。内部合成率与输出率、离线求和与外部路由继续区分；静态音素表不是具体声库能力枚举，任意秒区间和尾长也不是当前原生混缩入口。前台窗口从未加入调用面。
 
 官方来源：`https://rsc-net.vocaloid.com/assets/pdf_files/bb/VOCALOID6_Reference_Manual_6130_ENG.pdf`。本机原文缓存和抽取文本只保存在被忽略的 `.runtime` 中。

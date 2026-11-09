@@ -72,3 +72,7 @@ Non-note JSON and source bytes stayed unchanged, the response contained only
 no target. No owned foreground switches or remaining sessions were observed.
 No audio, other voice, tracked-extension conversion, cancellation, crash,
 concurrent writer, or injected native/cleanup error was tested in this case.
+
+For the 0.22.0 direct native note.add and lyric transaction changes, see
+[native authoring](native-authoring-31.md). These do not expand this file
+authoring evidence to other voices or auditory correctness.

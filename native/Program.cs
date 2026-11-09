@@ -36,10 +36,11 @@ internal static class Program
         try
         {
             bool serve = arguments.Length == 3 && arguments[0] == "--serve";
+            bool mediaProperty = arguments.Length == 4 && arguments[0] == "--media-property";
             bool probe = arguments.Length == 2 || (arguments.Length == 3 && arguments[0] == "--probe");
-            if (!serve && !probe)
+            if (!serve && !probe && !mediaProperty)
                 throw new ArgumentException("Expected --serve INSTALL WORKSPACE or --probe INSTALL OUTPUT.");
-            int offset = arguments.Length == 3 ? 1 : 0;
+            int offset = arguments.Length >= 3 ? 1 : 0;
             string install = Path.GetFullPath(arguments[offset]);
             string output = Path.GetFullPath(arguments[offset + 1]);
             string desktop = DesktopName();
@@ -64,6 +65,8 @@ internal static class Program
                 string path = Path.Combine(install, name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? name : name + ".dll");
                 return File.Exists(path) ? NativeLibrary.Load(path) : nint.Zero;
             });
+            if (mediaProperty)
+                return StageMediaProperty(output, arguments[3]);
             if (!serve)
                 return Probe(output);
             using StreamReader input = new(Console.OpenStandardInput(), new UTF8Encoding(false, true), false, 4096);
@@ -95,6 +98,9 @@ internal static class Program
         }
         finally { Marshal.FreeHGlobal(buffer); }
     }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int StageMediaProperty(string workspace, string stage) => MediaPropertyWorker.Run(workspace, stage);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static int Serve(string workspace, string desktop, TextReader input, TextWriter output)

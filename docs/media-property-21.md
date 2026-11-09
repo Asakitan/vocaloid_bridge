@@ -1,5 +1,7 @@
 # Ordinary media property transaction — session 21
 
+Historical transaction investigation. The normal-operation unknown-field loss is addressed in 0.22.0; post-commit concurrency and recovery boundaries remain in [current media properties](media-properties-31.md).
+
 ## Baseline
 
 The existing host was tested against `tools/check_media_property_20.py`, which creates and deletes a fresh bridge-owned ordinary AI clip and injects unknown fields at the root and under `part`. `artifacts/feature-acceptance-25f45d337d42/summary.json` records the expected red result: `media_update` succeeded but discarded both markers; transport cleanup passed. The archive-bearing guard was not changed. The first sandboxed attempt stopped before fixture creation because creation of its artifact directory was denied; the authorized rerun produced the cited evidence.

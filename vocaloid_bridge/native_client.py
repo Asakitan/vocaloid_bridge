@@ -46,6 +46,11 @@ class IsolatedProcess:
         self.lines: queue.Queue[bytes | Exception | None] = queue.Queue()
         runtime = workspace / ".runtime"
         runtime.mkdir(parents=True, exist_ok=True)
+        self.temp_root = (runtime / "tmp").resolve()
+        if self.temp_root.parent != runtime.resolve():
+            raise NativeError("Private temporary root is outside the workspace runtime directory.")
+        self.temp_directory = self.temp_root / self.desktop_name
+        self.temp_directory.mkdir(parents=True, exist_ok=False)
         self.log_path = runtime / (self.desktop_name + ".stderr.log")
         child_input = parent_output = parent_input = child_output = None
         error_log = None
@@ -73,7 +78,7 @@ class IsolatedProcess:
             flags = win32con.CREATE_NO_WINDOW | win32con.CREATE_SUSPENDED | win32con.CREATE_UNICODE_ENVIRONMENT
             self.process, process_thread, self.pid, _ = win32process.CreateProcess(
                 arguments[0], subprocess.list2cmdline(arguments), None, None, True,
-                flags, dict(os.environ), str(workspace), startup,
+                flags, {**os.environ, "TEMP": str(self.temp_directory), "TMP": str(self.temp_directory)}, str(workspace), startup,
             )
             win32job.AssignProcessToJobObject(self.job, self.process)
             win32process.ResumeThread(process_thread)
@@ -142,6 +147,11 @@ class IsolatedProcess:
         if self.desktop:
             _user32.CloseDesktop(self.desktop)
             self.desktop = None
+        if self.temp_directory.exists():
+            target = self.temp_directory.resolve(strict=True)
+            if target.parent != self.temp_root or target.name != self.desktop_name or self.temp_directory.is_symlink():
+                raise NativeError("Private temporary directory is outside its owned root.")
+            shutil.rmtree(target)
 
 
 class NativeClient:

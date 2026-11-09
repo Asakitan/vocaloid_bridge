@@ -1,5 +1,7 @@
 # Ordinary media property preservation — session 20
 
+Historical preservation investigation; the 0.22.0 production path and its remaining recovery limits are documented in [current media properties](media-properties-31.md).
+
 ## Regression and evidence
 
 `tools/check_media_property_20.py` captures a new ordinary AI clip in the bridge-owned library, confirms the clip has no `vocaloid_bridge_archive_entities_v1`, and injects synthetic unknown nested values at the property root and under `part`. The regression expects both to survive a successful `media_update`, together with native name/tempo readback and unchanged clip bytes. It deletes the fixture in a `finally` block.

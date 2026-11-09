@@ -810,12 +810,31 @@ internal sealed partial class EngineHost : IDisposable
             session.InvalidateAll();
         try { DisposeLibraryServices(); } catch (Exception error) { errors.Add(error); }
         try { DisposeAudioServices(); } catch (Exception error) { errors.Add(error); }
-        try { manager.Dispose(); } catch (Exception error) { errors.Add(error); }
+        bool managerReleased = false;
+        try { manager.Dispose(); managerReleased = true; } catch (Exception error) { errors.Add(error); }
         try { dse?.Dispose(); } catch (Exception error) { errors.Add(error); }
         try { database?.Dispose(); } catch (Exception error) { errors.Add(error); }
         foreach (string directory in ownedDirectories.ToArray())
         {
             try { Cleanup(directory); } catch (Exception error) { errors.Add(error); }
+        }
+        if (managerReleased)
+        {
+            string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            foreach (string kind in new[] { "VSM", "VSMCaches" })
+            {
+                string root = Path.Combine(local, "VOCALOID6", kind);
+                string cache = PathGuard.Under(root, CacheNamespace);
+                try
+                {
+                    if (System.IO.Directory.Exists(cache))
+                    {
+                        PathGuard.TreeNoLinks(cache);
+                        System.IO.Directory.Delete(cache, true);
+                    }
+                }
+                catch (Exception error) { errors.Add(error); }
+            }
         }
         sessions.Clear();
         ownedSequences.Clear();

@@ -33,7 +33,7 @@ powershell -NoProfile -File .\tools\setup.ps1
 
 这些条目均使用 `E:/VC/vocaloid_bridge/.venv/Scripts/python.exe -m vocaloid_bridge`，并显式设置 `VOCALOID_WORKSPACE`、`PYTHONPATH` 为 `E:/VC/vocaloid_bridge`，`PYTHONUTF8` 为 `1`。从其他目录启动时，输出仍写到本项目的 `output`。Codex 的 `tool_timeout_sec` 为 180。
 
-Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.21.0 提供 37 个工具和 125 个结构化操作，独立 stdio 客户端的定向测试已通过。本对话现有连接此前报告 Python MCP 0.4.0；其运行中的原生宿主此前经比对为 0.5.0 构建，尚未载入 0.21.0。重新连接后应核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
+Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.22.0 提供 37 个工具和 125 个结构化操作，独立 stdio 客户端的定向测试已通过。本对话现有连接此前报告 Python MCP 0.4.0；其运行中的原生宿主此前经比对为 0.5.0 构建，尚未载入 0.22.0。重新连接后应核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
 
 ## 工具
 
@@ -149,6 +149,8 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 0.20.0 的 `score_compose` 使用原生单音节转换补全缺省音素，检查目标声库、原文、候选及相邻音符后以独占方式发布；[定向回执](artifacts/feature-acceptance-2dfe4fb88811/summary.json) 覆盖 asa 的日英中样例、保存重开、拒绝及清理，不代表任意声库或发音质量均已验收。
 
 0.21.0 将相同转换用于 `score_replace_notes`；[定向回执](artifacts/feature-acceptance-97a3e0c14883/summary.json) 覆盖 asa 的新音符、改词和保留源音符、标准表现字段及保存重开，保持源文件和仅文件返回契约。
+
+0.22.0 完成受测 AI 首音符自动转换与截断回滚、歌词/音素撤销事务和普通素材未知属性保留；详见 [会话 31](docs/session-log/session-31.md)。后台子进程临时文件改用 E 盘工作区，正常退出清理自身原生缓存；已按回执及进程状态清理 195 个旧 C 盘命名空间（6.88 MiB），活动或证据不足的目录保留。
 
 原生混缩输出整工程或所选整轨，各分轨保留自己的时长；分轨不使用主效果和主音量自动化。`start_seconds`、`end_seconds` 和 `tail_seconds` 不受此原生入口支持，传入会明确报错。素材属性写入独立的 `property.json`；新建自有素材可在 `.vsclip` 中附加桥接元数据。
 

@@ -5,20 +5,21 @@
 | `native/Program.cs` | 原生宿主入口、安装库解析、私有 desktop 检查 | 已编译 |
 | `native/EngineSession.cs` | VSM 会话、工程生命周期、声库、片段渲染和归档校验钩子 | 独立命名空间、零结果缓存；保存前 ZIP 及控制器事务校验有定向测试 |
 | `native/ProjectIntegrity.cs` | 原生打开与发布前的结构和声库身份检查 | 缺经典声库预检、丢失身份阻止覆盖、AI 正例通过；不代替经典声库 |
-| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 68 操作；受限扩展时间编辑、音高事务及受测轨道字段组合 no-op 脏状态通过 |
+| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 68 操作；受测 AI 首音符、截断回滚及单步历史通过，既有扩展边界保持 |
 | `native/AudioOperations.cs` | 原生离线音频、效果与整轨混缩 | 16 个音频操作含传输；普通导入/编辑及效果编辑的原生撤销重做通过，扩展工程写入仍受保护 |
 | `native/TransportOperations.cs` | 原生设备枚举与私有会话播放、停止、定位、释放 | 普通及扩展工程快照的 DirectSound 静音闭环通过；定位区分异步请求与观测 |
 | `native/TrackFreezeOperations.cs` | 会话自有冻结缓存、时基物化和作者态保存 | 多片段/非零起点/效果/自动化与正式 MCP 通过；不持久化冻结标志 |
 | `native/ProjectArchivePreservation.cs`、`native/ProjectArchiveArrays.cs` | 未知字段、实体身份、速度/拍号/控制器事件和额外归档资源保留 | 受测事件扩展编辑、控制器复制拆合及历史通过；跨工程控制器扩展和其他数组有限制 |
 | `native/ProjectArchiveTimeline.cs`、`native/ProjectArchiveNoteArrays.cs`、`native/ProjectArchiveNoteIntegration.cs`、`native/ProjectArchiveMasterAutomation.cs`、`native/ProjectArchiveTrackAutomation.cs` | 扩展时间编辑、音高项及主/轨道自动化项身份、事务和覆盖 | 受测事件插入和部分删除、音高项复制及身份操作、主/轨道自动化项编辑与历史通过；拍号生成位置碰撞、音高项删除及跨工程等边界保留 |
 | `native/MidiRecordingOperations.cs`、`native/MidiRecordingGuards.cs` | 设备枚举、MIDI 事件队列、事务录制及会话保护 | 六操作、静音同步、回调保护及自有虚拟输入通过；物理设备和驱动错误路径未验 |
-| `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 30 个操作有成功调用；歌词/音素应用与重置先检查暂存状态，原生失败后的恢复仍待验证 |
+| `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 30 个操作；歌词/音素事务、撤销及受测提交前失败回滚通过，其他失败边界未验 |
+| `native/MediaPropertyOperations.cs` | 独立原生属性写入、请求字段合并及带备份发布 | 普通未知字段和锁定失败通过；提交后异常明确保留恢复路径，归档扩展守卫保持 |
 | `native/ProjectInterchange.cs`、`native/ProjectArchiveTempoMerge.cs`、`native/ProjectArchiveTimeSigMerge.cs` | 原生格式交换、复制、恢复与合并 | 真实 PPSF3/音频克隆、受测纯元数据历史及空操作状态、tempo/拍号扩展合并和速度碰撞覆盖通过；其他音频组合受限 |
 | `native/ProjectClipboard.cs`、`native/ProjectArchiveTransfer.cs` | 私有原生快照剪贴板及扩展身份迁移 | 受测 AI/音频扩展剪切/粘贴、原始及处理 WAV、工程级不透明资源迁移与候选预检通过；控制器扩展转移受限 |
 | `native/ProjectArchiveOutput.cs` | 带扩展工程的独立原生快照输出 | 人声渲染、MIDI 导出、离线混缩/分轨及源会话历史保护定向通过 |
 | `native/ProjectArchiveLibrary.cs`、`native/ProjectArchiveMedia.cs` | 扩展工程私有素材、MIDI 实体元数据与候选预检 | 受测 AI 片段/音符未知字段、历史和重开通过；controller 及音频扩展写入仍受保护 |
 | `native/RpcServer.cs` | 单线程 JSON 行协议、原生对象发现与精确签名调用 | 已编译 |
-| `vocaloid_bridge/native_client.py` | 私有 desktop、Job Object、管道客户端与 DLL 快照 | 独立构建副本启动、关闭清理通过 |
+| `vocaloid_bridge/native_client.py` | 私有 desktop、Job Object、管道客户端与 DLL 快照 | E 盘独占临时根、构建副本及关闭清理；自身缓存退出清理由原生宿主处理 |
 | `vocaloid_bridge/server.py` | 37 个 MCP 工具、资源、写歌提示 | 新 MIDI 工具在独立 stdio 连接实测；历史工具覆盖见历史回执 |
 | `vocaloid_bridge/compose.py` | AI 编曲/替换缺省音素共用原生 G2PA、临时会话和独占发布 | asa 日英中单音节、替换源身份及保存重开定向通过；其他声库、扩展源及发音质量待验 |
 | `vocaloid_bridge/operations.json` | 原生 dispatch 对照的随包操作索引 | 125 个操作均有精确契约行；区分入口发现与实测 |
@@ -61,6 +62,8 @@
 | `tools/check_lyrics_staging_28.py` 及 `tools/probe_*28.py` | 歌词暂存边界与原生音素引导调查 | 一项暂存隔离用例通过；自动转换、原生失败恢复和其他声库仍待验证 |
 | `tools/check_compose_phonemes_29.py` | AI 编曲自动音素、发布及保存重开 | 一项三语言功能用例及清理通过；失败注入和其他声库未验 |
 | `tools/check_replace_phonemes_30.py` | 替换自动音素与源音符身份 | 一项三语言及源字段用例通过，文件返回契约、保存重开、sidecar 拒绝和清理通过 |
+| `tools/check_note_add_31.py`、`tools/check_lyrics_transactions_31.py`、`tools/check_lyrics_rollback_31.ps1`、`tools/check_media_properties_31.py` | 首音符、歌词提交前回滚及普通素材属性 | 三个直接相关用例及各自清理通过，未扩为全量验收 |
+| `tools/check_native_semantics.ps1`、`tools/clean_owned_caches.py` | 完整原生语义预检与历史自有缓存清理 | 预检使用真实 WPF global usings；清理按回执和进程创建时间保留活动/未知项 |
 | `tools/check_clipboard_ambiguity.py`、`tools/check_archive_export_limits.ps1`、`tools/check_tempo_array_helper.ps1` | 剪贴板候选、ZIP 导出限制和 tempo 数组原语回归 | 合成候选、缩小阈值 ZIP 和原语通过；完整 MCP 证据见 STATUS |
 | `tools/probe_appcontainer_pipe.cs`、`tools/probe_appcontainer_child.go` | 随机合成管道的后台进程隔离探针 | 受限令牌及单一默认权限管道拒绝访问已观察；非插件隔离证明 |
 | `tools/probe_appcontainer_server.cs`、`tools/probe_appcontainer_server_child.go`、`tools/probe_appcontainer_peer.cs`、`tools/probe_appcontainer_peer_child.go` | 随机合成管道受限服务端与同/异 profile 对端探针 | LOCAL 双向收发和负对照已观察；未证明真实插件隔离 |
@@ -121,3 +124,4 @@
 | 2026-11-10 | 升级 0.19.1：歌词与音素应用/重置先检查暂存变更，避免提交无关编辑；自动音素转换继续调查。 |
 | 2026-11-10 | 升级 0.20.0：`score_compose` 的 AI 单音节缺省音素通过原生 G2PA 与临时会话转换，受测 asa 三语言往返通过。 |
 | 2026-11-10 | 升级 0.21.0：AI 编曲和替换音符共用原生音素转换；替换源选择器、标准字段、保存重开及 sidecar 拒绝定向通过。 |
+| 2026-11-10 | 升级 0.22.0：受测 AI 首音符、歌词撤销事务、普通素材未知字段与锁定失败通过；临时根迁至 E 盘并清理已证实结束的 C 盘缓存。 |

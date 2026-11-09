@@ -473,51 +473,56 @@ internal sealed partial class EngineHost
         ScoreRequireUnstaged(session.Sequence);
         WIVSMMidiPart part = LibraryMidiPart(session, options);
         int affectedLength = 0;
-        if (operation is "lyrics_reset" or "phonemes_reset")
+        return ScoreMutate(session, operation, () =>
         {
-            int[] languages = LibraryOption(options, "language_id").ValueKind != JsonValueKind.Undefined
-                ? [(int)LibraryLanguage(options)]
-                : part.Notes.Select(note => note.LangID).Append(part.LangID)
-                    .Where(language => Enum.IsDefined((G2PAManagerLangID)language)).Distinct().ToArray();
-            if (languages.Length == 0)
-                throw new ArgumentException("language_id is required because the part and its notes have no initialized native language.");
-            G2PAManager[] managers = languages.Select(language => LibraryLyrics((G2PAManagerLangID)language)).ToArray();
-            session.Dirty = true;
-            session.InvalidateChildren();
-            foreach (G2PAManager manager in managers)
-                LibraryRequire(operation == "lyrics_reset"
-                    ? manager.ResetLyrics((nint)part, part.IsAi)
-                    : manager.ResetPhonemes((nint)part, part.IsAi), operation);
-            affectedLength = part.Notes.Count;
-        }
-        else
-        {
-            WIVSMNote note = LibraryNote(part, options);
-            G2PAManager manager = LibraryLyrics(LibraryLanguage(options, note.LangID));
-            string text = LibraryText(options, operation == "lyrics_apply" ? "lyrics" : "phonemes");
-            bool extension = LibraryBool(options, "use_extension_dictionary");
-            bool? protect = LibraryOption(options, "protect").ValueKind == JsonValueKind.Undefined
-                ? null : LibraryBool(options, "protect");
-            session.Dirty = true;
-            session.InvalidateChildren();
-            if (operation == "phonemes_apply")
+            if (operation is "lyrics_reset" or "phonemes_reset")
             {
-                LibraryRequire(manager.SetPhonemes((nint)note, text, note.IsAi), operation);
-                affectedLength = 1;
+                int[] languages = LibraryOption(options, "language_id").ValueKind != JsonValueKind.Undefined
+                    ? [(int)LibraryLanguage(options)]
+                    : part.Notes.Select(note => note.LangID).Append(part.LangID)
+                        .Where(language => Enum.IsDefined((G2PAManagerLangID)language)).Distinct().ToArray();
+                if (languages.Length == 0)
+                    throw new ArgumentException("language_id is required because the part and its notes have no initialized native language.");
+                G2PAManager[] managers = languages.Select(language => LibraryLyrics((G2PAManagerLangID)language)).ToArray();
+                foreach (G2PAManager manager in managers)
+                    LibraryRequire(operation == "lyrics_reset"
+                        ? manager.ResetLyrics((nint)part, part.IsAi)
+                        : manager.ResetPhonemes((nint)part, part.IsAi), operation);
+                affectedLength = part.Notes.Count;
             }
             else
-                LibraryRequire(manager.SetLyrics((nint)note, text, extension, note.IsAi, out affectedLength), operation);
-            if (protect.HasValue)
-                note.IsProtected = protect.Value;
-        }
-        LibraryCommit(session, operation);
-        return new
+            {
+                WIVSMNote note = LibraryNote(part, options);
+                G2PAManager manager = LibraryLyrics(LibraryLanguage(options, note.LangID));
+                string text = LibraryText(options, operation == "lyrics_apply" ? "lyrics" : "phonemes");
+                bool extension = LibraryBool(options, "use_extension_dictionary");
+                bool? protect = LibraryOption(options, "protect").ValueKind == JsonValueKind.Undefined
+                    ? null : LibraryBool(options, "protect");
+                if (operation == "phonemes_apply")
+                {
+                    LibraryRequire(manager.SetPhonemes((nint)note, text, note.IsAi), operation);
+                    affectedLength = 1;
+                }
+                else
+                {
+                    if (!manager.CanConvert(text, extension, note.IsAi))
+                        throw new ArgumentException("Native G2PA does not accept the requested lyrics.");
+                    LibraryRequire(manager.SetLyrics((nint)note, text, extension, note.IsAi, out affectedLength), operation);
+                }
+                if (protect.HasValue)
+                {
+                    note.IsProtected = protect.Value;
+                    LibraryRequire(note.IsProtected == protect.Value, "lyric protection readback");
+                }
+            }
+            return true;
+        }, () => new
         {
             session_id = session.Id,
             operation,
             affected_length = affectedLength,
-            notes = part.Notes.Select(LibraryNoteView).ToArray()
-        };
+            notes = LibraryMidiPart(session, options).Notes.Select(LibraryNoteView).ToArray()
+        });
     }
 
     private static void LibraryRequire(bool result, string operation)
@@ -1133,43 +1138,11 @@ internal sealed partial class EngineHost
     }
 
     private object LibraryUpdateMedia(EngineSession session, JsonElement options)
-    {
-        UserClip userClip = LibraryOwnedClip(LibraryText(options, "clip_id"));
-        Clip clip = userClip;
-        if (LibraryArchiveHasMetadata(clip))
-            throw new InvalidOperationException("project_preservation: property editing a media clip with archive metadata is not supported.");
-        string[] genres = clip.Filter.GenreEnumerator().Concat(LibraryStrings(options, "add_genres"))
-            .Distinct(StringComparer.Ordinal).ToArray();
-        string[] types = clip.Filter.TypeEnumerator().Concat(LibraryStrings(options, "add_types"))
-            .Distinct(StringComparer.Ordinal).ToArray();
-        string name = LibraryText(options, "name", clip.Name);
-        Key key = clip.PartKey;
-        JsonElement tempoValue = LibraryOption(options, "tempo");
-        int tempo = tempoValue.ValueKind == JsonValueKind.Undefined ? clip.PartTempo
-            : tempoValue.ValueKind == JsonValueKind.Number && tempoValue.TryGetInt32(out int parsedTempo) && parsedTempo > 0
-                ? parsedTempo : throw new ArgumentException("tempo must be a positive native integer.");
-        Yamaha.VOCALOID.VMM.PropertyEditor editor = userClip.CreatePropertyEditor()
-            ?? throw new InvalidOperationException("Native clip property editor could not be created.");
-        try
-        {
-            LibraryRequire(editor.SetClipName(name), "media name");
-            LibraryRequire(editor.SetPartTempo(tempo), "media tempo");
-            LibraryRequire(editor.SetPartKey(key), "media key");
-            foreach (string genre in genres)
-                LibraryRequire(editor.AddFilterGenre(genre), "media genre");
-            foreach (string type in types)
-                LibraryRequire(editor.AddFilterType(type), "media type");
-            LibraryRequire(editor.Save(true), "save media properties");
-        }
-        finally
-        {
-            userClip.DestroyPropertyEditor();
-        }
-        return new { session_id = session.Id, clip = LibraryClipView(userClip, true) };
-    }
+        => UpdateMediaProperties(session, options);
 
     private object LibraryDeleteMedia(EngineSession session, JsonElement options)
     {
+        using MediaWriteLease lease = new(LibraryText(options, "clip_id"));
         UserClip clip = LibraryOwnedClip(LibraryText(options, "clip_id"));
         string id = clip.ID;
         string path = clip.ClipPath;

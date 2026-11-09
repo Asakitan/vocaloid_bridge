@@ -109,7 +109,7 @@ sets the target note's phoneme-protection flag when explicitly supplied.
 An empty candidate list is a legitimate native result, not proof that the lyric
 cannot be converted: the installed Japanese manager returns no alternatives for
 `U+3044`, while native English `hello` returns two candidates and applies across
-two notes. A false `lyrics_can_convert` result did not reliably cause an apply
+two notes. Before 0.22.0, a false `lyrics_can_convert` result did not reliably cause an apply
 error: tested Chinese Han characters and numbered pinyin retained old phonemes,
 while one English emoji produced a different phoneme. In the same installed AI
 voice, unmarked Chinese pinyin `ni hao` produced two native syllables. Inspect
@@ -122,21 +122,28 @@ an explicit `language_id` is required. No user preference or multilingual
 priority setting is read.
 Before `lyrics_apply`, `phonemes_apply`, `lyrics_reset` or `phonemes_reset`, the
 bridge requires the sequence to have no pending native staged edits. This prevents
-those calls from committing unrelated staged changes. After that check, the
-existing mutation path marks the session dirty and invalidates child references
-before calling native code; an error may still leave newly staged data, so
-post-mutation rollback is not claimed.
-Commits accept a native no-op false result only when no changes were staged and
-the native error remains `NoError`.
+those calls from committing unrelated staged changes. Since 0.22.0, the four
+operations use the existing score transaction: native staging is rolled back on
+a pre-commit failure and a changed successful operation enters undo history.
+`lyrics_apply` rejects native CanConvert=false before applying stale phonemes.
+An injected post-mutation validation failure restored notes, dirty state and
+prior history in the tested ordinary AI session. Post-commit readback errors,
+native commit/rollback failures and arbitrary phrase coverage are separate
+boundaries; see [the evidence](native-authoring-31.md).
 
 `media_update` accepts only a native `UserClip` whose resolved path passes the
 same path/link guard under `.runtime/library/media`. Built-in, pre-existing user,
 and externally rooted clips are never edited. Tag edits append; they do not
-silently replace tags. A property editor is always destroyed after its save.
-`tempo` values use native hundredths of BPM (`12000` means 120 BPM).
-Because the native editor starts with default draft values, the implementation
-explicitly seeds the existing name, key, tempo, genres, and types before applying
-requested edits. Omitted fields are preserved.
+silently replace tags. Since 0.22.0, native serialization runs on a clip copy in
+a separate private-desktop process. Only requested name, tempo and tag members
+are copied into the original property JSON; unknown nested members are retained.
+`tempo` values use native hundredths of BPM (`12000` means 120 BPM). A named
+mutex serializes bridge updates/deletes; source sharing locks protect staging.
+Publication uses an atomic file replacement with an exact previous-file backup.
+A post-publication conflict or native refresh/readback error reports committed
+state, invalidates the native catalog and retains the recovery path instead of
+pretending that rollback occurred. External-writer and crash guarantees are
+limited; see [media property transactions](media-properties-31.md).
 `media_delete` uses exactly the same ownership/path gate, calls native
 `UserClip.Remove()`, and verifies both file and catalog-entry disappearance.
 It cannot delete built-in or pre-existing user media.

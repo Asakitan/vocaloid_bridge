@@ -1,5 +1,7 @@
 # Native AI note initialization probe (session 27)
 
+Historical observations from session 27; the 0.22.0 AI insertion contract and targeted evidence are in [native authoring](native-authoring-31.md).
+
 ## Scope
 
 `tools/probe_native_note_27.py` uses a fresh stdio server and private native session for each synthetic asa AI fixture. The seed contains one Japanese `あ/a` note, and is checked for `directPitches`, `controllers`, and `automations` keys before editing. It does not alter production code or guards. The test observes the existing bridge `note.add` implementation, not the bare engine in isolation. Receipt: `artifacts/feature-acceptance-b3983340ab31/native_note27.json`; cleanup: `artifacts/feature-acceptance-b3983340ab31/transport.cleanup.json` (passed). The probe's pass means observation completed, not that every input succeeded.

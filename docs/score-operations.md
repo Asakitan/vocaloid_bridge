@@ -139,12 +139,16 @@ Note fields are `number`, `velocity`, `lyric`, `phonemes`,
 The default number/velocity/expressions come from the native part. Language comes
 from the note/part or the explicitly assigned bank's native language when a new
 part has not populated its language cache. Supplying `phonemes` defaults
-`is_valid_phonemes` to true. Without phonemes, an existing valid same-language
-note supplies the initial phoneme context, and native G2PA `SetLyrics` is called
-for the inserted note. The first note in an empty part requires explicit phonemes.
-A successful call is not proof of complete conversion: in the tested AI voice,
-`こんにちは` produced only `こ/k o` and an emoji retained the prior `a` phoneme.
-An update without phoneme fields preserves them. See [native note observations](native-note-27.md).
+`is_valid_phonemes` to true. Since 0.22.0, an AI insertion without phonemes uses
+the assigned available AI voice and the native language manager, seeded from the
+installed editor defaults; no previous note is required. Native CanConvert must
+accept the lyric. The full requested lyric, exactly one syllable, valid phonemes,
+candidates where available and unchanged surrounding notes are checked. Empty
+candidates require agreement from two different seed phonemes. Failures use the
+existing score rollback; successful insertion is one undo step. Explicit phonemes
+and the existing classic-note context path are retained. An update without
+phoneme fields preserves them. See [current evidence](native-authoring-31.md)
+and [historical observations](native-note-27.md).
 
 Expression objects patch only supplied native fields, preserving other fields.
 Names are case-sensitive:

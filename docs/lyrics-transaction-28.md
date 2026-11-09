@@ -1,5 +1,7 @@
 # Native lyric transaction boundary (session 28)
 
+Historical session 28 evidence; 0.22.0 replaces the apply/reset commit path with the score transaction. See [current transaction evidence](native-authoring-31.md).
+
 ## Method
 
 `.venv/Scripts/python.exe tools/probe_lyrics_transaction_28.py` used a separate ordinary synthetic one-note asa AI project per case, with no direct-pitch items or added controller/track automation. Receipt: `artifacts/feature-acceptance-0b599a61750f/lyrics_transaction28.json`; `transport.cleanup` in the same directory records cleanup. The case reports observations rather than asserting atomicity. No production code or extension guard was changed.

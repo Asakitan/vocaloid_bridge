@@ -42,6 +42,9 @@ import check_patch_sidecar_27
 import check_lyrics_staging_28
 import check_compose_phonemes_29
 import check_replace_phonemes_30
+import check_note_add_31
+import check_lyrics_transactions_31
+import check_media_properties_31
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining

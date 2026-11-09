@@ -473,14 +473,30 @@ internal sealed partial class EngineHost
         }
         int language = ScoreInt(options, "lang_id", 0, 255, defaultLanguage);
         G2PAManager? noteConverter = null;
+        ScoreAiLyricDefaults? automaticAiDefaults = null;
         if (note is null && !options.TryGetProperty("phonemes", out _))
         {
             noteConverter = LibraryLyrics((G2PAManagerLangID)language);
             if (!options.TryGetProperty("lyric", out _))
                 lyric = noteConverter.DefaultLyric();
-            WIVSMNote context = part.Notes.FirstOrDefault(item => item.LangID == language && item.IsValidPhonemes && !string.IsNullOrEmpty(item.Phonemes))
-                ?? throw new ArgumentException("The first note in an empty part requires explicit phonemes; native G2PA needs a note context.");
-            phonemes = context.Phonemes;
+            if (part.IsAi)
+            {
+                string voiceId = part.AiVoiceBankID;
+                VoiceBank bank = EnsureDatabase().GetVoiceBankByCompID(voiceId, VDMVoiceBankType.Dnn)
+                    ?? throw new ArgumentException("Assign an installed AI voice before automatic note.add.");
+                if (!bank.IsAvailableInSequence || !bank.IsSynthesizableVersion || !bank.LangIDs.Contains(language))
+                    throw new ArgumentException("The assigned AI voice does not support this note language.");
+                if (!noteConverter.CanConvert(lyric, false, true))
+                    throw new ArgumentException("Native G2PA does not accept the requested note lyric.");
+                automaticAiDefaults = ScoreAiNoteDefaults(language);
+                phonemes = automaticAiDefaults.FirstPhonemes;
+            }
+            else
+            {
+                WIVSMNote context = part.Notes.FirstOrDefault(item => item.LangID == language && item.IsValidPhonemes && !string.IsNullOrEmpty(item.Phonemes))
+                    ?? throw new ArgumentException("The first note in an empty part requires explicit phonemes; native G2PA needs a note context.");
+                phonemes = context.Phonemes;
+            }
             validPhonemes = true;
         }
         VSMNoteExpression expression = ScorePatchExpression(options, "expression", note?.GetNoteExpression() ?? part.GetDefaultNoteExpression(),
@@ -495,13 +511,17 @@ internal sealed partial class EngineHost
             throw new ArgumentException("note.update requires a note field to update.");
         return ScoreMutate(session, operation, () =>
         {
+            (WIVSMNote Note, string State)[] surrounding = automaticAiDefaults is null ? []
+                : part.Notes.Select(item => (item, ScoreNoteConversionState(item, true))).ToArray();
             WIVSMNote edited;
             if (note is null)
             {
                 edited = part.InsertNote(new VSMRelTick(start), new VSMNoteEvent(duration, number, velocity),
-                    expression, aiExpression, lyric, phonemes, validPhonemes, language)
+                    expression, aiExpression, automaticAiDefaults?.FirstLyric ?? lyric, phonemes, validPhonemes, language)
                     ?? throw new InvalidOperationException("Native note.add failed: " + part.LastError);
-                if (noteConverter is not null && (!noteConverter.SetLyrics((nint)edited, lyric, false, part.IsAi, out int converted) || converted != 1))
+                if (automaticAiDefaults is not null)
+                    ScoreApplyAddedAiLyrics(session, part, edited, noteConverter!, automaticAiDefaults, lyric, language, surrounding);
+                else if (noteConverter is not null && (!noteConverter.SetLyrics((nint)edited, lyric, false, part.IsAi, out int converted) || converted != 1))
                     throw new ArgumentException("Native G2PA did not produce one syllable; use lyrics_apply for a phrase.");
             }
             else
@@ -543,6 +563,60 @@ internal sealed partial class EngineHost
                 ScoreRequire(edited.SetAiVibratoEnabled(vibrato.Value), operation, session.Sequence);
             return ScoreNoteSummary(edited, ScoreNoteIndex(part, edited));
         });
+    }
+
+    private sealed record ScoreAiLyricDefaults(string FirstLyric, string FirstPhonemes, string SecondLyric, string SecondPhonemes);
+
+    private static ScoreAiLyricDefaults ScoreAiNoteDefaults(int language) => language switch
+    {
+        // First two defaults in the installed editor's DefaultLyricManager.
+        0 => new("あ", "a", "い", "i"),
+        1 => new("Ooh", "u:", "a", "V"),
+        2 => new("아", "a", "야", "ja"),
+        3 => new("a", "a", "e", "e"),
+        4 => new("a", "a", "o", "o"),
+        _ => throw new ArgumentException("Automatic note.add requires a supported native G2PA language.")
+    };
+
+    private static string ScoreNoteConversionState(WIVSMNote note, bool includeLyrics) => JsonSerializer.Serialize(
+        JsonSerializer.SerializeToElement(ScoreNoteSummary(note, 0)).EnumerateObject()
+            .Where(item => includeLyrics || item.Name is not ("lyric" or "phonemes" or "is_valid_phonemes"))
+            .ToDictionary(item => item.Name, item => item.Value));
+
+    private static void ScoreApplyAddedAiLyrics(EngineSession session, WIVSMMidiPart part, WIVSMNote note,
+        G2PAManager manager, ScoreAiLyricDefaults defaults, string lyric, int language,
+        (WIVSMNote Note, string State)[] surrounding)
+    {
+        var candidates = manager.CandidatePhonemes((nint)note, lyric, false, true);
+        string targetState = ScoreNoteConversionState(note, false);
+        void Convert()
+        {
+            if (!manager.SetLyrics((nint)note, lyric, false, true, out int affected) || affected != 1 ||
+                note.Lyric != lyric || note.LangID != language || string.IsNullOrEmpty(note.Phonemes) || !note.IsValidPhonemes)
+                throw new ArgumentException("Native G2PA did not resolve the complete single-syllable note lyric.");
+            WIVSMNote[] current = part.Notes.ToArray();
+            if (current.Length != surrounding.Length + 1 || !current.Any(item => item.Equals(note)) ||
+                ScoreNoteConversionState(note, false) != targetState ||
+                surrounding.Any(old => !current.Any(item => item.Equals(old.Note)) || ScoreNoteConversionState(old.Note, true) != old.State))
+                throw new ArgumentException("Native G2PA changed a surrounding note or a non-lyric field.");
+        }
+        Convert();
+        string resolved = note.Phonemes;
+        if (candidates.Count > 0)
+        {
+            if (!candidates.Any(candidate => candidate.Count == 1 && candidate[0].Syllable == lyric && candidate[0].Phoneme == resolved))
+                throw new ArgumentException("Native G2PA did not return a matching single-syllable candidate.");
+        }
+        else
+        {
+            note.Lyric = defaults.SecondLyric;
+            ScoreRequire(note.Lyric == defaults.SecondLyric && note.SetPhonemes(defaults.SecondPhonemes, true, language),
+                "note.add G2PA seed", session.Sequence);
+            ScoreRequire(note.Phonemes == defaults.SecondPhonemes, "note.add G2PA seed readback", session.Sequence);
+            Convert();
+            if (note.Phonemes != resolved)
+                throw new ArgumentException("Native G2PA retained inconsistent seed phonemes.");
+        }
     }
 
     private sealed record ScoreSelectionTarget(Func<bool> Get, Action<bool> Set);

@@ -50,34 +50,7 @@ internal static class MediaPropertyWorker
 
 internal sealed partial class EngineHost
 {
-    private sealed class MediaWriteLease : IDisposable
-    {
-        private readonly Mutex mutex;
-        internal MediaWriteLease(string id)
-        {
-            if (!Guid.TryParse(id, out _)) throw new ArgumentException("Invalid media clip ID.");
-            mutex = new Mutex(false, "Local\\VocaloidBridge.Media." + id);
-            try
-            {
-                if (!mutex.WaitOne(0)) throw new IOException("Media clip is being modified by another bridge process.");
-            }
-            catch (AbandonedMutexException)
-            {
-                mutex.ReleaseMutex(); mutex.Dispose();
-                throw new IOException("A previous media writer ended unexpectedly; inspect its recovery directory before retrying.");
-            }
-            catch { mutex.Dispose(); throw; }
-        }
-        public void Dispose() { mutex.ReleaseMutex(); mutex.Dispose(); }
-    }
-
-    private static byte[] MediaReadLocked(FileStream stream)
-    {
-        if (stream.Length > 16 * 1024 * 1024) throw new IOException("Media properties exceed the 16 MiB limit.");
-        byte[] bytes = new byte[checked((int)stream.Length)];
-        stream.ReadExactly(bytes);
-        return bytes;
-    }
+    private int mediaAccessDepth;
 
     private static JsonObject MediaPropertyObject(byte[] bytes)
     {
@@ -112,7 +85,6 @@ internal sealed partial class EngineHost
     private object UpdateMediaProperties(EngineSession session, JsonElement options)
     {
         string id = LibraryText(options, "clip_id");
-        using MediaWriteLease lease = new(id);
         // Reacquire after refresh rather than using an object cached by an earlier call.
         if (LibraryMedia().ReadAllClipFiles() != VMMError.None)
         {
@@ -141,16 +113,15 @@ internal sealed partial class EngineHost
         PathGuard.CreateDirectory(stageRoot);
         string token = Guid.NewGuid().ToString("N"), stage = PathGuard.Under(stageRoot, token);
         PathGuard.CreateDirectory(stage);
-        string backup = Path.Combine(stage, "previous-property.json");
-        bool committed = false, retain = false;
+        MediaPropertyJournal? transaction = null;
+        bool retain = false;
         try
         {
-            byte[] original;
+            transaction = new MediaPropertyJournal(Workspace, id, stage);
+            byte[] original = transaction.Original;
             JsonObject merged;
             using (FileStream sourceLock = new(clip.ClipPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-            using (FileStream propertyLock = new(propertyPath, FileMode.Open, FileAccess.Read, FileShare.Read))
             {
-                original = MediaReadLocked(propertyLock);
                 merged = MediaPropertyObject(original);
                 foreach (string collection in new[] { "genres", "types" })
                     if (merged["filter"]?[collection] is JsonArray values && values.Any(item => item is not JsonValue value || !value.TryGetValue<string>(out _)))
@@ -162,7 +133,8 @@ internal sealed partial class EngineHost
                 {
                     string target = PathGuard.Under(copiedRoot, Path.GetRelativePath(sourceDirectory, source));
                     PathGuard.CreateDirectory(Path.GetDirectoryName(target)!);
-                    File.Copy(source, target, false);
+                    if (string.Equals(source, propertyPath, StringComparison.OrdinalIgnoreCase)) File.WriteAllBytes(target, original);
+                    else File.Copy(source, target, false);
                 }
                 File.WriteAllText(Path.Combine(stage, "request.json"), request.ToJsonString());
                 ProcessStartInfo start = new(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
@@ -183,14 +155,9 @@ internal sealed partial class EngineHost
                     if (additions.Length > 0)
                         (merged["filter"] as JsonObject ?? throw new IOException("Media filter missing."))[key] = serialized["filter"]?[key]?.DeepClone() ?? throw new IOException("Native media tag array missing.");
             }
-            string candidate = Path.Combine(stage, "merged-property.json");
             byte[] updated = JsonSerializer.SerializeToUtf8Bytes(merged);
-            using (FileStream stream = new(candidate, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { stream.Write(updated); stream.Flush(true); }
-            if (!File.ReadAllBytes(propertyPath).AsSpan().SequenceEqual(original)) throw new IOException("Media properties changed during staging; no update published.");
-            File.Replace(candidate, propertyPath, backup);
-            committed = true;
-            if (!File.ReadAllBytes(backup).AsSpan().SequenceEqual(original))
-                throw new IOException("An external writer changed the replaced file; its bytes are retained in the recovery snapshot.");
+            transaction.Publish(updated);
+            InvalidateMediaCatalog();
             if (LibraryMedia().ReadAllClipFiles() != VMMError.None)
                 throw new IOException("Native media catalog refresh failed after publication.");
             UserClip refreshed = LibraryOwnedClip(id);
@@ -199,16 +166,28 @@ internal sealed partial class EngineHost
                 genres.Except(refreshed.Filter.GenreEnumerator(), StringComparer.Ordinal).Any() ||
                 types.Except(refreshed.Filter.TypeEnumerator(), StringComparer.Ordinal).Any())
                 throw new IOException("Native media property readback differs from the committed values.");
-            return new { session_id = session.Id, clip = LibraryClipView(refreshed, true) };
+            object result = new { session_id = session.Id, clip = LibraryClipView(refreshed, true) };
+            transaction.Complete();
+            return result;
         }
-        catch (Exception error) when (committed)
+        catch (Exception error)
         {
-            retain = true;
             InvalidateMediaCatalog();
-            throw new IOException("Media properties committed; native cache invalidated; recovery snapshot retained at " + backup, error);
+            if (transaction is not null)
+            {
+                try { transaction.Rollback(); }
+                catch (Exception recovery)
+                {
+                    retain = true;
+                    throw new IOException((transaction.Committed ? "Committed media cleanup pending at " : "Uncommitted media recovery pending at ") + stage,
+                        new AggregateException(error, recovery));
+                }
+            }
+            throw new IOException(transaction?.Committed == true ? "Media properties committed; cleanup recovered." : "Media property update failed and was rolled back.", error);
         }
         finally
         {
+            transaction?.Dispose();
             if (!retain) Cleanup(stage);
         }
     }

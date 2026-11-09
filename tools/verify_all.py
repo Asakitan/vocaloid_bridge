@@ -45,6 +45,7 @@ import check_replace_phonemes_30
 import check_note_add_31
 import check_lyrics_transactions_31
 import check_media_properties_31
+import check_media_recovery_32
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining

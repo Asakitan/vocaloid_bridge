@@ -92,42 +92,54 @@ internal sealed partial class EngineHost
         CheckThread();
         if (options.ValueKind is not (JsonValueKind.Object or JsonValueKind.Undefined or JsonValueKind.Null))
             throw new ArgumentException("options must be an object.");
-        object result = operation switch
+        bool mediaOperation = operation.StartsWith("media_", StringComparison.Ordinal);
+        using MediaLibraryLease? lease = mediaOperation ? new MediaLibraryLease(Workspace) : null;
+        if (mediaOperation)
         {
-            "languages" => Enum.GetValues<G2PAManagerLangID>().Select(language => new
+            MediaPropertyJournal.RecoverAll(Workspace);
+            InvalidateMediaCatalog();
+            mediaAccessDepth++;
+        }
+        try
+        {
+            object result = operation switch
             {
-                language_id = (int)language,
-                name = language.ToString(),
-                default_lyric = LibraryLyrics(language).DefaultLyric()
-            }).ToArray(),
-            "phoneme_table" => LibraryPhonemeTable(options),
-            "dvqm_catalog" => LibraryDvqmCatalog(options),
-            "dvqm_get" => LibraryDvqmView(LibrarySession(id), options),
-            "dvqm_set" or "dvqm_clear" => LibraryDvqmEdit(LibrarySession(id), operation, options),
-            "singing_skill_catalog" => LibrarySingingSkillCatalog(),
-            "singing_skill_get" => LibrarySingingSkillView(LibrarySession(id), options),
-            "singing_skill_set" => LibrarySingingSkillEdit(LibrarySession(id), options),
-            "note_skill_get" => LibraryNoteSkillView(LibrarySession(id), options),
-            "note_skill_set" or "note_skill_reset" => LibraryNoteSkillEdit(LibrarySession(id), operation, options),
-            "lyrics_can_convert" => LibraryCanConvert(options),
-            "lyrics_candidates" => LibraryCandidates(LibrarySession(id), options),
-            "lyrics_apply" or "phonemes_apply" or "lyrics_reset" or "phonemes_reset"
-                => LibraryApplyLyrics(LibrarySession(id), operation, options),
-            "style_list" => LibraryStyleList(options),
-            "style_get" => LibraryStyleView(LibraryStyle(LibraryText(options, "style_id")), true),
-            "style_apply" => LibraryApplyStyle(LibrarySession(id), options),
-            "style_capture" => LibraryCaptureStyle(LibrarySession(id), options),
-            "style_update" => LibraryUpdateStyle(LibrarySession(id), options),
-            "style_delete" => LibraryDeleteStyle(LibrarySession(id), options),
-            "media_list" => LibraryMediaList(options),
-            "media_get" => LibraryClipView(LibraryClip(LibraryText(options, "clip_id")), true),
-            "media_update" => LibraryUpdateMedia(LibrarySession(id), options),
-            "media_delete" => LibraryDeleteMedia(LibrarySession(id), options),
-            "media_capture" => LibraryCaptureMedia(LibrarySession(id), options),
-            "media_import" => LibraryImportMedia(LibrarySession(id), options),
-            _ => throw new ArgumentException("Unknown library operation: " + operation)
-        };
-        return new { session_id = id, operation, native = operation != "phoneme_table", result };
+                "languages" => Enum.GetValues<G2PAManagerLangID>().Select(language => new
+                {
+                    language_id = (int)language,
+                    name = language.ToString(),
+                    default_lyric = LibraryLyrics(language).DefaultLyric()
+                }).ToArray(),
+                "phoneme_table" => LibraryPhonemeTable(options),
+                "dvqm_catalog" => LibraryDvqmCatalog(options),
+                "dvqm_get" => LibraryDvqmView(LibrarySession(id), options),
+                "dvqm_set" or "dvqm_clear" => LibraryDvqmEdit(LibrarySession(id), operation, options),
+                "singing_skill_catalog" => LibrarySingingSkillCatalog(),
+                "singing_skill_get" => LibrarySingingSkillView(LibrarySession(id), options),
+                "singing_skill_set" => LibrarySingingSkillEdit(LibrarySession(id), options),
+                "note_skill_get" => LibraryNoteSkillView(LibrarySession(id), options),
+                "note_skill_set" or "note_skill_reset" => LibraryNoteSkillEdit(LibrarySession(id), operation, options),
+                "lyrics_can_convert" => LibraryCanConvert(options),
+                "lyrics_candidates" => LibraryCandidates(LibrarySession(id), options),
+                "lyrics_apply" or "phonemes_apply" or "lyrics_reset" or "phonemes_reset"
+                    => LibraryApplyLyrics(LibrarySession(id), operation, options),
+                "style_list" => LibraryStyleList(options),
+                "style_get" => LibraryStyleView(LibraryStyle(LibraryText(options, "style_id")), true),
+                "style_apply" => LibraryApplyStyle(LibrarySession(id), options),
+                "style_capture" => LibraryCaptureStyle(LibrarySession(id), options),
+                "style_update" => LibraryUpdateStyle(LibrarySession(id), options),
+                "style_delete" => LibraryDeleteStyle(LibrarySession(id), options),
+                "media_list" => LibraryMediaList(options),
+                "media_get" => LibraryClipView(LibraryClip(LibraryText(options, "clip_id")), true),
+                "media_update" => LibraryUpdateMedia(LibrarySession(id), options),
+                "media_delete" => LibraryDeleteMedia(LibrarySession(id), options),
+                "media_capture" => LibraryCaptureMedia(LibrarySession(id), options),
+                "media_import" => LibraryImportMedia(LibrarySession(id), options),
+                _ => throw new ArgumentException("Unknown library operation: " + operation)
+            };
+            return new { session_id = id, operation, native = operation != "phoneme_table", result };
+        }
+        finally { if (mediaOperation) mediaAccessDepth--; }
     }
 
     private EngineSession LibrarySession(string? id) => GetSession(id
@@ -584,6 +596,8 @@ internal sealed partial class EngineHost
     {
         if (libraryMedia is not null)
             return libraryMedia;
+        using MediaLibraryLease? lease = mediaAccessDepth == 0 ? new MediaLibraryLease(Workspace) : null;
+        if (lease is not null) MediaPropertyJournal.RecoverAll(Workspace);
         VMMError result = VMMError.None;
         MediaManager? created = MediaManagerIF.CreateMediaManager("VOCALOID6",
             ResourceType.Media.SystemPrimaryPath(), LibraryDirectory("media"),
@@ -1142,7 +1156,6 @@ internal sealed partial class EngineHost
 
     private object LibraryDeleteMedia(EngineSession session, JsonElement options)
     {
-        using MediaWriteLease lease = new(LibraryText(options, "clip_id"));
         UserClip clip = LibraryOwnedClip(LibraryText(options, "clip_id"));
         string id = clip.ID;
         string path = clip.ClipPath;

@@ -13,7 +13,7 @@
 | `native/ProjectArchiveTimeline.cs`、`native/ProjectArchiveNoteArrays.cs`、`native/ProjectArchiveNoteIntegration.cs`、`native/ProjectArchiveMasterAutomation.cs`、`native/ProjectArchiveTrackAutomation.cs` | 扩展时间编辑、音高项及主/轨道自动化项身份、事务和覆盖 | 受测事件插入和部分删除、音高项复制及身份操作、主/轨道自动化项编辑与历史通过；拍号生成位置碰撞、音高项删除及跨工程等边界保留 |
 | `native/MidiRecordingOperations.cs`、`native/MidiRecordingGuards.cs` | 设备枚举、MIDI 事件队列、事务录制及会话保护 | 六操作、静音同步、回调保护及自有虚拟输入通过；物理设备和驱动错误路径未验 |
 | `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 30 个操作；歌词/音素事务、撤销及受测提交前失败回滚通过，其他失败边界未验 |
-| `native/MediaPropertyOperations.cs` | 独立原生属性写入、请求字段合并及带备份发布 | 普通未知字段和锁定失败通过；提交后异常明确保留恢复路径，归档扩展守卫保持 |
+| `native/MediaPropertyOperations.cs`、`native/MediaPropertyJournal.cs` | 独立原生属性写入、请求字段合并、独占发布及持久恢复 | 普通未知字段、并发拒绝、提交前/后进程中断恢复及外部冲突保留有定向证据；归档守卫保持 |
 | `native/ProjectInterchange.cs`、`native/ProjectArchiveTempoMerge.cs`、`native/ProjectArchiveTimeSigMerge.cs` | 原生格式交换、复制、恢复与合并 | 真实 PPSF3/音频克隆、受测纯元数据历史及空操作状态、tempo/拍号扩展合并和速度碰撞覆盖通过；其他音频组合受限 |
 | `native/ProjectClipboard.cs`、`native/ProjectArchiveTransfer.cs` | 私有原生快照剪贴板及扩展身份迁移 | 受测 AI/音频扩展剪切/粘贴、原始及处理 WAV、工程级不透明资源迁移与候选预检通过；控制器扩展转移受限 |
 | `native/ProjectArchiveOutput.cs` | 带扩展工程的独立原生快照输出 | 人声渲染、MIDI 导出、离线混缩/分轨及源会话历史保护定向通过 |
@@ -79,6 +79,7 @@
 | Claude Code 用户 `.claude.json` | 用户级 stdio MCP | 原生命令报告 Connected |
 | Claude Desktop `Claude-Data` / `Claude-3p` 配置 | 桌面客户端两种模式的 stdio MCP | 已注册；配置及共用启动检查通过，界面连接未验 |
 | Codex 用户 `config.toml` | 用户级 stdio MCP，180 秒工具期限 | enabled；配置及共用启动检查通过 |
+| `tools/check_media_recovery_32.py`、`tools/media_journal_child_32.ps1` | 素材发布阶段、进程终止与外部冲突 | 四阶段断言及独立冲突用例通过；测试脚本参数/编码失败记录保留 |
 
 ## 更新记录
 
@@ -125,3 +126,4 @@
 | 2026-11-10 | 升级 0.20.0：`score_compose` 的 AI 单音节缺省音素通过原生 G2PA 与临时会话转换，受测 asa 三语言往返通过。 |
 | 2026-11-10 | 升级 0.21.0：AI 编曲和替换音符共用原生音素转换；替换源选择器、标准字段、保存重开及 sidecar 拒绝定向通过。 |
 | 2026-11-10 | 升级 0.22.0：受测 AI 首音符、歌词撤销事务、普通素材未知字段与锁定失败通过；临时根迁至 E 盘并清理已证实结束的 C 盘缓存。 |
+| 2026-11-10 | 升级 0.23.0：素材访问串行化、独占发布、持久日志和提交前/后进程中断恢复，外部文件抢占保留原数据。 |

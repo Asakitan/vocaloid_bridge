@@ -1,5 +1,7 @@
 # Ordinary media property preservation — session 31
 
+Historical 0.22.0 design; 0.23.0 replaces its publisher and recovery boundary with the [durable journal protocol](media-journal-32.md).
+
 ## Production flow
 
 Only bridge-owned ordinary clips under `.runtime/library/media` are accepted;

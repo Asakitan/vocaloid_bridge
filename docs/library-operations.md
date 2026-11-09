@@ -137,13 +137,14 @@ and externally rooted clips are never edited. Tag edits append; they do not
 silently replace tags. Since 0.22.0, native serialization runs on a clip copy in
 a separate private-desktop process. Only requested name, tempo and tag members
 are copied into the original property JSON; unknown nested members are retained.
-`tempo` values use native hundredths of BPM (`12000` means 120 BPM). A named
-mutex serializes bridge updates/deletes; source sharing locks protect staging.
-Publication uses an atomic file replacement with an exact previous-file backup.
-A post-publication conflict or native refresh/readback error reports committed
-state, invalidates the native catalog and retains the recovery path instead of
-pretending that rollback occurred. External-writer and crash guarantees are
-limited; see [media property transactions](media-properties-31.md).
+`tempo` values use native hundredths of BPM (`12000` means 120 BPM). Since
+0.23.0, a workspace-level mutex serializes media access; an exclusive bound
+property handle protects native staging. Durable original/candidate snapshots
+and a journal precede no-replacement renames. Native readback precedes the
+commit marker. The next media access rolls back uncommitted journals or cleans
+committed journals and reloads its catalog. Foreign conflicts preserve current
+bytes and recovery data rather than guessing the winner. See the
+[process-crash recovery contract](media-journal-32.md) for visibility and storage limits.
 `media_delete` uses exactly the same ownership/path gate, calls native
 `UserClip.Remove()`, and verifies both file and catalog-entry disappearance.
 It cannot delete built-in or pre-existing user media.

@@ -72,6 +72,24 @@ clone and rejection of divergent unknown fields on indistinguishable tracks.
 
 ## Non-entity array investigation
 
+The controller event implementation binds extension fields to native part
+identity, controller type and event tick, validating native known values before
+applying unknown fields. Ordinary `controller.set` retains the metadata of a
+same-tick event, while `replace=true` removes and recreates all events and does
+not inherit their metadata. A single-point `controller.set` with
+`controller_index` explicitly moves the selected event; an occupied destination
+is rejected. Removing and later creating an event does not inherit metadata.
+The retained state participates in native undo/redo snapshots and clone uses a
+saved snapshot. Other score mutations and clipboard transfers on projects with
+controller extensions are guarded until their identity mappings are established;
+cross-project source transfer is guarded before mutation. When the last unknown
+controller field is deleted, unrelated edits are available again while older
+history retains the previous controller snapshot. The focused
+`preservation.controller_array_roundtrip` case covers an AI fixture, collision,
+move, history, delete/recreate, replacement, clone, save and reopen; the separate
+ambiguity case checks same-shaped tracks carrying distinct controller fields.
+Both passed in `artifacts/feature-acceptance-b0b2d367967f/summary.json`.
+
 The guard rejects unknown properties in unsupported element arrays, including
 `parts[].audioEffects[].parameters` and `parts[].aiVoice.langIDs`.
 `preservation.array_guard` constructs each extension separately and expects
@@ -88,7 +106,8 @@ implementation needs per-array identity or operation-specific pre/post mapping,
 transaction history for removal and reinsertion, explicit copy/transfer mapping,
 and rejection before mutation when unique correspondence is not established. It
 must apply unknown leaves only, never copy known values from the original element.
-These rules remain a requirement for arrays outside the tempo and time-signature changes below.
+These rules remain a requirement for arrays outside the tested controller, tempo
+and time-signature changes described here.
 
 The source now also maps `masterTrack.timeSig.events` extensions using the
 selected native operation and unique bar, with full native-state validation,
@@ -97,9 +116,9 @@ extension. Schema capture checks the installed event fields (`bar`, `numer`,
 `denom`); no old array index is used for overlay. The focused
 `preservation.timesig_array_roundtrip` case exercises moves, changes, conflicts,
 undo/redo, deletion and same-value recreation, clone and reopen. The private-MCP
-run `artifacts/feature-acceptance-5f7c71ba55ed/summary.json` passed this case and
-checked that source or target time-signature extensions guard a tempo-map merge
-before mutation. This does not establish support for time-signature extension merge.
+run `artifacts/feature-acceptance-5f7c71ba55ed/summary.json` passed this case
+and recorded the earlier merge guard. Time-signature extension merge has since
+been implemented and tested as described in `interchange-operations.md`.
 
 A focused private-MCP probe (`preservation.tempo_array_semantics`, receipt
 `artifacts/feature-acceptance-dca2b07208c6/summary.json`) observed a tempo
@@ -182,7 +201,7 @@ data may coexist. Duplicate part name/position/duration signatures and duplicate
 note identity signatures remain rejected. Unsupported unknown fields
 inside other array elements are also rejected. With entity or tempo extensions present,
 unverified raw/native mutations, library/audio writes, and score operations
-outside the explicitly tracked subset are rejected. MIDI/AI clipboard cut/paste
+outside the explicitly tracked subset are rejected. MIDI/AI/Audio clipboard cut/paste
 and track merge now use identity transactions. Source root/master fields with
 equal or disjoint pointers can be merged with target fields; new nested leaves
 are preflighted against a native target snapshot, while conflicting values and
@@ -195,7 +214,7 @@ validation; `artifacts/feature-acceptance-a2ec5efb0ad1/summary.json` verifies
 rejection before mutation and successful unambiguous and equal-data pastes.
 Other edit paths can still discover such ambiguity only at save. Opaque-resource
 merge has the bounded project-level semantics in `docs/interchange-operations.md`;
-clipboard resource transfer remains guarded. The focused cases in
+clipboard resource transfer has the semantics in `docs/archive-transfer.md`. The focused cases in
 `artifacts/feature-acceptance-e57fec059ac3/summary.json` and
 `artifacts/feature-acceptance-4cb5b47a3915/summary.json` verify those bounded
 paths, not every source format, larger history permutation or resource case.

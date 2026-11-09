@@ -50,6 +50,114 @@ async def array_guard(check):
         check.evidence("array_guard_" + label, {"path": str(path), "rejected": True})
 
 
+@v.feature("preservation.controller_array_roundtrip", "preservation", "score_compose", "project_open", "project_edit", "project_save")
+async def controller_array_roundtrip(check):
+    """Exercise explicit controller identities across edits and native history."""
+    seed = await check.call("score_compose", output_name=check.output("controller-seed"),
+                            title="Controller array guard", bpm=120,
+                            notes=[{"start": 0, "duration": 1, "pitch": 60,
+                                    "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+    await check.edit(sid, "controller.set", track_index=0, part_index=0, type="Dynamics",
+                     points=[{"tick": 60, "value": 30}, {"tick": 180, "value": 64}], replace=True)
+    sequence, seed_path = await check.save(sid, "controller-native")
+    await check.close(sid)
+    controllers = sequence["tracks"][0]["parts"][0]["controllers"]
+    events = next(c["events"] for c in controllers if c["name"] == "dynamics")
+    v.require([(e["pos"], e["value"]) for e in events] == [(60, 30), (180, 64)],
+              "Controller serialization differs", events)
+    _, members = v.read_vpr(seed_path)
+    events[0][KEY] = {"marker": "first", "nested": [True, None]}
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    source = v.ROOT / "output" / check.output("controller-extension-input")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items():
+            archive.writestr(name, payload)
+    original = source.read_bytes()
+    sid = (await check.call("project_open", path=str(source)))["session_id"]
+    async with check.project() as plain_target:
+        before = await check.call("project_status", session_id=plain_target)
+        await check.rejected("project_merge", "controller extension", session_id=plain_target,
+                             path=str(source), include_tracks=True, include_tempo=False)
+        v.require(await check.call("project_status", session_id=plain_target) == before,
+                  "Guarded controller merge changed target")
+        v.require(source.read_bytes() == original, "Guarded controller merge changed source")
+    lane = {"track_index": 0, "part_index": 0, "type": "Dynamics"}
+    marker = {"marker": "first", "nested": [True, None]}
+
+    async def snapshot(session, label, expected):
+        result, path = await check.save(session, "controller-" + label)
+        lanes = result["tracks"][0]["parts"][0].get("controllers", [])
+        events = next((c["events"] for c in lanes if c["name"] == "dynamics"), [])
+        actual = [(e["pos"], e["value"], e.get(KEY)) for e in events]
+        v.require(actual == expected, "Controller metadata differs", {"actual": actual, "expected": expected})
+        return path
+
+    initial = [(60, 30, marker), (180, 64, None)]
+    moved = [(180, 64, None), (240, 40, marker)]
+    await snapshot(sid, "initial", initial)
+    await check.rejected("project_edit", "destination is ambiguous", session_id=sid,
+                         operation="controller.set", options={**lane, "controller_index": 0,
+                         "points": [{"tick": 180, "value": 40}]})
+    await snapshot(sid, "collision", initial)
+    await check.edit(sid, "controller.set", **lane, controller_index=0, points=[{"tick": 240, "value": 40}])
+    await snapshot(sid, "moved", moved)
+    await check.edit(sid, "undo"); await snapshot(sid, "undo", initial)
+    await check.edit(sid, "redo"); await snapshot(sid, "redo", moved)
+    clone = (await check.call("project_clone", session_id=sid))["session_id"]
+    await check.edit(sid, "controller.remove", **lane, controller_index=1)
+    await check.edit(sid, "controller.set", **lane, points=[{"tick": 240, "value": 40}])
+    recreated = [(180, 64, None), (240, 40, None)]
+    await snapshot(sid, "recreated", recreated)
+    await check.edit(sid, "note.update", track_index=0, part_index=0, note_index=0, number=61)
+    await check.edit(sid, "undo")
+    await snapshot(sid, "empty-controller-unrelated-undo", recreated)
+    await check.edit(sid, "undo"); await snapshot(sid, "undo-insert", moved[:1])
+    await check.edit(sid, "undo"); await snapshot(sid, "undo-remove", moved)
+    await check.edit(sid, "redo"); await check.edit(sid, "redo")
+    await check.edit(sid, "controller.set", **lane, replace=True,
+                     points=[{"tick": 240, "value": 40}])
+    path = await snapshot(sid, "replace", [(240, 40, None)])
+    await snapshot(clone, "clone", moved)
+    await check.edit(clone, "controller.set", **lane, replace=True,
+                     points=[{"tick": 240, "value": 40}])
+    await snapshot(clone, "replace-marked", [(240, 40, None)])
+    await check.edit(clone, "undo"); await snapshot(clone, "undo-replace", moved)
+    reopened = (await check.call("project_open", path=str(path)))["session_id"]
+    await snapshot(reopened, "reopen", [(240, 40, None)])
+    await check.rejected("project_edit", "controller extension mutation", session_id=clone,
+                         operation="part.duplicate", options={"track_index": 0, "part_index": 0, "start_tick": 9600})
+    v.require(source.read_bytes() == original, "Controller source fixture was modified")
+    for session in (reopened, clone, sid): await check.close(session)
+
+
+
+@v.feature("preservation.controller_identity_ambiguity", "preservation", "score_compose", "project_open", "project_edit", "project_save")
+async def controller_identity_ambiguity(check):
+    seed = await check.call("score_compose", output_name=check.output("controller-ambiguous-seed"),
+                            title="Controller ambiguity", bpm=120,
+                            notes=[{"start": 0, "duration": 1, "pitch": 60,
+                                    "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+    await check.edit(sid, "controller.set", track_index=0, part_index=0, type="Dynamics",
+                     points=[{"tick": 60, "value": 30}])
+    tracks = (await check.edit(sid, "track.list"))["tracks"]
+    await check.edit(sid, "track.duplicate", track_index=0, name=tracks[0]["name"])
+    sequence, path = await check.save(sid, "controller-ambiguous-native")
+    await check.close(sid)
+    _, members = v.read_vpr(path)
+    for index, track in enumerate(sequence["tracks"]):
+        events = next(c["events"] for c in track["parts"][0]["controllers"] if c["name"] == "dynamics")
+        events[0][KEY] = {"track": index}
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    source = v.ROOT / "output" / check.output("controller-ambiguous-input")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    original = source.read_bytes()
+    await check.rejected("project_open", "indistinguishable track identities", path=str(source))
+    v.require(source.read_bytes() == original, "Ambiguous controller fixture was modified")
+
+
 @v.feature("preservation.timesig_array_roundtrip", "preservation", "score_compose", "project_open", "project_edit", "project_save", "project_clone", "project_merge")
 async def timesig_array_roundtrip(check):
     seed = await check.call("score_compose", output_name=check.output("timesig-seed"), title="Time signature extensions", bpm=120,
@@ -68,16 +176,6 @@ async def timesig_array_roundtrip(check):
         for name, payload in members.items(): archive.writestr(name, payload)
     original = source.read_bytes()
     sid = (await check.call("project_open", path=str(source)))["session_id"]
-    before = await check.call("project_status", session_id=sid)
-    await check.rejected("project_merge", "time signature extension merge", session_id=sid, path=str(seed_path),
-                         include_tracks=False, include_tempo=True, replace_tempo=True)
-    v.require(await check.call("project_status", session_id=sid) == before, "Guarded time signature target changed")
-    async with check.project() as plain_target:
-        before = await check.call("project_status", session_id=plain_target)
-        await check.rejected("project_merge", "time signature extension merge", session_id=plain_target, path=str(source),
-                             include_tracks=False, include_tempo=True, replace_tempo=True)
-        v.require(await check.call("project_status", session_id=plain_target) == before, "Guarded time signature source changed target")
-
     async def assert_events(session, label, expected):
         result, path = await check.save(session, "timesig-" + label)
         actual = [(e["bar"], e["numer"], e["denom"], e.get(KEY)) for e in result["masterTrack"]["timeSig"]["events"]]

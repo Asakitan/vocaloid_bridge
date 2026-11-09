@@ -179,7 +179,7 @@ internal sealed partial class EngineHost
                     if ((part.Type == VSMPartType.Audio) != (track.Type == VSMTrackType.Audio))
                         throw new ArgumentException("Clipboard part type does not match the target track.");
                     if (part.Type == VSMPartType.Midi && new WIVSMMidiPart(part).ClipboardParentTrackType() != track.Type)
-                        throw new ArgumentException("Clipboard MIDI/AI part type must match the target track.");
+                        throw new ArgumentException("Clipboard part type must match the target track.");
                     if (track.DuplicatePart(part.AbsBeginTick + new VSMRelTick(offset), part) is null)
                         throw new InvalidOperationException("Native clipboard part paste failed: " + track.LastError);
                     inserted++;
@@ -221,15 +221,15 @@ internal sealed partial class EngineHost
             if (insertion > target.Sequence.NumTrack || target.Sequence.NumTrack + (ulong)stored.SourceIndices.Length > 32)
                 throw new ArgumentOutOfRangeException("index", "Clipboard paste exceeds native track bounds.");
             foreach (ulong index in stored.SourceIndices)
-                if (ClipboardTrack(stored.Snapshot, index).Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi))
-                    throw new InvalidOperationException("project_preservation: extended clipboard track transfer currently requires MIDI or AI tracks.");
+                if (ClipboardTrack(stored.Snapshot, index).Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi or VSMTrackType.Audio))
+                    throw new InvalidOperationException("project_preservation: unsupported extended clipboard track type.");
         }
         else if (stored.Kind == "parts")
         {
             targetTrack = ClipboardTrack(target, ClipboardIndex(options, "track_index", 0));
-            if (targetTrack.Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi) ||
+            if (targetTrack.Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi or VSMTrackType.Audio) ||
                 ClipboardTrack(stored.Snapshot, stored.SourceTrackIndex).Type != targetTrack.Type)
-                throw new ArgumentException("Clipboard MIDI/AI part type must match the target track.");
+                throw new ArgumentException("Clipboard part type must match the target track.");
         }
         else
         {

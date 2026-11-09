@@ -254,5 +254,13 @@ extensions with non-conflicting offset and replacement, conflict rejection,
 undo/redo and reopen on a synthetic AI project. The target-extension merge and
 undo case passed in `artifacts/feature-acceptance-0f5180183d62/summary.json`.
 Non-replacement shared tick destinations remain rejected, including tick zero.
-If either time-signature map has unknown event fields, tempo/time-signature
-merge is rejected before mutation pending an explicit bar-identity mapping.
+Time-signature extension merge replays the installed managed wrapper's native
+paste algorithm on an independent target snapshot, recording the destination
+bar for each source event immediately before native duplication. This also
+identifies same-value overwrites; later events replace earlier metadata at a
+shared destination. Each intermediate map and the final full native paste map
+are validated, and metadata participates in native undo/redo. Replacement
+rejects unmatched events retained by native removal. The focused case in
+`artifacts/feature-acceptance-b0b2d367967f/summary.json` passed replacement,
+aligned and non-aligned offsets, same-value overwrite, source/target fields,
+undo/redo and reopen on synthetic projects; this is not proof for every map.

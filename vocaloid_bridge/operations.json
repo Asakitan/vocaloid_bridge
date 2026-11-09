@@ -34,7 +34,7 @@
         {
           "operation": "controller.set",
           "contract_rows": [
-            "| `controller.set` | `points`: array of `{tick, value}`; optional `replace` (default false) | Updated controller list |"
+            "| `controller.set` | `points`: array of `{tick, value}`; optional `replace` (default false); optional `controller_index` to move one selected point, requiring one point and `replace=false` | Updated controller list |"
           ]
         },
         {

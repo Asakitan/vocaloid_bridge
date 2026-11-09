@@ -8,7 +8,8 @@ using Yamaha.VOCALOID.VSM;
 internal sealed partial class EngineHost
 {
     private readonly record struct ArchiveEntity(string Kind, nint Pointer);
-    private sealed record ArchiveEntry(JsonObject Extra, ArchiveEntity? Parent);
+    private sealed record ArchiveEntry(JsonObject Extra, ArchiveEntity? Parent,
+        Dictionary<VSMControllerType, Dictionary<int, ProjectArchiveArrays.ControllerPoint>>? Controller = null);
     private sealed record ArchiveHistory(Dictionary<ArchiveEntity, ArchiveEntry> Live, JsonObject Root, JsonObject Master, Dictionary<string, string> Resources,
         Dictionary<int, ProjectArchiveArrays.Tempo>? Tempo, Dictionary<int, ProjectArchiveArrays.TimeSig>? TimeSig);
 
@@ -127,7 +128,7 @@ internal sealed partial class EngineHost
     // silently copying stale structures or losing fields. The installed schema's
     // langIDs array omits items; its only declared member is handled explicitly.
     private static void ArchiveValidateNested(JsonNode? node, JsonObject schema, string path,
-        bool owner = false, bool tempoExtensions = false, bool timeSigExtensions = false)
+        bool owner = false, bool tempoExtensions = false, bool timeSigExtensions = false, bool controllerExtensions = false)
     {
         if (node is null) return;
         JsonObject resolved = ArchiveResolveSchema(schema, ArchiveSchema());
@@ -148,13 +149,14 @@ internal sealed partial class EngineHost
                     (path == "/tracks[]/parts[]" && key == "notes")) continue;
                 if (tempoExtensions && path == "/masterTrack/tempo" && key == "events") continue;
                 if (timeSigExtensions && path == "/masterTrack/timeSig" && key == "events") continue;
-                ArchiveValidateNested(child, childSchema, path + "/" + key, owner && child is JsonObject, tempoExtensions, timeSigExtensions);
+                if (controllerExtensions && path == "/tracks[]/parts[]/controllers[]" && key == "events") continue;
+                ArchiveValidateNested(child, childSchema, path + "/" + key, owner && child is JsonObject, tempoExtensions, timeSigExtensions, controllerExtensions);
             }
         }
         else if (node is JsonArray array)
         {
             if (resolved["items"] is JsonObject items)
-                foreach (JsonNode? child in array) ArchiveValidateNested(child, items, path + "[]", tempoExtensions: tempoExtensions, timeSigExtensions: timeSigExtensions);
+                foreach (JsonNode? child in array) ArchiveValidateNested(child, items, path + "[]", tempoExtensions: tempoExtensions, timeSigExtensions: timeSigExtensions, controllerExtensions: controllerExtensions);
             else if (path.EndsWith("/langIDs", StringComparison.Ordinal) && resolved["langID"] is JsonObject)
             {
                 foreach (JsonNode? child in array)
@@ -186,6 +188,112 @@ internal sealed partial class EngineHost
     }
 
     private static string ArchiveString(JsonObject value, string key) => value[key]?.GetValue<string>() ?? "";
+
+    private bool ArchiveHasControllerExtensions(EngineSession session) =>
+        archiveStates.TryGetValue(session.Id, out ArchiveState? state) &&
+        state.Live.Values.Any(entry => entry.Controller is not null);
+
+    private static JsonArray ArchiveNativeControllers(WIVSMMidiPart part, VSMControllerType type)
+    {
+        JsonArray events = new();
+        for (ulong index = 0; index < part.GetNumController(type); index++)
+        {
+            WIVSMMidiController item = part.GetController(type, index)
+                ?? throw new InvalidDataException("project_preservation: missing native controller.");
+            events.Add(new JsonObject { ["pos"] = checked((int)item.RelPosTick.Value), ["value"] = item.Value });
+        }
+        return events;
+    }
+
+    private static bool ArchiveCaptureControllers(ArchiveState state, WIVSMPart part, JsonObject json, JsonObject partSchema)
+    {
+        JsonArray lanes = ArchiveArray(json["controllers"], "controllers");
+        bool extended = lanes.Any(node => node is JsonObject lane &&
+            ArchiveArray(lane["events"], "controller events").Any(e => e is JsonObject item && item.Any(p => p.Key is not ("pos" or "value"))));
+        if (!extended) return false;
+        if (part is not WIVSMMidiPart midi) throw new InvalidDataException("project_preservation: controllers on non-MIDI part.");
+        JsonObject laneSchema = ArchiveItemSchema(ArchivePropertySchema(partSchema, "controllers"));
+        JsonObject eventSchema = ArchiveResolveSchema(ArchiveItemSchema(ArchivePropertySchema(laneSchema, "events")), ArchiveSchema());
+        JsonObject props = eventSchema["properties"] as JsonObject ?? throw new InvalidDataException("project_preservation: missing controller schema.");
+        if (props.Count != 2 || !props.ContainsKey("pos") || !props.ContainsKey("value"))
+            throw new InvalidDataException("project_preservation: unsupported controller event schema.");
+        Dictionary<VSMControllerType, Dictionary<int, ProjectArchiveArrays.ControllerPoint>> result = [];
+        foreach (JsonNode? node in lanes)
+        {
+            JsonObject lane = ArchiveObject(node, "controllers[]");
+            string name = lane["name"]?.GetValue<string>() ?? throw new InvalidDataException("project_preservation: controller name absent.");
+            if (!Enum.TryParse(name, true, out VSMControllerType type) || !Enum.IsDefined(type))
+                throw new InvalidDataException("project_preservation: unknown controller type.");
+            Dictionary<int, ProjectArchiveArrays.ControllerPoint> events = ProjectArchiveArrays.ReadController(ArchiveArray(lane["events"], "controller events"), true);
+            ProjectArchiveArrays.ValidateController(events, ArchiveNativeControllers(midi, type));
+            if (!result.TryAdd(type, events)) throw new InvalidDataException("project_preservation: duplicate controller type.");
+        }
+        ArchiveEntity key = ArchiveKey(part);
+        state.Live[key] = state.Live[key] with { Controller = result };
+        state.HasEntityExtensions = true;
+        return true;
+    }
+
+    private void ArchiveControllerTransition(EngineSession session, WIVSMMidiPart part, VSMControllerType type,
+        IReadOnlyList<(int Tick, int Value)> points, bool replace, int? removeTick, int? moveTick = null)
+    {
+        if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state) ||
+            !state.Live.TryGetValue(ArchiveKey(part), out ArchiveEntry? entry) || entry.Controller is null ||
+            !entry.Controller.TryGetValue(type, out Dictionary<int, ProjectArchiveArrays.ControllerPoint>? previous)) return;
+        if (state.Before is null) throw new InvalidOperationException("project_preservation: controller transition outside mutation boundary.");
+        Dictionary<int, ProjectArchiveArrays.ControllerPoint> next = replace ? [] : new(previous);
+        ProjectArchiveArrays.ControllerPoint? moved = null;
+        if (moveTick is int from && !next.Remove(from, out moved))
+            throw new InvalidDataException("project_preservation: selected controller identity is absent.");
+        if (removeTick is int removed && !next.Remove(removed))
+            throw new InvalidDataException("project_preservation: selected controller identity is absent.");
+        foreach ((int tick, int value) in points)
+        {
+            JsonObject extra = moved?.Extra ?? (next.TryGetValue(tick, out ProjectArchiveArrays.ControllerPoint? old) ? old.Extra : new JsonObject());
+            next[tick] = new(value, extra);
+        }
+        ProjectArchiveArrays.ValidateController(next, ArchiveNativeControllers(part, type));
+        var lanes = new Dictionary<VSMControllerType, Dictionary<int, ProjectArchiveArrays.ControllerPoint>>(entry.Controller) { [type] = next };
+        // Once the last unknown leaf is gone, future unrelated mutations no
+        // longer require an event-mapping guard. Older history still retains
+        // its immutable controller snapshot for undo/redo.
+        bool hasExtensions = lanes.Values.Any(lane => lane.Values.Any(point => point.Extra.Count != 0));
+        state.Live[ArchiveKey(part)] = entry with { Controller = hasExtensions ? lanes : null };
+    }
+
+    private void ArchiveControllerPreflight(EngineSession session, WIVSMMidiPart part, VSMControllerType type)
+    {
+        if (archiveStates.TryGetValue(session.Id, out ArchiveState? state) &&
+            state.Live.TryGetValue(ArchiveKey(part), out ArchiveEntry? entry) && entry.Controller is not null &&
+            entry.Controller.TryGetValue(type, out Dictionary<int, ProjectArchiveArrays.ControllerPoint>? events))
+        {
+            ArchiveCheck(state);
+            ProjectArchiveArrays.ValidateController(events, ArchiveNativeControllers(part, type));
+        }
+    }
+
+    private static void ArchiveOverlayControllers(WIVSMMidiPart part, JsonObject json, ArchiveEntry entry)
+    {
+        if (entry.Controller is null) return;
+        Dictionary<VSMControllerType, JsonArray> output = [];
+        foreach (JsonNode? node in ArchiveArray(json["controllers"], "controllers"))
+        {
+            JsonObject lane = ArchiveObject(node, "controllers[]");
+            string name = lane["name"]?.GetValue<string>() ?? throw new InvalidDataException("project_preservation: controller name absent.");
+            if (!Enum.TryParse(name, true, out VSMControllerType type) || !output.TryAdd(type, ArchiveArray(lane["events"], "controller events")))
+                throw new InvalidDataException("project_preservation: ambiguous native controller lane.");
+        }
+        foreach ((VSMControllerType type, Dictionary<int, ProjectArchiveArrays.ControllerPoint> events) in entry.Controller)
+        {
+            ProjectArchiveArrays.ValidateController(events, ArchiveNativeControllers(part, type));
+            if (!output.TryGetValue(type, out JsonArray? lane))
+            {
+                if (events.Count != 0) throw new InvalidDataException("project_preservation: controller lane missing from snapshot.");
+                continue;
+            }
+            ProjectArchiveArrays.OverlayController(lane, events);
+        }
+    }
 
     private ArchiveState CreateArchiveState(EngineSession session)
     {
@@ -294,7 +402,8 @@ internal sealed partial class EngineHost
                     WIVSMPart part = track.GetPart((ulong)pi) ?? throw new InvalidDataException("project_preservation: missing part.");
                     ArchiveValidatePart(part, partJson);
                     ArchiveBind(state, part, ArchiveUnknownFields(partJson, partSchema, "/tracks[]/parts[]"), ArchiveKey(track));
-                    ArchiveValidateNested(partJson, partSchema, "/tracks[]/parts[]", true);
+                    bool controllerExtensions = ArchiveCaptureControllers(state, part, partJson, partSchema);
+                    ArchiveValidateNested(partJson, partSchema, "/tracks[]/parts[]", true, controllerExtensions: controllerExtensions);
                     JsonArray notes = ArchiveArray(partJson["notes"], "/tracks[]/parts[]/notes");
                     if (part is not WIVSMMidiPart midi)
                     {
@@ -312,7 +421,7 @@ internal sealed partial class EngineHost
                     }
                 }
             }
-            if (state.Live.Values.Any(entry => entry.Extra.Count != 0))
+            if (state.Live.Values.Any(entry => entry.Extra.Count != 0 || entry.Controller is not null))
             {
                 ArchiveValidateUnambiguous(tracks);
                 for (int index = 0; index < tracks.Count; index++)
@@ -443,7 +552,7 @@ internal sealed partial class EngineHost
         if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state) || !state.HasEntityExtensions)
             throw new InvalidOperationException("project_preservation: no tracking upgrade to drop.");
         ArchiveCheck(state);
-        if (state.Undo.Count != 0 || state.Redo.Count != 0 || state.Live.Values.Any(entry => entry.Extra.Count != 0) ||
+        if (state.Undo.Count != 0 || state.Redo.Count != 0 || state.Live.Values.Any(entry => entry.Extra.Count != 0 || entry.Controller is not null) ||
             state.Tempo is not null || state.TimeSig is not null)
             throw new InvalidOperationException("project_preservation: tracking upgrade already contains committed identity data.");
         session.Sequence.RemoveUpdateObserver(state.Observer);
@@ -840,6 +949,8 @@ internal sealed partial class EngineHost
     internal void CheckArchiveExternalOperation(string? id, string domain, string operation)
     {
         if (id is null || !HasArchiveEntityExtensions(GetSession(id))) return;
+        if (domain == "clipboard" && operation is ("copy" or "cut" or "paste") && ArchiveHasControllerExtensions(GetSession(id)))
+            throw new InvalidOperationException("project_preservation: controller extension clipboard transfer has no verified identity mapping.");
         bool readOnly = domain == "clipboard"
             ? operation is "copy" or "cut" or "paste" or "list" or "clear"
             : operation is "languages" or "phoneme_table" or "lyrics_can_convert" or "lyrics_candidates" or
@@ -852,6 +963,8 @@ internal sealed partial class EngineHost
     private void RequireArchiveMutationSupported(EngineSession session, string operation)
     {
         if (!HasArchiveEntityExtensions(session)) return;
+        if (ArchiveHasControllerExtensions(session) && operation is not ("controller.set" or "controller.remove" or "undo" or "redo"))
+            throw new InvalidOperationException("project_preservation: controller extension mutation has no verified identity mapping: " + operation);
         if (operation is not ("track.create" or "track.update" or "track.reorder" or "track.remove" or "track.duplicate" or
             "part.create" or "part.update" or "part.move" or "part.resize" or "part.remove" or "part.duplicate" or "part.split" or "part.join" or
             "note.update" or "note.remove" or "note.add" or "note.clear" or "note.batch_update" or "note.duplicate" or "note.split" or "note.join" or
@@ -869,7 +982,7 @@ internal sealed partial class EngineHost
         ArchiveCheck(state);
         if (state.Before is not null) throw new InvalidOperationException("project_preservation: nested mutation is unsupported.");
         bool oldEmptyUndo = action == "undo" && state.Undo.Count == 0 && state.PreUpgradeEmptyHistory &&
-            state.Live.Values.All(entry => entry.Extra.Count == 0);
+            state.Live.Values.All(entry => entry.Extra.Count == 0 && entry.Controller is null);
         if (state.HasEntityExtensions && ((action == "undo" && state.Undo.Count == 0 && !oldEmptyUndo) || (action == "redo" && state.Redo.Count == 0)))
             throw new InvalidOperationException("project_preservation: native history has no corresponding identity snapshot.");
         state.Before = new(state.Live);
@@ -896,7 +1009,7 @@ internal sealed partial class EngineHost
         state.Before = null;
         state.BeforeRoot = null; state.BeforeMaster = null; state.BeforeResources = null; state.BeforeTempo = null; state.BeforeTimeSig = null;
         ArchiveHistory HistorySnapshot(Dictionary<ArchiveEntity, ArchiveEntry> snapshot, JsonObject root, JsonObject master, Dictionary<string, string> resources, Dictionary<int, ProjectArchiveArrays.Tempo>? tempo, Dictionary<int, ProjectArchiveArrays.TimeSig>? timeSig) =>
-            new(state.PreUpgradeEmptyHistory && snapshot.Values.All(entry => entry.Extra.Count == 0) ? EmptyHistoryMarker : snapshot, root, master, resources, tempo, timeSig);
+            new(state.PreUpgradeEmptyHistory && snapshot.Values.All(entry => entry.Extra.Count == 0 && entry.Controller is null) ? EmptyHistoryMarker : snapshot, root, master, resources, tempo, timeSig);
         ArchiveHistory currentBefore = HistorySnapshot(before, beforeRoot, beforeMaster, beforeResources, beforeTempo, beforeTimeSig);
         void Restore(ArchiveHistory history)
         {
@@ -913,7 +1026,7 @@ internal sealed partial class EngineHost
         {
             case "commit": state.Undo.Push(currentBefore); state.Redo.Clear(); break;
             case "undo":
-                if (state.Undo.Count == 0 && (!state.PreUpgradeEmptyHistory || before.Values.Any(entry => entry.Extra.Count != 0)))
+                if (state.Undo.Count == 0 && (!state.PreUpgradeEmptyHistory || before.Values.Any(entry => entry.Extra.Count != 0 || entry.Controller is not null)))
                 { state.Invalid = "untracked undo"; break; }
                 state.Redo.Push(currentBefore);
                 Restore(state.Undo.Count == 0
@@ -993,7 +1106,7 @@ internal sealed partial class EngineHost
                 state.Live.Add(key, previous);
             if (state.Live.TryGetValue(key, out ArchiveEntry? entry))
             {
-                if (strictParents && entry.Extra.Count != 0 && entry.Parent != parent)
+                if (strictParents && (entry.Extra.Count != 0 || entry.Controller is not null) && entry.Parent != parent)
                     state.Invalid = "history restored an extended entity under a different parent";
                 state.Live[key] = entry with { Parent = parent };
                 seen.Add(key);
@@ -1013,7 +1126,7 @@ internal sealed partial class EngineHost
         }
         if (seen.Count != state.Live.Count)
             state.Invalid = "native object lifecycle diverged from tracked identities";
-        if (preserve is not null && preserve.Any(pair => pair.Value.Extra.Count != 0 && !seen.Contains(pair.Key)))
+        if (preserve is not null && preserve.Any(pair => (pair.Value.Extra.Count != 0 || pair.Value.Controller is not null) && !seen.Contains(pair.Key)))
             state.Invalid = "a non-destructive edit replaced an extended native entity";
     }
 
@@ -1050,7 +1163,7 @@ internal sealed partial class EngineHost
         if ((ulong)tracks.Count != session.Sequence.NumTrack) throw new InvalidDataException("project_preservation: snapshot track count changed.");
         if (state.HasEntityExtensions)
         {
-        bool hasEntityPayload = state.Live.Values.Any(entry => entry.Extra.Count != 0);
+        bool hasEntityPayload = state.Live.Values.Any(entry => entry.Extra.Count != 0 || entry.Controller is not null);
         HashSet<ArchiveEntity> seen = [];
         void Overlay(object entity, JsonObject target)
         {
@@ -1073,6 +1186,7 @@ internal sealed partial class EngineHost
                 ArchiveValidatePart(part, partJson);
                 Overlay(part, partJson);
                 if (part is not WIVSMMidiPart midi) continue;
+                if (state.Live.TryGetValue(ArchiveKey(part), out ArchiveEntry? partEntry)) ArchiveOverlayControllers(midi, partJson, partEntry);
                 JsonArray notes = ArchiveArray(partJson["notes"], "notes");
                 if ((ulong)notes.Count != midi.NumNotes) throw new InvalidDataException("project_preservation: snapshot note count changed.");
                 for (int ni = 0; ni < notes.Count; ni++)

@@ -112,7 +112,7 @@ capture and real driver-error notifications remain unverified.
 
 For VPR extensions, the host binds supported unknown properties to observed
 native entity lifetimes and transaction history, then overlays only those
-unknown properties onto native snapshots. MIDI/AI clipboard cut and paste and
+unknown properties onto native snapshots. MIDI/AI/Audio clipboard cut and paste and
 project merge use tracked native transactions and identity mapping. A failed
 cut retains its independent clipboard snapshot and reports its ID. Extended paste
 is preflighted on an independent candidate. Merge combines nonconflicting source
@@ -121,10 +121,13 @@ preflighting the merged output in independent snapshots. Clipboard selections
 carry the source snapshot's complete project-scoped opaque member set; cut does
 not remove project-scoped members from the source. Resource additions and tempo
 event merge use the native history journal and candidate ZIP validation. Tempo
-and time-signature unknown fields have operation-specific transitions and history;
-time-signature extension merge and metadata-only merges without a native history
-entry are explicit errors. Plain projects retain their existing
-operation paths. Extra archive members are preserved on save without reviving
+and time-signature unknown fields have operation-specific transitions and tested
+merge mappings. Controller event fields support selected-point edits and native
+history; controller-extension transfer and metadata-only merges without a native
+history entry are explicit errors. Render, MIDI export and offline mix operations
+on tracked extension projects use an independent native project snapshot and
+return the original session ID. Plain projects retain their existing operation
+paths. Extra archive members are preserved on save without reviving
 deleted native-managed audio; the output ZIP is checked against extraction limits.
 
 Summaries contain `session_id`, native `title`, native `track_count`, host `dirty`,

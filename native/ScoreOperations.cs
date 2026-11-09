@@ -978,18 +978,21 @@ internal sealed partial class EngineHost
         return points;
     }
 
-    private static object ScoreControllerEdit(EngineSession session, string operation, JsonElement options)
+    private object ScoreControllerEdit(EngineSession session, string operation, JsonElement options)
     {
         WIVSMMidiPart part = ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options);
         VSMControllerType type = ScoreControllerType(options);
+        ArchiveControllerPreflight(session, part, type);
         if (operation == "controller.remove")
         {
             int index = ScoreInt(options, "controller_index", 0, ScoreCount(part.GetNumController(type)) - 1);
             WIVSMMidiController controller = part.GetController(type, (ulong)index)
                 ?? throw new InvalidOperationException("Native controller lookup failed.");
+            int oldTick = checked((int)controller.RelPosTick.Value);
             return ScoreMutate(session, operation, () =>
             {
                 ScoreRequire(part.RemoveController(controller), operation, session.Sequence);
+                ArchiveControllerTransition(session, part, type, [], false, oldTick);
                 return new { removed = true, controller_index = index };
             });
         }
@@ -1010,8 +1013,24 @@ internal sealed partial class EngineHost
                 ?? throw new InvalidOperationException("Native controller lookup failed.");
             existing.Add(controller.RelPosTick.Value, controller);
         }
+        WIVSMMidiController? moving = null;
+        int? moveTick = null;
+        if (options.TryGetProperty("controller_index", out _))
+        {
+            if (replace || points.Count != 1) throw new ArgumentException("A selected controller move requires one point and replace=false.");
+            int index = ScoreInt(options, "controller_index", 0, ScoreCount(part.GetNumController(type)) - 1);
+            moving = part.GetController(type, (ulong)index) ?? throw new InvalidOperationException("Native controller lookup failed.");
+            moveTick = checked((int)moving.RelPosTick.Value);
+            if (points[0].Tick != moveTick && existing.ContainsKey(points[0].Tick))
+                throw new ArgumentException("Controller destination is ambiguous.");
+        }
         return ScoreMutate(session, operation, () =>
         {
+            if (moving is not null && moveTick != points[0].Tick)
+            {
+                ScoreRequire(part.RemoveController(moving), operation, session.Sequence);
+                existing.Remove(moveTick!.Value);
+            }
             if (replace)
             {
                 foreach (WIVSMMidiController controller in existing.Values)
@@ -1028,6 +1047,7 @@ internal sealed partial class EngineHost
                 else if (part.InsertController(new VSMRelTick(tick), type, value) is null)
                     throw new InvalidOperationException("Native controller.set failed: " + part.LastError);
             }
+            ArchiveControllerTransition(session, part, type, points, replace, null, moveTick);
             return ScoreControllerList(part, type);
         });
     }

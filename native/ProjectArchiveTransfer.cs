@@ -187,20 +187,26 @@ internal sealed partial class EngineHost
         }
         void Part(WIVSMPart left, WIVSMPart right, ArchiveEntity parent, long offset)
         {
-            if (left is not WIVSMMidiPart a || right is not WIVSMMidiPart b ||
-                a.IsAi != b.IsAi || left.Name != right.Name || left.DurationTick.Value != right.DurationTick.Value ||
+            if (left.Type != right.Type || left.Name != right.Name ||
+                left.DurationTick.Value != right.DurationTick.Value ||
                 checked(left.AbsPosTick.Value + offset) != right.AbsPosTick.Value)
-                throw new InvalidDataException("project_preservation: transferred MIDI part identity changed.");
-            WIVSMMidiTrack sourceParent = a.Parent ?? throw new InvalidDataException("project_preservation: source part has no parent.");
-            if (!source.Sequence.Tracks.Any(item => ArchiveKey(item) == ArchiveKey(sourceParent)) ||
-                !sourceParent.Parts.Any(item => ArchiveKey(item) == ArchiveKey(left)))
-                throw new InvalidDataException("project_preservation: source part is not in the snapshot.");
-            Add(left, right, ArchiveKey(sourceParent), parent);
-            Notes(a, b);
+                throw new InvalidDataException("project_preservation: transferred part identity changed.");
+            WIVSMTrack[] owners = source.Sequence.Tracks.Where(track =>
+                track.Parts.Any(item => ArchiveKey(item) == ArchiveKey(left))).ToArray();
+            if (owners.Length != 1)
+                throw new InvalidDataException("project_preservation: source part parent is missing or ambiguous.");
+            Add(left, right, ArchiveKey(owners[0]), parent);
+            if (left is WIVSMMidiPart a && right is WIVSMMidiPart b)
+            {
+                if (a.IsAi != b.IsAi) throw new InvalidDataException("project_preservation: transferred voice type changed.");
+                Notes(a, b);
+            }
+            else if (left.Type != VSMPartType.Audio || left is WIVSMMidiPart || right is WIVSMMidiPart)
+                throw new InvalidDataException("project_preservation: unsupported transferred part kind.");
         }
         if (original is WIVSMTrack leftTrack && duplicate is WIVSMTrack rightTrack)
         {
-            if (noteOffset != 0 || leftTrack.Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi) ||
+            if (noteOffset != 0 || leftTrack.Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi or VSMTrackType.Audio) ||
                 leftTrack.Type != rightTrack.Type || leftTrack.Name != rightTrack.Name || leftTrack.NumParts != rightTrack.NumParts)
                 throw new InvalidDataException("project_preservation: transferred MIDI track identity changed.");
             if (!source.Sequence.Tracks.Any(item => ArchiveKey(item) == ArchiveKey(leftTrack)))
@@ -220,11 +226,13 @@ internal sealed partial class EngineHost
                 Part(item, copy ?? throw new InvalidDataException("project_preservation: target part is missing."), ArchiveKey(rightTrack), partOffset);
             }
         }
-        else if (original is WIVSMMidiPart leftPart && duplicate is WIVSMMidiPart rightPart)
+        else if (original is WIVSMPart leftPart && duplicate is WIVSMPart rightPart)
         {
             if (noteOffset != 0) throw new InvalidDataException("project_preservation: invalid part transfer offset.");
-            WIVSMMidiTrack parent = rightPart.Parent ?? throw new InvalidDataException("project_preservation: transferred part has no parent.");
-            Part(leftPart, rightPart, ArchiveKey(parent), partOffset);
+            WIVSMTrack[] owners = target.Sequence.Tracks.Where(track =>
+                track.Parts.Any(item => ArchiveKey(item) == ArchiveKey(rightPart))).ToArray();
+            if (owners.Length != 1) throw new InvalidDataException("project_preservation: transferred part parent is missing or ambiguous.");
+            Part(leftPart, rightPart, ArchiveKey(owners[0]), partOffset);
         }
         else if (original is WIVSMNote leftNote && duplicate is WIVSMNote rightNote)
         {

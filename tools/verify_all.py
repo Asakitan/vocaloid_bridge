@@ -15,6 +15,9 @@ import check_clipboard_ambiguity
 import check_clipboard_extended_cut
 import check_archive_merge
 import check_tempo_merge
+import check_archive_output
+import check_timesig_merge
+import check_archive_audio_transfer
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining

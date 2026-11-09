@@ -240,7 +240,7 @@ Controller operations require `track_index`, `part_index`. Except
 | --- | --- | --- |
 | `controller.types` | None | `types`: native names and min/max/default values |
 | `controller.list` | None | `type`, `points`, min/max/default values |
-| `controller.set` | `points`: array of `{tick, value}`; optional `replace` (default false) | Updated controller list |
+| `controller.set` | `points`: array of `{tick, value}`; optional `replace` (default false); optional `controller_index` to move one selected point, requiring one point and `replace=false` | Updated controller list |
 | `controller.remove` | `controller_index` | `removed`, old index |
 | `pitch.list` | `note_index` | `points`: `{tick, value}` |
 | `pitch.set` | `note_index`, `points`: array of `{tick, value}`; optional `replace` | Updated pitch list |

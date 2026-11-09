@@ -82,13 +82,11 @@ internal sealed partial class EngineHost
         bool trackedMutation = false;
         try
         {
-            // Time signatures use bar identities, not tempo tick identities.
-            // Until their merge mapping is verified, protect either map before
-            // any mutation rather than assigning fields by array position.
-            if (includeTempo &&
+            if (includeTracks && ArchiveHasControllerExtensions(source))
+                throw new InvalidOperationException("project_preservation: controller extension project merge has no verified identity mapping.");
+            bool timeSigExtensions = includeTempo &&
                 ((archiveStates.TryGetValue(source.Id, out ArchiveState? sourceTimeSigState) && sourceTimeSigState.TimeSig is not null) ||
-                 (archiveStates.TryGetValue(target.Id, out ArchiveState? targetTimeSigState) && targetTimeSigState.TimeSig is not null)))
-                throw new InvalidOperationException("project_preservation: time signature extension merge has no verified bar identity mapping.");
+                 (archiveStates.TryGetValue(target.Id, out ArchiveState? targetTimeSigState) && targetTimeSigState.TimeSig is not null));
             bool tempoExtensions = includeTempo &&
                 ((archiveStates.TryGetValue(source.Id, out ArchiveState? sourceTempoState) && sourceTempoState.Tempo is not null) ||
                  (archiveStates.TryGetValue(target.Id, out ArchiveState? targetTempoState) && targetTempoState.Tempo is not null));
@@ -99,10 +97,10 @@ internal sealed partial class EngineHost
             bool globalChange = !archiveStates.TryGetValue(target.Id, out ArchiveState? targetArchive)
                 ? globalFields.Root.Count != 0 || globalFields.Master.Count != 0
                 : !JsonNode.DeepEquals(globalFields.Root, targetArchive.Root) || !JsonNode.DeepEquals(globalFields.Master, targetArchive.Master);
-            if ((includeTracks && HasArchiveEntityExtensions(source)) || HasArchiveEntityExtensions(target) || globalChange || resources.Count != 0 || tempoExtensions)
+            if ((includeTracks && HasArchiveEntityExtensions(source)) || HasArchiveEntityExtensions(target) || globalChange || resources.Count != 0 || tempoExtensions || timeSigExtensions)
             {
-                if (includeTracks && source.Sequence.Tracks.Any(track => track.Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi)))
-                    throw new InvalidOperationException("project_preservation: extended project merge requires MIDI or AI tracks.");
+                if (includeTracks && source.Sequence.Tracks.Any(track => track.Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi or VSMTrackType.Audio)))
+                    throw new InvalidOperationException("project_preservation: unsupported extended project track type.");
                 // The native writer cannot safely rebind indistinguishable
                 // tracks with different extension payloads. Verify the merged
                 // snapshot on an independent target before changing this one.
@@ -218,6 +216,8 @@ internal sealed partial class EngineHost
     private object MergePreservedProject(EngineSession target, EngineSession source, long offsetTick,
         bool includeTracks, bool includeTempo, bool replaceTempo, (JsonObject Root, JsonObject Master) globalFields, bool globalChange, List<(string Name, string Source)> resources)
     {
+        Dictionary<int, ProjectArchiveArrays.TimeSig>? mergedTimeSig = includeTempo
+            ? PrepareTimeSigMerge(target, source, offsetTick, replaceTempo) : null;
         bool upgraded = EnsureArchiveEntityTracking(target);
         try
         {
@@ -275,6 +275,13 @@ internal sealed partial class EngineHost
                     if (!target.Sequence.IsStaged)
                         throw new InvalidOperationException("project_preservation: tempo extension merge requires a native history entry.");
                     archiveStates[target.Id].Tempo = mergedTempo;
+                }
+                if (mergedTimeSig is not null)
+                {
+                    ProjectArchiveArrays.ValidateTimeSig(mergedTimeSig, ArchiveNativeTimeSigs(target.Sequence));
+                    if (!target.Sequence.IsStaged)
+                        throw new InvalidOperationException("project_preservation: time signature extension merge requires a native history entry.");
+                    archiveStates[target.Id].TimeSig = mergedTimeSig;
                 }
                 ArchiveAddResources(target, resources);
                 if (globalChange)

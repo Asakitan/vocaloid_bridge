@@ -5,15 +5,16 @@
 | `native/Program.cs` | 原生宿主入口、安装库解析、私有 desktop 检查 | 已编译 |
 | `native/EngineSession.cs` | VSM 会话、工程生命周期、声库和片段渲染 | 独立命名空间、零结果缓存；保存前 ZIP 数量、大小及路径检查有合成测试 |
 | `native/ProjectIntegrity.cs` | 原生打开与发布前的结构和声库身份检查 | 缺经典声库预检、丢失身份阻止覆盖、AI 正例通过；不代替经典声库 |
-| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 68 操作；新增会话冻结，原生历史同步扩展身份 |
+| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 68 操作；控制器选点移动和受测扩展历史通过 |
 | `native/AudioOperations.cs` | 原生离线音频、效果与整轨混缩 | 16 个音频操作含传输；冻结回放避免重复应用音量/声像 |
 | `native/TransportOperations.cs` | 原生设备枚举与私有会话播放、停止、定位、释放 | DirectSound 静音闭环通过；定位区分异步请求与观测 |
 | `native/TrackFreezeOperations.cs` | 会话自有冻结缓存、时基物化和作者态保存 | 多片段/非零起点/效果/自动化与正式 MCP 通过；不持久化冻结标志 |
-| `native/ProjectArchivePreservation.cs`、`native/ProjectArchiveArrays.cs` | 未知字段、实体身份、速度/拍号事件和额外归档资源保留 | 受测 tempo 与拍号扩展编辑、资源历史及原有实体路径通过；拍号合并及其他数组有限制 |
+| `native/ProjectArchivePreservation.cs`、`native/ProjectArchiveArrays.cs` | 未知字段、实体身份、速度/拍号/控制器事件和额外归档资源保留 | 受测事件扩展编辑及历史通过；控制器扩展复制和其他数组有限制 |
 | `native/MidiRecordingOperations.cs`、`native/MidiRecordingGuards.cs` | 设备枚举、MIDI 事件队列、事务录制及会话保护 | 六操作、静音同步、回调保护及自有虚拟输入通过；物理设备和驱动错误路径未验 |
 | `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 30 个操作有成功调用；样式及 HMM 通过，经典 Singing Skill 重开受身份问题影响 |
-| `native/ProjectInterchange.cs`、`native/ProjectArchiveTempoMerge.cs` | 原生格式交换、复制、恢复与合并 | 真实 PPSF3/音频克隆、AI 实体、root/master、不透明资源及受测 tempo 扩展合并通过；拍号扩展合并、纯元数据和原生音频归属受限 |
-| `native/ProjectClipboard.cs`、`native/ProjectArchiveTransfer.cs` | 私有原生快照剪贴板及扩展身份迁移 | 受测 AI 扩展剪切/粘贴、工程级不透明资源迁移与候选歧义预检通过；原生音频归属受限 |
+| `native/ProjectInterchange.cs`、`native/ProjectArchiveTempoMerge.cs`、`native/ProjectArchiveTimeSigMerge.cs` | 原生格式交换、复制、恢复与合并 | 真实 PPSF3/音频克隆、AI/音频实体、root/master、不透明资源和受测 tempo/拍号扩展合并通过；纯元数据和其他音频组合受限 |
+| `native/ProjectClipboard.cs`、`native/ProjectArchiveTransfer.cs` | 私有原生快照剪贴板及扩展身份迁移 | 受测 AI/音频扩展剪切/粘贴、原始及处理 WAV、工程级不透明资源迁移与候选预检通过；控制器扩展转移受限 |
+| `native/ProjectArchiveOutput.cs` | 带扩展工程的独立原生快照输出 | 人声渲染、MIDI 导出、离线混缩/分轨及源会话历史保护定向通过 |
 | `native/RpcServer.cs` | 单线程 JSON 行协议、原生对象发现与精确签名调用 | 已编译 |
 | `vocaloid_bridge/native_client.py` | 私有 desktop、Job Object、管道客户端与 DLL 快照 | 独立构建副本启动、关闭清理通过 |
 | `vocaloid_bridge/server.py` | 37 个 MCP 工具、资源、写歌提示 | 新 MIDI 工具在独立 stdio 连接实测；历史工具覆盖见历史回执 |
@@ -36,7 +37,8 @@
 | `tools/check_midi_recording.py`、`tools/check_midi_recording_case.py` | MIDI 显式事件流、静音同步及操作目录回归 | 已验无硬件事件流及静音输出；虚拟输入另有用例 |
 | `tools/check_midi_owned_input.py` | 已安装 SDK 创建临时 MIDI 输入并通过 WinMM 回调录制 | 虚拟输入、保存重开及新进程端口消失通过；物理设备未验 |
 | `tools/check_midi_callback.ps1`、`tools/check_clipboard_extension_guard.py`、`tools/check_clipboard_resources.py` | 输入回调错误和剪贴板工程资源回归 | 回调逻辑与 AI 资源迁移定向通过；硬件输入仍待验证，旧入口调用当前资源用例 |
-| `tools/check_archive_transfer.py`、`tools/check_clipboard_extended_cut.py`、`tools/check_archive_merge.py`、`tools/check_tempo_merge.py` | AI 扩展剪切、跨工程粘贴及合并回归 | 受测实体、偏移、历史、工程级不透明资源及 tempo 扩展合并通过 |
+| `tools/check_archive_transfer.py`、`tools/check_clipboard_extended_cut.py`、`tools/check_archive_merge.py`、`tools/check_tempo_merge.py`、`tools/check_timesig_merge.py` | 扩展剪切、跨工程粘贴及合并回归 | 受测实体、偏移、历史、工程级不透明资源及 tempo/拍号扩展合并通过 |
+| `tools/check_archive_audio_transfer.py`、`tools/check_archive_output.py` | 扩展音频轨资源迁移及原生快照输出回归 | 受测同名来源、原始/处理 WAV、历史及非零音频、MIDI 导出通过 |
 | `tools/check_clipboard_ambiguity.py`、`tools/check_archive_export_limits.ps1`、`tools/check_tempo_array_helper.ps1` | 剪贴板候选、ZIP 导出限制和 tempo 数组原语回归 | 合成候选、缩小阈值 ZIP 和原语通过；完整 MCP 证据见 STATUS |
 | `tools/probe_appcontainer_pipe.cs`、`tools/probe_appcontainer_child.go` | 随机合成管道的后台进程隔离探针 | 受限令牌及单一默认权限管道拒绝访问已观察；非插件隔离证明 |
 | `tools/probe_appcontainer_server.cs`、`tools/probe_appcontainer_server_child.go`、`tools/probe_appcontainer_peer.cs`、`tools/probe_appcontainer_peer_child.go` | 随机合成管道受限服务端与同/异 profile 对端探针 | LOCAL 双向收发和负对照已观察；未证明真实插件隔离 |
@@ -80,3 +82,4 @@
 | 2026-11-10 | 升级 0.6.0：root/master 受测扩展合并及历史、独立虚拟 MIDI 输入和随机 LOCAL 管道对照通过；物理设备、额外资源和实际插件隔离仍待验证。 |
 | 2026-11-10 | 升级 0.7.0：受测 tempo 扩展、不透明资源合并、剪贴板歧义预检和 ZIP 限制通过；其他数组、剪贴板资源与真实插件隔离继续保留边界。 |
 | 2026-11-10 | 升级 0.8.0：受测剪贴板资源迁移、tempo 扩展合并、拍号事件扩展编辑及 ANSI 合成边界探针；拍号扩展合并和真实插件隔离继续保留边界。 |
+| 2026-11-10 | 升级 0.9.0：受测拍号扩展合并、控制器事件编辑、音频资源迁移及扩展工程原生输出；控制器扩展迁移和实际插件隔离继续保留边界。 |

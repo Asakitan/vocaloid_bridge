@@ -105,8 +105,17 @@ internal sealed class RpcServer(EngineHost host, string desktop)
         EngineSession session = host.GetSession(RequiredString(parameters, "session_id"));
         host.CheckMidiRecordingAccess(session, method, parameters);
         host.CheckTransportAccess(session, method, parameters);
-        host.CheckArchiveRequest(session, method, parameters);
+        bool snapshotOutput = host.UsesArchiveOutputSnapshot(session, method, parameters);
+        if (!snapshotOutput) host.CheckArchiveRequest(session, method, parameters);
         host.CheckFrozenRequest(session, method, parameters);
+        if (snapshotOutput)
+            return method switch
+            {
+                "render_part" => host.ArchiveRenderOutput(session, Unsigned(parameters, "track_index", 0), Unsigned(parameters, "part_index", 0), RequiredString(parameters, "output_name"), Boolean(parameters, "overwrite", false)),
+                "export_midi" => host.ArchiveMidiOutput(session, RequiredString(parameters, "output_name"), OptionalString(parameters, "encoding") ?? "Utf8", Boolean(parameters, "overwrite", false)),
+                "audio_op" => host.ArchiveAudioOutput(session, RequiredString(parameters, "operation"), Required(parameters, "options")),
+                _ => throw new MissingMethodException("Unknown snapshot output operation: " + method)
+            };
         return method switch
         {
             "session" => session.Summary(),

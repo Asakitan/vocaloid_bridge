@@ -5,6 +5,48 @@ using System.Text.Json.Nodes;
 // clone and merge boundaries and invokes this helper for tracked tempo metadata.
 internal static class ProjectArchiveArrays
 {
+    internal sealed record ControllerPoint(int Value, JsonObject Extra);
+
+    internal static Dictionary<int, ControllerPoint> ReadController(JsonArray events, bool captureExtra)
+    {
+        Dictionary<int, ControllerPoint> result = [];
+        foreach (JsonNode? node in events)
+        {
+            JsonObject item = node as JsonObject ?? throw Error("controller event is not an object");
+            int pos = item["pos"]?.GetValue<int>() ?? throw Error("controller position is absent");
+            int value = item["value"]?.GetValue<int>() ?? throw Error("controller value is absent");
+            JsonObject extra = new();
+            foreach ((string key, JsonNode? child) in item)
+                if (key is not ("pos" or "value"))
+                {
+                    if (!captureExtra) throw Error("native controller output has unexpected fields");
+                    extra.Add(key, child?.DeepClone());
+                }
+            if (!result.TryAdd(pos, new ControllerPoint(value, extra))) throw Error("duplicate controller position");
+        }
+        return result;
+    }
+
+    internal static void ValidateController(IReadOnlyDictionary<int, ControllerPoint> state, JsonArray native)
+    {
+        Dictionary<int, ControllerPoint> observed = ReadController(native, false);
+        if (state.Count != observed.Count || state.Any(p => !observed.TryGetValue(p.Key, out ControllerPoint? item) || item.Value != p.Value.Value))
+            throw Error("native controller snapshot diverged from retained state");
+    }
+
+    internal static void OverlayController(JsonArray native, IReadOnlyDictionary<int, ControllerPoint> state)
+    {
+        ValidateController(state, native);
+        foreach (JsonNode? node in native)
+        {
+            JsonObject item = (JsonObject)node!;
+            foreach ((string key, JsonNode? value) in state[item["pos"]!.GetValue<int>()].Extra)
+            {
+                if (item.ContainsKey(key)) throw Error("controller extension conflicts with native output");
+                item.Add(key, value?.DeepClone());
+            }
+        }
+    }
     internal sealed record TimeSig(int Bar, int Numer, int Denom, JsonObject Extra);
 
     internal static Dictionary<int, TimeSig> ReadTimeSig(JsonArray array, bool captureExtra)

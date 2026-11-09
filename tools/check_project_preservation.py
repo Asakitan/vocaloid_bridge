@@ -98,6 +98,14 @@ async def controller_array_roundtrip(check):
         v.require(await check.call("project_status", session_id=plain_target) == before,
                   "Guarded controller merge changed target")
         v.require(source.read_bytes() == original, "Guarded controller merge changed source")
+    initial_guard, _ = await check.save(sid, "controller-timeline-guard-before")
+    guard_history = await check.edit(sid, "history.status")
+    for operation in ("time.insert", "time.delete"):
+        await check.rejected("project_edit", "controller extension", session_id=sid, operation=operation,
+            options={"start_tick": 20000, "duration_tick": 480, "include_tempo": True})
+        current, _ = await check.save(sid, "controller-timeline-guard-after")
+        v.require(current == initial_guard and await check.edit(sid, "history.status") == guard_history and
+                  source.read_bytes() == original, "Controller timeline guard changed state or history")
     lane = {"track_index": 0, "part_index": 0, "type": "Dynamics"}
     marker = {"marker": "first", "nested": [True, None]}
 
@@ -908,6 +916,97 @@ async def timeline_extension_guard(check):
     reopened_seq, _ = await check.save(reopened, "timeline-extension-reopened")
     v.require(reopened_seq == seq, "Reopen changed guarded project")
     await check.close(reopened); await check.close(clone); await check.close(sid)
+
+@v.feature("preservation.timeline_entity_roundtrip", "preservation", "score_compose", "project_open", "project_edit", "project_save")
+async def timeline_entity_roundtrip(check):
+    """AI entity extensions follow moving and wholly deleted parts through history."""
+    seed = await check.call("score_compose", output_name=check.output("timeline-entity-seed"), title="Timeline entities", bpm=120,
+        notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+    await check.edit(sid, "part.move", track_index=0, part_index=0, start_tick=7680)
+    seq, path = await check.save(sid, "timeline-entity-native")
+    await check.close(sid)
+    _, members = v.read_vpr(path)
+    seq["tracks"][0][KEY] = "track"
+    seq["tracks"][0]["parts"][0][KEY] = "part"
+    seq["tracks"][0]["parts"][0]["notes"][0][KEY] = "note"
+    members["Project/sequence.json"] = json.dumps(seq, ensure_ascii=False).encode("utf-8")
+    source = v.ROOT / "output" / check.output("timeline-entity-input")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    original = source.read_bytes()
+    sid = (await check.call("project_open", path=str(source)))["session_id"]
+    await check.edit(sid, "track.update", track_index=0, name="prior history")
+    before, _ = await check.save(sid, "timeline-entity-before")
+    history = await check.edit(sid, "history.status")
+    await check.rejected("project_edit", "crossing|phoneme|split", session_id=sid, operation="time.insert",
+        options={"start_tick": 8000, "duration_tick": 500, "include_tempo": True})
+    rejected, _ = await check.save(sid, "timeline-entity-rejected")
+    v.require(rejected == before and await check.edit(sid, "history.status") == history, "Crossing rejection changed state")
+    await check.edit(sid, "time.insert", start_tick=1000, duration_tick=500, include_tempo=True)
+    moved, _ = await check.save(sid, "timeline-entity-moved")
+    part = moved["tracks"][0]["parts"][0]
+    v.require(part["pos"] == 8180 and part[KEY] == "part" and part["notes"][0][KEY] == "note", "Moved entity metadata mismatch")
+    await check.edit(sid, "undo")
+    restored, _ = await check.save(sid, "timeline-entity-move-undo")
+    v.require(restored == before, "Move undo mismatch")
+    await check.edit(sid, "undo")
+    await check.edit(sid, "redo")
+    older, _ = await check.save(sid, "timeline-entity-older-redo")
+    v.require(older == before, "Older history mismatch")
+    await check.edit(sid, "redo")
+    redone, _ = await check.save(sid, "timeline-entity-move-redo")
+    v.require(redone == moved, "Move redo mismatch")
+    await check.edit(sid, "time.delete", start_tick=7000, duration_tick=10000, include_tempo=False)
+    deleted, _ = await check.save(sid, "timeline-entity-deleted")
+    v.require(not deleted["tracks"][0].get("parts", []) and deleted["tracks"][0][KEY] == "track", "Deletion retained a part")
+    await check.edit(sid, "undo")
+    restored, _ = await check.save(sid, "timeline-entity-delete-undo")
+    v.require(restored == moved, "Delete undo mismatch")
+    await check.edit(sid, "redo")
+    redone, out = await check.save(sid, "timeline-entity-delete-redo")
+    v.require(redone == deleted, "Delete redo mismatch")
+    clone = (await check.call("project_clone", session_id=sid))["session_id"]
+    cloned, _ = await check.save(clone, "timeline-entity-clone")
+    reopened = (await check.call("project_open", path=str(out)))["session_id"]
+    reopened_seq, _ = await check.save(reopened, "timeline-entity-reopen")
+    v.require(cloned == deleted and reopened_seq == deleted and source.read_bytes() == original, "Clone, reopen or source mismatch")
+    await check.close(reopened); await check.close(clone); await check.close(sid)
+
+@v.feature("preservation.timeline_audio_guard", "preservation", "score_compose", "project_audio", "project_open", "project_edit", "project_save")
+async def timeline_audio_guard(check):
+    """Existing audio assets remain untouched when an extended timeline edit is rejected."""
+    seed = await check.call("score_compose", output_name=check.output("timeline-audio-seed"), title="Timeline audio guard", bpm=120,
+        notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+    audio = await check.audio_input()
+    audio_original = audio.read_bytes()
+    await check.audio(sid, "import_audio", path=str(audio), position_tick=0)
+    seq, path = await check.save(sid, "timeline-audio-native")
+    await check.close(sid)
+    _, members = v.read_vpr(path)
+    audio_members = {name: data for name, data in members.items() if name.startswith("Project/Audio/")}
+    v.require(bool(audio_members), "Audio fixture has no project audio resources")
+    seq["tracks"][0][KEY] = "entity extension"
+    members["Project/sequence.json"] = json.dumps(seq, ensure_ascii=False).encode("utf-8")
+    source = v.ROOT / "output" / check.output("timeline-audio-input")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    original = source.read_bytes()
+    sid = (await check.call("project_open", path=str(source)))["session_id"]
+    before, _ = await check.save(sid, "timeline-audio-before")
+    history = await check.edit(sid, "history.status")
+    for operation in ("time.insert", "time.delete"):
+        for include_tempo in (False, True):
+            await check.rejected("project_edit", "exclude audio", session_id=sid, operation=operation,
+                options={"start_tick": 20000, "duration_tick": 480, "include_tempo": include_tempo})
+            after, saved = await check.save(sid, "timeline-audio-after")
+            _, saved_members = v.read_vpr(saved)
+            saved_audio = {name: data for name, data in saved_members.items() if name.startswith("Project/Audio/")}
+            v.require(after == before and saved_audio == audio_members and await check.edit(sid, "history.status") == history,
+                      "Audio timeline guard changed state, audio resources, or history")
+            v.require(source.read_bytes() == original and audio.read_bytes() == audio_original, "Audio guard changed source")
+    await check.close(sid)
 
 @v.feature("preservation.timeline_boundary_probe", "preservation", "score_compose", "project_edit", "project_save")
 async def timeline_boundary_probe(check):

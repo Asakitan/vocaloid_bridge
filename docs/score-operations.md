@@ -213,7 +213,12 @@ The installed helper's crossing-part branch calls `App.GetG2PAManager`, an
 editor-owned phoneme service not initialized by the isolated VSM host. Call
 `part.split` at each boundary first, re-list indices, then retry the time edit.
 No editor singleton is synthesized and no fallback is run. Native audio boundary
-handling does not use that MIDI phoneme-reset branch.
+handling does not use that MIDI phoneme-reset branch. For projects with tracked
+archive extensions, timeline edits are restricted to MIDI/AI tracks without
+tempo, meter, controller-event or direct-pitch-item extensions. The bridge
+preflights an independent clone and validates entity identities before and after
+commit. Focused roundtrip and retained audio/controller/tempo guards passed in
+`artifacts/feature-acceptance-1de6c1d0abc4/summary.json`.
 
 ## Selection
 
@@ -270,10 +275,19 @@ The native-boundary probe is recorded in `artifacts/pitch-clear-native-08cb8e42a
 the actual MCP regression in `artifacts/feature-acceptance-ecd0ad6f2b5c/summary.json`
 passes exact and single-tick boundaries, empty and invalid intervals, native
 history, full clear and saved-project reopen.
-After commit, pitch writes reacquire the note and require every requested anchor
-to exist with the correct native value. Readback failures are reported rather
+For `pitch.set`, requested anchors are checked in the staged transaction and
+again after commit, reacquiring the note for the latter check. A private native
+probe (`artifacts/pitch-set-native-5c4bdb0f4c9b.json`) observed staged readback
+and rollback after an injected failure; a spontaneous mismatch was not observed.
+These checks require every requested anchor to have the correct native value. Readback failures are reported rather
 than accepting an empty or shortened curve. Uncommitted failures use the existing
 staged rollback path.
+
+For tracked `directPitches` item extensions, the selected tick retains its
+unknown fields on upsert; replacement creates new point metadata and clear
+removes the fields with the corresponding points. The full point set is
+validated against native output. Duplicate, split/join, clipboard, source-track
+merge and media capture remain guarded while these items are tracked.
 
 ## Part Performance
 

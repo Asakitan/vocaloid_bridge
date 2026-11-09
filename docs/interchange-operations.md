@@ -234,6 +234,12 @@ within the same transaction to create an undo entry without a final tempo
 change. The focused AI/empty-project case in
 `artifacts/feature-acceptance-fc6a72130b1c/summary.json` checks metadata,
 resources, history, conflicts, no-op merging and the maximum native tempo.
+An empty track-inclusive source with equal global fields and resources and no
+tempo import is now recognized as a no-op before the target transaction; this
+preserves both dirty state and native history. The old behavior changed the
+target dirty flag in `artifacts/feature-acceptance-101ad64d1010/summary.json`;
+the updated clean and already-dirty target cases passed in
+`artifacts/feature-acceptance-1de6c1d0abc4/summary.json`.
 Undo, redo, rollback, and redo-clearing branches restore the corresponding
 mapping. Private copies remain until session cleanup so redo can restore
 them. The source project and existing destination files are not modified.

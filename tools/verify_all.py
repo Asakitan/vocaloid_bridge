@@ -26,6 +26,7 @@ import check_archive_media_extensions
 import check_archive_transport
 import check_pitch_clear_boundaries
 import check_metadata_history
+import check_note_array_extensions
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining
@@ -36,7 +37,8 @@ release_interchange = {"remaining.clone_audio", "remaining.vsqx3", "remaining.vs
                        "remaining.integrity_guard", "remaining.integrity_ai", "remaining.ppsf3_selected_voice"}
 experimental = {"preservation.audio_mutation", "preservation.controller_split_native_probe",
                 "preservation.controller_split_generated_probe", "preservation.metadata_native_marker_probe",
-                "preservation.metadata_tempo_marker_probe"}
+                "preservation.metadata_tempo_marker_probe", "preservation.note_pitch_array_probe",
+                "preservation.note_pitch_transitions"}
 v.CASES[:] = [case for case in v.CASES if case.identifier in baseline_ids | release_interchange
               and case.identifier not in experimental]
 

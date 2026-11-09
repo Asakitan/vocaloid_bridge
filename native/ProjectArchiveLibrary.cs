@@ -12,7 +12,7 @@ internal sealed partial class EngineHost
     {
         if (operation != "media_import" || id is null) return false;
         EngineSession session = LibrarySession(id);
-        if (!HasArchiveEntityExtensions(session) || ArchiveHasControllerExtensions(session)) return false;
+        if (!HasArchiveEntityExtensions(session) || ArchiveHasControllerExtensions(session) || ArchiveHasNoteArrayState(session)) return false;
         Clip clip = LibraryClip(LibraryText(options, "clip_id"));
         LibraryRequire(clip.ReadPart(), "read media before preservation guard");
         return clip.PartType is VMMPartType.Midi or VMMPartType.MidiAi;
@@ -40,8 +40,10 @@ internal sealed partial class EngineHost
             WIVSMMidiPart midi = part as WIVSMMidiPart ?? new WIVSMMidiPart(part);
             foreach (WIVSMNote note in midi.Notes)
             {
-                if (!state.Live.TryGetValue(ArchiveKey(note), out _))
+                if (!state.Live.TryGetValue(ArchiveKey(note), out ArchiveEntry? noteEntry))
                     throw new InvalidDataException("project_preservation: selected media note identity is not tracked.");
+                if (noteEntry.DirectPitch is not null)
+                    throw new InvalidOperationException("project_preservation: selected media note has direct pitch extension metadata.");
             }
         }
         return true;

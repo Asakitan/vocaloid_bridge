@@ -156,8 +156,10 @@ On an extension-tracked project, `style_capture`, `style_update`, `style_delete`
 `media_update` and `media_delete` remain available because they read the source
 or update only bridge-owned library files. For MIDI parts, capture can embed
 unknown part and note fields in private, versioned bridge metadata, bound to the
-clip ID and unique native note signatures. Controller-event extensions remain
-guarded. Import validates the metadata and stages the corresponding target
+clip ID and unique native note signatures. Controller-event and selected-note
+direct-pitch-item extensions remain guarded for media capture; a target with
+tracked direct-pitch-item extensions is also guarded for media import. Import
+validates the metadata and stages the corresponding target
 identities in one native history transaction. Before changing the target, the
 bridge repeats the import on an isolated native clone when the clip carries
 archive metadata or the target tracks entity extensions, and validates its saved

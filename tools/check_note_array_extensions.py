@@ -73,7 +73,7 @@ async def note_pitch_transitions(check):
     await check.edit(sid, "note.join", **scope, note_indices=[0, 1])
     await snapshot(sid, "join")
     await check.close(sid)
-    # Exercise the current archive guard with an independently copied fixture.
+    # The extended point belongs to an independently copied fixture.
     _, members = v.read_vpr(source)
     sequence["tracks"][0]["parts"][0]["notes"][0]["directPitches"][0]["x_probe"] = {"marker": [1, True]}
     members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
@@ -81,9 +81,187 @@ async def note_pitch_transitions(check):
     with zipfile.ZipFile(fixture, "x", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, payload in members.items(): archive.writestr(name, payload)
     original = fixture.read_bytes()
-    await check.rejected("project_open", "unsupported nested unknown field", path=str(fixture))
-    v.require(fixture.read_bytes() == original, "Rejected fixture was modified")
-    check.evidence("unknown_guard", {"path": str(fixture), "unchanged": True})
+    extended = (await check.call("project_open", path=str(fixture)))['session_id']
+    try:
+        retained, _ = await check.save(extended, "pitch-unknown-retained")
+        v.require(retained["tracks"][0]["parts"][0]["notes"][0]["directPitches"][0]["x_probe"] == {"marker": [1, True]},
+                  "Extended pitch metadata was not retained")
+    finally:
+        await check.close(extended)
+    v.require(fixture.read_bytes() == original, "Source fixture was modified")
+    check.evidence("unknown_retained", {"path": str(fixture), "unchanged": True})
+
+
+@v.feature("preservation.note_pitch_extension_roundtrip", "preservation", "score_compose", "project_edit", "project_save", "project_open", "project_clone")
+async def note_pitch_extension_roundtrip(check):
+    """Expected-success regression against the previous guarded host."""
+    seed = await check.call("score_compose", output_name=check.output("pitch-ext-seed"), title="Pitch extension", bpm=120,
+                            notes=[{"start": 0, "duration": 2, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+    target = {"track_index": 0, "part_index": 0, "note_index": 0}
+    await check.edit(sid, "pitch.set", **target, replace=True,
+                     points=[{"tick": 100, "value": 60}, {"tick": 300, "value": 62}])
+    sequence, source = await check.save(sid, "pitch-ext-source")
+    await check.close(sid)
+    _, members = v.read_vpr(source)
+    points = sequence["tracks"][0]["parts"][0]["notes"][0]["directPitches"]
+    v.require(len(points) == 2, "Fixture needs two native points", points)
+    points[0]["x_identity"] = {"marker": "first", "nested": [1, True]}
+    points[1]["x_identity"] = {"marker": "second"}
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    fixture = v.ROOT / "output" / check.output("pitch-ext-input")
+    with zipfile.ZipFile(fixture, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items():
+            archive.writestr(name, payload)
+    check.evidence("extended_fixture", str(fixture))
+    source_bytes = fixture.read_bytes()
+    sid = (await check.call("project_open", path=str(fixture)))["session_id"]
+
+    async def snapshot(label):
+        data, _ = await check.save(sid, "pitch-ext-" + label)
+        found = data["tracks"][0]["parts"][0]["notes"][0].get("directPitches", [])
+        check.evidence(label, found)
+        return found
+
+    initial = await snapshot("initial")
+    v.require(initial == points, "Open/save changed extended points", initial)
+    history = await check.edit(sid, "history.status")
+    await check.rejected("project_clipboard", "direct pitch extension", session_id=sid, operation="copy",
+                         options={"kind": "notes", "indices": [0], "track_index": 0, "part_index": 0})
+    await check.rejected("project_library", "direct pitch extension", session_id=sid, operation="media_capture",
+                         options={"track_index": 0, "part_index": 0, "name": "guarded pitch metadata"})
+    async with check.project() as destination:
+        before = await check.call("project_status", session_id=destination)
+        await check.rejected("project_merge", "direct pitch extension", session_id=destination,
+                             path=str(fixture), include_tracks=True, include_tempo=False)
+        v.require(await check.call("project_status", session_id=destination) == before,
+                  "Rejected direct-pitch merge changed target")
+    v.require(await check.edit(sid, "history.status") == history, "Rejected transfer changed source history")
+    for operation, options in (
+        ("note.duplicate", {**target, "start_tick": 1200}),
+        ("note.split", {**target, "split_tick": 480}),
+        ("note.join", {"track_index": 0, "part_index": 0, "note_indices": [0, 1]}),
+        ("time.insert", {"start_tick": 20000, "duration_tick": 480, "include_tempo": False}),
+    ):
+        await check.rejected("project_edit", "direct pitch extension", session_id=sid,
+                             operation=operation, options=options)
+    await check.rejected("project_edit", "distinct ticks", session_id=sid, operation="pitch.set",
+                         options={**target, "points": [{"tick": 100, "value": 60}, {"tick": 100, "value": 61}]})
+    v.require(await snapshot("rejected_operations") == initial, "Rejected operation changed extension state")
+    await check.edit(sid, "note.update", **target, start_tick=100, number=61)
+    v.require(await snapshot("note_update") == initial, "Note update changed direct pitch metadata")
+    await check.edit(sid, "undo")
+    v.require(await snapshot("undo_note_update") == initial, "Undo note update changed direct pitch metadata")
+    clone = (await check.call("project_clone", session_id=sid, title="Pitch metadata clone"))["session_id"]
+    clone_sequence, clone_path = await check.save(clone, "pitch-ext-clone")
+    v.require(clone_sequence["tracks"][0]["parts"][0]["notes"][0]["directPitches"] == initial,
+              "Clone changed direct pitch metadata")
+    await check.close(clone)
+    reopened = (await check.call("project_open", path=str(clone_path)))["session_id"]
+    reopened_sequence, _ = await check.save(reopened, "pitch-ext-reopened")
+    v.require(reopened_sequence["tracks"][0]["parts"][0]["notes"][0]["directPitches"] == initial,
+              "Reopen changed direct pitch metadata")
+    await check.close(reopened)
+    await check.edit(sid, "pitch.set", **target, replace=False,
+                     points=[{"tick": 100, "value": 61}, {"tick": 200, "value": 60}])
+    upsert = await snapshot("upsert")
+    by_tick = {item["pos"]: item for item in upsert}
+    v.require(set(by_tick) == {100, 200, 300} and
+              by_tick[100].get("x_identity") == points[0]["x_identity"] and
+              "x_identity" not in by_tick[200] and
+              by_tick[300].get("x_identity") == points[1]["x_identity"],
+              "Upsert changed point metadata identity", upsert)
+    await check.edit(sid, "undo")
+    v.require(await snapshot("undo_upsert") == initial, "Undo did not restore upsert metadata")
+    await check.edit(sid, "redo")
+    v.require(await snapshot("redo_upsert") == upsert, "Redo did not restore upsert metadata")
+    await check.edit(sid, "undo")
+    await check.edit(sid, "pitch.clear", **target, begin_tick=90, end_tick=110)
+    cleared = await snapshot("cleared")
+    v.require(len(cleared) == 1 and cleared[0].get("x_identity") == {"marker": "second"},
+              "Clear retained wrong point metadata", cleared)
+    await check.edit(sid, "undo")
+    v.require(await snapshot("undo") == initial, "Undo did not restore point metadata")
+    await check.edit(sid, "redo")
+    v.require(await snapshot("redo") == cleared, "Redo did not restore clear metadata")
+    await check.edit(sid, "undo")
+    await check.edit(sid, "pitch.set", **target, replace=True,
+                     points=[{"tick": 100, "value": 60}, {"tick": 300, "value": 62}])
+    replaced = await snapshot("replace")
+    v.require(all("x_identity" not in item for item in replaced), "Replace retained old metadata", replaced)
+    await check.edit(sid, "undo")
+    v.require(await snapshot("undo_replace") == initial, "Undo did not restore replace metadata")
+    await check.edit(sid, "redo")
+    v.require(await snapshot("redo_replace") == replaced, "Redo did not restore replacement")
+    await check.close(sid)
+    v.require(fixture.read_bytes() == source_bytes, "Source archive changed")
+
+
+@v.feature("preservation.note_pitch_extension_duplicate_tick", "preservation", "score_compose", "project_edit", "project_save", "project_open")
+async def note_pitch_extension_duplicate_tick(check):
+    seed = await check.call("score_compose", output_name=check.output("pitch-duplicate-seed"), title="Duplicate pitch", bpm=120,
+                            notes=[{"start": 0, "duration": 2, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+    target = {"track_index": 0, "part_index": 0, "note_index": 0}
+    await check.edit(sid, "pitch.set", **target, replace=True, points=[{"tick": 100, "value": 60}])
+    sequence, source = await check.save(sid, "pitch-duplicate-source")
+    await check.close(sid)
+    # The extension-free sibling remains a normal supported project.
+    plain = (await check.call("project_open", path=str(source)))["session_id"]
+    await check.close(plain)
+    _, members = v.read_vpr(source)
+    points = sequence["tracks"][0]["parts"][0]["notes"][0]["directPitches"]
+    points[0]["x_identity"] = "first"
+    duplicate = dict(points[0]); duplicate["x_identity"] = "second"
+    points.append(duplicate)
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    fixture = v.ROOT / "output" / check.output("pitch-duplicate-input")
+    with zipfile.ZipFile(fixture, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items():
+            archive.writestr(name, payload)
+    original = fixture.read_bytes()
+    await check.rejected("project_open", "duplicate position", path=str(fixture))
+    v.require(fixture.read_bytes() == original, "Duplicate fixture changed")
+
+
+@v.feature("preservation.note_pitch_mixed_controller_guard", "preservation", "score_compose", "project_edit", "project_save", "project_open")
+async def note_pitch_mixed_controller_guard(check):
+    seed = await check.call("score_compose", output_name=check.output("pitch-mixed-seed"), title="Mixed extensions", bpm=120,
+                            notes=[{"start": 0, "duration": 2, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+    note = {"track_index": 0, "part_index": 0, "note_index": 0}
+    lane = {"track_index": 0, "part_index": 0, "type": "Dynamics"}
+    await check.edit(sid, "pitch.set", **note, points=[{"tick": 100, "value": 60}])
+    await check.edit(sid, "controller.set", **lane, points=[{"tick": 60, "value": 30}], replace=True)
+    seq, path = await check.save(sid, "pitch-mixed-native")
+    await check.close(sid)
+    _, members = v.read_vpr(path)
+    part = seq["tracks"][0]["parts"][0]
+    part["notes"][0]["directPitches"][0]["x_pitch"] = "note-event"
+    controller = next(item for item in part["controllers"] if item["name"].lower() == "dynamics")
+    controller["events"][0]["x_controller"] = "controller-event"
+    members["Project/sequence.json"] = json.dumps(seq, ensure_ascii=False).encode("utf-8")
+    fixture = v.ROOT / "output" / check.output("pitch-mixed-input")
+    with zipfile.ZipFile(fixture, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, data in members.items(): archive.writestr(name, data)
+    original = fixture.read_bytes()
+    sid = (await check.call("project_open", path=str(fixture)))["session_id"]
+    try:
+        before, _ = await check.save(sid, "pitch-mixed-before")
+        history = await check.edit(sid, "history.status")
+        await check.rejected("project_edit", "controller extension", session_id=sid, operation="pitch.set",
+                             options={**note, "points": [{"tick": 100, "value": 61}]})
+        await check.rejected("project_edit", "direct pitch extension", session_id=sid, operation="controller.set",
+                             options={**lane, "points": [{"tick": 60, "value": 31}]})
+        after, _ = await check.save(sid, "pitch-mixed-after")
+        v.require(after == before and await check.edit(sid, "history.status") == history and
+                  fixture.read_bytes() == original, "Mixed extension guard changed source or history")
+        mixed = after["tracks"][0]["parts"][0]
+        v.require(mixed["notes"][0]["directPitches"][0]["x_pitch"] == "note-event" and
+                  next(item for item in mixed["controllers"] if item["name"].lower() == "dynamics")["events"][0]["x_controller"] == "controller-event",
+                  "Mixed extension save lost metadata")
+    finally:
+        await check.close(sid)
 
 
 if __name__ == "__main__":

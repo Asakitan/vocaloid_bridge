@@ -72,6 +72,23 @@ async def metadata_only_merge(check):
         for name, data in source_members.items():
             archive.writestr(name, data)
     original = source.read_bytes()
+    async with check.project() as unchanged_target:
+        await check.edit(unchanged_target, 'track.create', type='MidiAi', name='Existing track')
+        dirty_status = await check.call('project_status', session_id=unchanged_target)
+        dirty_history = await check.edit(unchanged_target, 'history.status')
+        await check.call('project_merge', session_id=unchanged_target, path=str(source_path),
+                         include_tracks=True, include_tempo=False)
+        v.require(await check.call('project_status', session_id=unchanged_target) == dirty_status and
+                  await check.edit(unchanged_target, 'history.status') == dirty_history,
+                  'Empty ordinary merge changed dirty target status or history')
+        await check.save(unchanged_target, 'empty-merge-target')
+        before_status = await check.call('project_status', session_id=unchanged_target)
+        before_history = await check.edit(unchanged_target, 'history.status')
+        await check.call('project_merge', session_id=unchanged_target, path=str(source_path),
+                         include_tracks=True, include_tempo=False)
+        v.require(await check.call('project_status', session_id=unchanged_target) == before_status and
+                  await check.edit(unchanged_target, 'history.status') == before_history,
+                  'Empty ordinary merge changed target status or history')
     async with check.project() as target:
         await check.edit(target, 'track.create', type='MidiAi', name='Existing history')
         before, before_path = await check.save(target, 'metadata-only-before')
@@ -83,8 +100,11 @@ async def metadata_only_merge(check):
                   merged['tracks'] == before['tracks'] and merged['masterTrack']['tempo'] == before['masterTrack']['tempo'],
                   'Metadata-only merge changed native content or lost metadata')
         history = await check.edit(target, 'history.status')
+        status = await check.call('project_status', session_id=target)
         await check.call('project_merge', session_id=target, path=str(source), include_tracks=True, include_tempo=False)
-        v.require(await check.edit(target, 'history.status') == history, 'Equal metadata merge created a false history entry')
+        v.require(await check.edit(target, 'history.status') == history and
+                  await check.call('project_status', session_id=target) == status,
+                  'Equal metadata merge changed history or project status')
         await check.edit(target, 'undo')
         undone, undone_path = await check.save(target, 'metadata-only-undo')
         v.require(undone == before and v.read_vpr(undone_path)[1] == v.read_vpr(before_path)[1],

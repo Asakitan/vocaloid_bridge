@@ -9,7 +9,11 @@ internal sealed partial class EngineHost
 {
     private readonly record struct ArchiveEntity(string Kind, nint Pointer);
     private sealed record ArchiveEntry(JsonObject Extra, ArchiveEntity? Parent,
-        Dictionary<VSMControllerType, Dictionary<int, ProjectArchiveArrays.ControllerPoint>>? Controller = null);
+        Dictionary<VSMControllerType, Dictionary<int, ProjectArchiveArrays.ControllerPoint>>? Controller = null,
+        Dictionary<int, ProjectArchiveNoteArrays.Point>? DirectPitch = null);
+
+    private static bool ArchiveEntryHasPayload(ArchiveEntry entry) =>
+        entry.Extra.Count != 0 || entry.Controller is not null || entry.DirectPitch is not null;
     private sealed record ArchiveHistory(Dictionary<ArchiveEntity, ArchiveEntry> Live, JsonObject Root, JsonObject Master, Dictionary<string, string> Resources,
         Dictionary<int, ProjectArchiveArrays.Tempo>? Tempo, Dictionary<int, ProjectArchiveArrays.TimeSig>? TimeSig);
 
@@ -128,7 +132,8 @@ internal sealed partial class EngineHost
     // silently copying stale structures or losing fields. The installed schema's
     // langIDs array omits items; its only declared member is handled explicitly.
     private static void ArchiveValidateNested(JsonNode? node, JsonObject schema, string path,
-        bool owner = false, bool tempoExtensions = false, bool timeSigExtensions = false, bool controllerExtensions = false)
+        bool owner = false, bool tempoExtensions = false, bool timeSigExtensions = false, bool controllerExtensions = false,
+        bool notePitchExtensions = false)
     {
         if (node is null) return;
         JsonObject resolved = ArchiveResolveSchema(schema, ArchiveSchema());
@@ -150,13 +155,14 @@ internal sealed partial class EngineHost
                 if (tempoExtensions && path == "/masterTrack/tempo" && key == "events") continue;
                 if (timeSigExtensions && path == "/masterTrack/timeSig" && key == "events") continue;
                 if (controllerExtensions && path == "/tracks[]/parts[]/controllers[]" && key == "events") continue;
-                ArchiveValidateNested(child, childSchema, path + "/" + key, owner && child is JsonObject, tempoExtensions, timeSigExtensions, controllerExtensions);
+                if (notePitchExtensions && path == "/tracks[]/parts[]/notes[]" && key == "directPitches") continue;
+                ArchiveValidateNested(child, childSchema, path + "/" + key, owner && child is JsonObject, tempoExtensions, timeSigExtensions, controllerExtensions, notePitchExtensions);
             }
         }
         else if (node is JsonArray array)
         {
             if (resolved["items"] is JsonObject items)
-                foreach (JsonNode? child in array) ArchiveValidateNested(child, items, path + "[]", tempoExtensions: tempoExtensions, timeSigExtensions: timeSigExtensions, controllerExtensions: controllerExtensions);
+                foreach (JsonNode? child in array) ArchiveValidateNested(child, items, path + "[]", tempoExtensions: tempoExtensions, timeSigExtensions: timeSigExtensions, controllerExtensions: controllerExtensions, notePitchExtensions: notePitchExtensions);
             else if (path.EndsWith("/langIDs", StringComparison.Ordinal) && resolved["langID"] is JsonObject)
             {
                 foreach (JsonNode? child in array)
@@ -417,11 +423,13 @@ internal sealed partial class EngineHost
                         WIVSMNote note = midi.GetNote((ulong)ni) ?? throw new InvalidDataException("project_preservation: missing note.");
                         ArchiveValidateNote(note, noteJson);
                         ArchiveBind(state, note, ArchiveUnknownFields(noteJson, noteSchema, "/tracks[]/parts[]/notes[]"), ArchiveKey(part));
-                        ArchiveValidateNested(noteJson, noteSchema, "/tracks[]/parts[]/notes[]", true);
+                        bool notePitchExtensions = ArchiveNoteArrayHasExtensions(noteJson);
+                        ArchiveCaptureNoteArray(state, note, noteJson, noteSchema);
+                        ArchiveValidateNested(noteJson, noteSchema, "/tracks[]/parts[]/notes[]", true, notePitchExtensions: notePitchExtensions);
                     }
                 }
             }
-            if (state.Live.Values.Any(entry => entry.Extra.Count != 0 || entry.Controller is not null))
+            if (state.Live.Values.Any(ArchiveEntryHasPayload))
             {
                 ArchiveValidateUnambiguous(tracks);
                 for (int index = 0; index < tracks.Count; index++)
@@ -475,7 +483,11 @@ internal sealed partial class EngineHost
             };
             if (state.HasEntityExtensions) session.ArchiveEnd = action => EndArchiveMutation(session, action);
             if (state.HasEntityExtensions) session.ArchiveCopy = (source, target) => ArchiveCopyDuplicate(session, source, target);
-            if (state.HasEntityExtensions) session.ArchiveValidate = () => ValidateArchiveControllersBeforeCommit(session);
+            if (state.HasEntityExtensions) session.ArchiveValidate = () =>
+            {
+                ValidateArchiveControllersBeforeCommit(session);
+                ValidateArchiveNoteArraysBeforeCommit(session);
+            };
         }
         catch
         {
@@ -535,7 +547,11 @@ internal sealed partial class EngineHost
             };
             session.ArchiveEnd = action => EndArchiveMutation(session, action);
             session.ArchiveCopy = (source, target) => ArchiveCopyDuplicate(session, source, target);
-            session.ArchiveValidate = () => ValidateArchiveControllersBeforeCommit(session);
+            session.ArchiveValidate = () =>
+            {
+                ValidateArchiveControllersBeforeCommit(session);
+                ValidateArchiveNoteArraysBeforeCommit(session);
+            };
             return true;
         }
         catch
@@ -554,7 +570,7 @@ internal sealed partial class EngineHost
         if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state) || !state.HasEntityExtensions)
             throw new InvalidOperationException("project_preservation: no tracking upgrade to drop.");
         ArchiveCheck(state);
-        if (state.Undo.Count != 0 || state.Redo.Count != 0 || state.Live.Values.Any(entry => entry.Extra.Count != 0 || entry.Controller is not null) ||
+        if (state.Undo.Count != 0 || state.Redo.Count != 0 || state.Live.Values.Any(ArchiveEntryHasPayload) ||
             state.Tempo is not null || state.TimeSig is not null)
             throw new InvalidOperationException("project_preservation: tracking upgrade already contains committed identity data.");
         session.Sequence.RemoveUpdateObserver(state.Observer);
@@ -1035,6 +1051,7 @@ internal sealed partial class EngineHost
         if (id is null || !HasArchiveEntityExtensions(GetSession(id))) return;
         if (domain == "clipboard" && operation is ("copy" or "cut" or "paste") && ArchiveHasControllerExtensions(GetSession(id)))
             throw new InvalidOperationException("project_preservation: controller extension clipboard transfer has no verified identity mapping.");
+        RequireArchiveNoteArrayExternalOperation(GetSession(id), domain, operation);
         bool readOnly = domain == "clipboard"
             ? operation is "copy" or "cut" or "paste" or "list" or "clear"
             : operation is "languages" or "phoneme_table" or "lyrics_can_convert" or "lyrics_candidates" or
@@ -1047,6 +1064,7 @@ internal sealed partial class EngineHost
     private void RequireArchiveMutationSupported(EngineSession session, string operation)
     {
         if (!HasArchiveEntityExtensions(session)) return;
+        RequireArchiveNoteArrayOperation(session, operation);
         if (ArchiveHasControllerExtensions(session) && operation is not ("controller.set" or "controller.remove" or "track.duplicate" or "part.duplicate" or "part.split" or "part.join" or "undo" or "redo"))
             throw new InvalidOperationException("project_preservation: controller extension mutation has no verified identity mapping: " + operation);
         if (operation is not ("track.create" or "track.update" or "track.reorder" or "track.remove" or "track.duplicate" or
@@ -1056,7 +1074,7 @@ internal sealed partial class EngineHost
             "controller.set" or "controller.remove" or "automation.set" or "automation.remove" or "loop.set" or
             "tuning.set" or "vibrato.set" or "phoneme_timing.set" or "phoneme_timing.reset" or
             "pitch.set" or "pitch.clear" or "performance.set" or "selection.set" or "sequence.update" or
-            "undo" or "redo" or "history.rollback" or "clipboard.paste" or "clipboard.cut" or "project.merge" or "media_import"))
+            "undo" or "redo" or "history.rollback" or "time.insert" or "time.delete" or "clipboard.paste" or "clipboard.cut" or "project.merge" or "media_import"))
             throw new InvalidOperationException("project_preservation: this mutation has no verified identity transaction: " + operation);
     }
 
@@ -1066,7 +1084,7 @@ internal sealed partial class EngineHost
         ArchiveCheck(state);
         if (state.Before is not null) throw new InvalidOperationException("project_preservation: nested mutation is unsupported.");
         bool oldEmptyUndo = action == "undo" && state.Undo.Count == 0 && state.PreUpgradeEmptyHistory &&
-            state.Live.Values.All(entry => entry.Extra.Count == 0 && entry.Controller is null);
+            state.Live.Values.All(entry => !ArchiveEntryHasPayload(entry));
         if (state.HasEntityExtensions && ((action == "undo" && state.Undo.Count == 0 && !oldEmptyUndo) || (action == "redo" && state.Redo.Count == 0)))
             throw new InvalidOperationException("project_preservation: native history has no corresponding identity snapshot.");
         state.Before = new(state.Live);
@@ -1120,7 +1138,7 @@ internal sealed partial class EngineHost
         state.Before = null;
         state.BeforeRoot = null; state.BeforeMaster = null; state.BeforeResources = null; state.BeforeTempo = null; state.BeforeTimeSig = null;
         ArchiveHistory HistorySnapshot(Dictionary<ArchiveEntity, ArchiveEntry> snapshot, JsonObject root, JsonObject master, Dictionary<string, string> resources, Dictionary<int, ProjectArchiveArrays.Tempo>? tempo, Dictionary<int, ProjectArchiveArrays.TimeSig>? timeSig) =>
-            new(state.PreUpgradeEmptyHistory && snapshot.Values.All(entry => entry.Extra.Count == 0 && entry.Controller is null) ? EmptyHistoryMarker : snapshot, root, master, resources, tempo, timeSig);
+            new(state.PreUpgradeEmptyHistory && snapshot.Values.All(entry => !ArchiveEntryHasPayload(entry)) ? EmptyHistoryMarker : snapshot, root, master, resources, tempo, timeSig);
         ArchiveHistory currentBefore = HistorySnapshot(before, beforeRoot, beforeMaster, beforeResources, beforeTempo, beforeTimeSig);
         void Restore(ArchiveHistory history)
         {
@@ -1137,7 +1155,7 @@ internal sealed partial class EngineHost
         {
             case "commit": state.Undo.Push(currentBefore); state.Redo.Clear(); break;
             case "undo":
-                if (state.Undo.Count == 0 && (!state.PreUpgradeEmptyHistory || before.Values.Any(entry => entry.Extra.Count != 0 || entry.Controller is not null)))
+                if (state.Undo.Count == 0 && (!state.PreUpgradeEmptyHistory || before.Values.Any(ArchiveEntryHasPayload)))
                 { state.Invalid = "untracked undo"; break; }
                 state.Redo.Push(currentBefore);
                 Restore(state.Undo.Count == 0
@@ -1169,6 +1187,7 @@ internal sealed partial class EngineHost
         else ArchiveRefreshParents(state, preserveExisting ? before : null, action is "undo" or "redo");
         if (state.Tempo is not null) ProjectArchiveArrays.ValidateTempo(state.Tempo, ArchiveNativeTempos(session.Sequence));
         if (state.TimeSig is not null) ProjectArchiveArrays.ValidateTimeSig(state.TimeSig, ArchiveNativeTimeSigs(session.Sequence));
+        ArchiveValidateNoteArrays(state);
         int limit = (int)Math.Min(state.Session.Sequence.GetMaxUndoCount(), 65536UL);
         if (state.Undo.Count > limit) state.PreUpgradeEmptyHistory = false;
         TrimArchiveHistory(state.Undo, limit);
@@ -1217,7 +1236,7 @@ internal sealed partial class EngineHost
                 state.Live.Add(key, previous);
             if (state.Live.TryGetValue(key, out ArchiveEntry? entry))
             {
-                if (strictParents && (entry.Extra.Count != 0 || entry.Controller is not null) && entry.Parent != parent)
+                if (strictParents && ArchiveEntryHasPayload(entry) && entry.Parent != parent)
                     state.Invalid = "history restored an extended entity under a different parent";
                 state.Live[key] = entry with { Parent = parent };
                 seen.Add(key);
@@ -1237,7 +1256,7 @@ internal sealed partial class EngineHost
         }
         if (seen.Count != state.Live.Count)
             state.Invalid = "native object lifecycle diverged from tracked identities";
-        if (preserve is not null && preserve.Any(pair => (pair.Value.Extra.Count != 0 || pair.Value.Controller is not null) && !seen.Contains(pair.Key)))
+        if (preserve is not null && preserve.Any(pair => ArchiveEntryHasPayload(pair.Value) && !seen.Contains(pair.Key)))
             state.Invalid = "a non-destructive edit replaced an extended native entity";
     }
 
@@ -1274,7 +1293,7 @@ internal sealed partial class EngineHost
         if ((ulong)tracks.Count != session.Sequence.NumTrack) throw new InvalidDataException("project_preservation: snapshot track count changed.");
         if (state.HasEntityExtensions)
         {
-        bool hasEntityPayload = state.Live.Values.Any(entry => entry.Extra.Count != 0 || entry.Controller is not null);
+        bool hasEntityPayload = state.Live.Values.Any(ArchiveEntryHasPayload);
         HashSet<ArchiveEntity> seen = [];
         void Overlay(object entity, JsonObject target)
         {
@@ -1305,6 +1324,7 @@ internal sealed partial class EngineHost
                     JsonObject noteJson = ArchiveObject(notes[ni], "notes[]");
                     WIVSMNote note = midi.GetNote((ulong)ni) ?? throw new InvalidDataException("project_preservation: missing snapshot note.");
                     ArchiveValidateNote(note, noteJson); Overlay(note, noteJson);
+                    if (state.Live.TryGetValue(ArchiveKey(note), out ArchiveEntry? noteEntry)) ArchiveOverlayNoteArray(note, noteJson, noteEntry);
                 }
             }
         }

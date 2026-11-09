@@ -84,6 +84,8 @@ internal sealed partial class EngineHost
         {
             if (includeTracks && ArchiveHasControllerExtensions(source))
                 throw new InvalidOperationException("project_preservation: controller extension project merge has no verified identity mapping.");
+            if (includeTracks && ArchiveHasNoteArrayState(source))
+                throw new InvalidOperationException("project_preservation: direct pitch extension project merge has no verified identity mapping.");
             bool timeSigExtensions = includeTempo &&
                 ((archiveStates.TryGetValue(source.Id, out ArchiveState? sourceTimeSigState) && sourceTimeSigState.TimeSig is not null) ||
                  (archiveStates.TryGetValue(target.Id, out ArchiveState? targetTimeSigState) && targetTimeSigState.TimeSig is not null));
@@ -97,6 +99,11 @@ internal sealed partial class EngineHost
             bool globalChange = !archiveStates.TryGetValue(target.Id, out ArchiveState? targetArchive)
                 ? globalFields.Root.Count != 0 || globalFields.Master.Count != 0
                 : !JsonNode.DeepEquals(globalFields.Root, targetArchive.Root) || !JsonNode.DeepEquals(globalFields.Master, targetArchive.Master);
+            // An empty source with equal global fields and resources is a
+            // genuine no-op. Do not dirty the target or invalidate history.
+            if (includeTracks && !includeTempo && source.Sequence.NumTrack == 0 && !globalChange && resources.Count == 0)
+                return new { session_id = id, native = true, imported_tracks = 0UL,
+                             include_tempo = false, offset_tick = offsetTick, track_count = target.Sequence.NumTrack };
             if ((includeTracks && HasArchiveEntityExtensions(source)) || HasArchiveEntityExtensions(target) || globalChange || resources.Count != 0 || tempoExtensions || timeSigExtensions)
             {
                 if (includeTracks && source.Sequence.Tracks.Any(track => track.Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi or VSMTrackType.Audio)))

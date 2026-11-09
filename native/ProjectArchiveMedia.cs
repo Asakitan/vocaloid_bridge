@@ -177,7 +177,7 @@ internal sealed partial class EngineHost
             if (key.Pointer == nint.Zero || state.Before.ContainsKey(key))
                 throw new InvalidDataException("project_preservation: media target identity collides with an existing entity.");
             if (state.Live.TryGetValue(key, out ArchiveEntry? current) &&
-                (current.Parent != parent || current.Extra.Count != 0 || current.Controller is not null))
+                (current.Parent != parent || ArchiveEntryHasPayload(current)))
                 throw new InvalidDataException("project_preservation: media target identity has conflicting payload.");
             state.Live[key] = new ArchiveEntry((JsonObject)extra.DeepClone(), parent);
         }

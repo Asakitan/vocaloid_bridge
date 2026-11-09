@@ -161,6 +161,8 @@ internal sealed partial class EngineHost
                 ? (JsonObject)entry.Extra.DeepClone() : new JsonObject();
             if (from is not null && from.HasEntityExtensions && !from.Live.ContainsKey(a))
                 throw new InvalidDataException("project_preservation: source transfer identity is not tracked.");
+            if (from is not null && from.Live.TryGetValue(a, out ArchiveEntry? pitchEntry) && pitchEntry.DirectPitch is not null)
+                throw new InvalidOperationException("project_preservation: direct pitch extension transfer is not verified.");
             if (from is not null && from.Live.TryGetValue(a, out ArchiveEntry? sourceEntry) && sourceEntry.Parent != sourceParent)
                 throw new InvalidDataException("project_preservation: source transfer parent identity changed.");
             if (parent is ArchiveEntity parentKey && !to.Live.ContainsKey(parentKey) && !pending.Any(item => item.Key == parentKey))
@@ -266,6 +268,6 @@ internal sealed partial class EngineHost
         else throw new InvalidDataException("project_preservation: unsupported transfer entity kind.");
 
         foreach ((ArchiveEntity key, ArchiveEntry entry) in pending) to.Live.Add(key, entry);
-        if (pending.Any(item => item.Entry.Extra.Count != 0 || item.Entry.Controller is not null)) to.HasEntityExtensions = true;
+        if (pending.Any(item => ArchiveEntryHasPayload(item.Entry))) to.HasEntityExtensions = true;
     }
 }

@@ -878,7 +878,7 @@ internal sealed partial class EngineHost
         });
     }
 
-    private static object ScoreTimeEdit(EngineSession session, string operation, JsonElement options)
+    private object ScoreTimeEdit(EngineSession session, string operation, JsonElement options, bool preflight = true)
     {
         WIVSMSequence sequence = session.Sequence;
         int start = ScoreInt(options, "start_tick", 0, int.MaxValue - 1);
@@ -908,6 +908,25 @@ internal sealed partial class EngineHost
             sequence.MasterVolumes.Any(point => point.RelPosTick.Value > int.MaxValue - duration) ||
             sequence.TimeSigs.Any(point => point.PosBar > int.MaxValue - duration)))
             throw new ArgumentOutOfRangeException("duration_tick", "Inserted time would exceed the native timeline range.");
+        bool trackedTimeline = HasArchiveEntityExtensions(session);
+        if (trackedTimeline)
+        {
+            // CloneProject otherwise commits staged edits while making a snapshot.
+            ScoreRequireUnstaged(sequence);
+            ArchiveTimelineGuard(session);
+            if (preflight)
+            {
+                EngineSession candidate = CloneProject(session.Id, null);
+                try
+                {
+                    ScoreTimeEdit(candidate, operation, options, false);
+                    EngineSession verified = CloneProject(candidate.Id, null);
+                    Close(verified.Id, true);
+                }
+                finally { Close(candidate.Id, true); }
+            }
+        }
+        var identities = trackedTimeline ? ArchiveTimelineCapture(session, start, end, insert) : null;
         return ScoreMutate(session, operation, () =>
         {
             VSMTickRange range = new(start, end);
@@ -915,6 +934,11 @@ internal sealed partial class EngineHost
                 ? Yamaha.VOCALOID.WIVSMSequenceExtension.InsertSilence(sequence, range, includeTempo)
                 : Yamaha.VOCALOID.WIVSMSequenceExtension.DeleteTime(sequence, range, includeTempo);
             ScoreRequire(success, operation, sequence);
+            if (identities is not null) ArchiveTimelineValidate(session, identities);
+            return new { start_tick = start, duration_tick = duration, include_tempo = includeTempo, track_count = sequence.NumTrack };
+        }, () =>
+        {
+            if (identities is not null) ArchiveTimelineValidate(session, identities);
             return new { start_tick = start, duration_tick = duration, include_tempo = includeTempo, track_count = sequence.NumTrack };
         });
     }
@@ -1338,7 +1362,7 @@ internal sealed partial class EngineHost
         return new { points = points.Select(point => new { tick = point.Tick, value = VSMScore.GetRawNoteNumberFromPitch(point.Value) }).ToArray() };
     }
 
-    private static object ScorePitchEdit(EngineSession session, string operation, JsonElement options)
+    private object ScorePitchEdit(EngineSession session, string operation, JsonElement options)
     {
         WIVSMMidiPart part = ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options);
         WIVSMNote note = ScoreNote(part, options);
@@ -1363,11 +1387,13 @@ internal sealed partial class EngineHost
                 return ScoreMutate(session, operation, () => true, ReadClearedPitch);
             return ScoreMutate(session, operation, () =>
             {
+                ArchiveNoteArrayValidateBeforeEdit(session, note);
                 ScoreRequire(note.ClearDirectPitches(clearAll ? WIVSMNote.DirectPitchClearingBeginTick : new VSMRelTick(begin),
                     clearAll ? WIVSMNote.DirectPitchClearingEndTick : new VSMRelTick(end - 1)), operation, session.Sequence);
                 // Native clearing uses inclusive endpoints. Verify the complete
                 // half-open result while staged so a mismatch can roll back.
                 ReadClearedPitch();
+                ArchiveNoteArrayClearStaged(session, note, begin, end, clearAll);
                 return true;
             }, ReadClearedPitch);
         }
@@ -1382,23 +1408,27 @@ internal sealed partial class EngineHost
             points.Add(new VSMDirectPitchData(tick, value));
         }
         bool replace = ScoreBool(options, "replace");
+        VSMDirectPitchData[] ValidateRequestedPoints(WIVSMNote target)
+        {
+            VSMDirectPitchData[] actual = ScorePitchPoints(target);
+            foreach (VSMDirectPitchData point in points)
+                ScoreRequire(actual.Any(item => item.Tick == point.Tick && Math.Abs(item.Value - point.Value) <= 0.01f),
+                    operation + " point " + point.Tick + " readback", session.Sequence);
+            return actual;
+        }
         return ScoreMutate(session, operation, () =>
         {
+            ArchiveNoteArrayValidateBeforeEdit(session, note);
             if (replace && before.Length != 0)
                 ScoreRequire(note.ClearDirectPitches(WIVSMNote.DirectPitchClearingBeginTick, WIVSMNote.DirectPitchClearingEndTick),
                     operation + " replace", session.Sequence);
             foreach (VSMDirectPitchData point in points.OrderBy(point => point.Tick))
                 ScoreRequire(note.SetDirectPitch(new VSMRelTick(point.Tick), point.Value), operation + " set point", session.Sequence);
+            ValidateRequestedPoints(note);
+            ArchiveNoteArraySetStaged(session, note, points, replace);
             return true;
-        }, () =>
-        {
-            VSMDirectPitchData[] actual = ScorePitchPoints(ScoreNote(
-                ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options), options));
-            foreach (VSMDirectPitchData point in points)
-                ScoreRequire(actual.Any(item => item.Tick == point.Tick && Math.Abs(item.Value - point.Value) <= 0.01f),
-                    operation + " point " + point.Tick + " readback", session.Sequence);
-            return ScorePitchList(actual);
-        });
+        }, () => ScorePitchList(ValidateRequestedPoints(ScoreNote(
+            ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options), options))));
     }
 
     private static object ScoreSequenceSummary(WIVSMSequence sequence) => new

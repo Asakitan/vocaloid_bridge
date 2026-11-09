@@ -80,6 +80,7 @@ async def run() -> None:
                 "run_id": run_id,
                 "tools": len(tools.tools),
                 "backend": status["backend"],
+                "mcp_version": status["mcp_version"],
                 "desktop": status["desktop"],
                 "project_path": saved["path"],
                 "native_create_save_close_reopen": True,

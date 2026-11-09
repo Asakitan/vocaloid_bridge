@@ -162,7 +162,7 @@ cases restored the exact saved track/master snapshots on undo and redo. These
 are observations of serialized values, not proof of native event identity or of
 extension migration. Nonaligned meter mapping, collision ownership, controller
 identity, failure rollback, and extension-bearing clone/reopen still require
-independent proof; extension-bearing time edits remain guarded.
+independent proof; event-extension time edits remain guarded.
 
 The separate private-desktop pointer probe is reproducible by running the
 boundary case above and then `python tools/run_timeline_identity_probe.py
@@ -189,6 +189,26 @@ boundary event must not automatically inherit unknown fields from either the
 deleted tick-1000 event or the tick-1200 event. Its extension policy and mapping
 need an explicit tested contract before that deletion case can be enabled.
 
+A private-desktop observer probe now records all native notification types and
+object addresses together with before, staged, rollback, committed, undo and
+redo snapshots. Run `python tools/run_timeline_observer_probe.py --fixture
+output/feature-e64467f2aa7f-002-boundary-before.vpr`, adding
+`--omit-end-tempo` for the generated-boundary variant. Receipts
+`artifacts/timeline-observer-probe-dc6f5147dc07.json` and
+`artifacts/timeline-observer-probe-2455465b7ff1.json` show no observer events
+during the first staged edit or rollback in these cases; notifications arrived
+on commit and during undo/redo. For deletion with the end tempo present, commit
+reported removal of the two deleted tempo objects and position updates. With
+the end tempo absent, commit reported insertion of the newly generated tempo,
+then removal of the two original tempo objects, and position updates. Undo and
+redo reported corresponding inverse and repeated structural notifications.
+These are bounded observations: the staged candidate has no notification log
+from which to distinguish a removed object and a newly allocated object that
+reuses its address. The probe does not establish same-tick overwrite semantics,
+nonaligned meter collisions, or address reuse, so those remain explicit blockers
+for opening timeline edits with event extensions. The existing audio and controller
+transfer guards are unchanged.
+
 A future timeline transaction must capture native identities and known values
 before mutation, apply the operation to a candidate, establish a unique
 operation-specific mapping for every retained or created event, validate the
@@ -198,8 +218,20 @@ surviving native object, not merely to its destination tick. Any unknown or
 ambiguous correspondence must roll back. Additional evidence is needed for
 removed whole parts and their descendants, meter collisions and generated
 boundary events, native callback sequences and address reuse, mixed multiple
-tracks, extension-bearing rollback and clone/reopen. These observations alone
-do not justify opening the guarded route.
+tracks, extension-bearing rollback and clone/reopen. These observations do not justify opening tempo or meter event extension routes.
+The bridge now implements a narrower MIDI/AI entity-only route: it excludes audio
+tracks, tempo, meter, controller-event and direct-pitch-item extensions,
+preflights an independent clone and checks retained track, part and note
+identities and expected positions before and after commit. The focused case in
+`artifacts/feature-acceptance-1de6c1d0abc4/summary.json` passes movement, whole
+part deletion, prior history, undo/redo, clone, reopen and source preservation.
+The controller-array case also checks timeline rejection, and
+`preservation.timeline_audio_guard` prepares an unextended project with an owned
+synthetic audio asset before adding an entity extension, then checks that rejected
+time edits preserve its audio resources, source files and history. Those guard
+cases passed in the same receipt. Whole-part deletion in the ordinary fixture produced only a
+part removal notification, with descendants restored via history; see
+`artifacts/timeline-observer-probe-6f666cc0d21f.json`.
 
 ## Implemented scope and validation
 
@@ -235,7 +267,9 @@ Only unknown properties are overlaid onto fresh native output. The implementatio
 retains additional non-native-managed files without overwriting native output;
 native-referenced `Project/Audio` assets are not resurrected after deletion,
 while members already unreferenced at open are retained as opaque extras. Other
-unsupported array-contained unknown fields are rejected rather than dropped. Clone must
+other unsupported array-contained unknown fields are rejected rather than dropped. A
+restricted direct-pitch item path is described in `note-array-preservation.md`.
+Clone must
 overlay the source snapshot before native open, then establish fresh bindings in
 the new session; it must never reuse source pointers. Session close must detach
 and dispose its observer before native lifetime ends.
@@ -297,7 +331,7 @@ new event starts without unknown fields rather than inheriting the earlier
 event's payload. Unextended lanes retain native split/join behavior. Tracked
 controller maps are checked before a native mutation commits.
 
-### Timeline edit investigation (guard retained)
+### Timeline edit investigation (event-extension guards retained)
 
 `preservation.timeline_native_probe` exercises private AI projects with notes,
 controller points, nonzero tempo events and a meter change, both values of
@@ -315,7 +349,7 @@ project snapshots and history. Both history directions passed in this fixture.
 extension-aware timeline support. The passing
 `artifacts/feature-acceptance-46720e1ebe0a/summary.json` checks both edits and
 both tempo options on a project with track, part, note, tempo and meter unknown
-fields: the current guard rejects them, history remains unchanged, and the
+fields: the event-extension guard rejects them, history remains unchanged, and the
 source, save, clone and reopen retain the fields. Controller-extension and
 extended-audio write guards remain unchanged. Identifying deleted/recreated or
 collision-prone tempo and meter identities and controller lanes needs further
@@ -331,6 +365,6 @@ archive overlay on an independent candidate before changing the target.
 `artifacts/feature-acceptance-39ed0d000904/summary.json` covers source and
 target preservation, imported and pre-existing history, clone and reopen,
 conflicting or malformed metadata, and retained controller and audio guards.
-Controller-event extension capture/import and extension-tracked audio writes
-are not part of this result. Clip property updates with this metadata remain
-guarded.
+Controller-event and direct-pitch-item extension capture/import and
+extension-tracked audio writes are not part of this result. Clip property
+updates with this metadata remain guarded.

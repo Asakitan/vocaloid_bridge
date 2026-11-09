@@ -1,7 +1,10 @@
 # Note array preservation investigation
 
-The existing archive guard rejects unknown fields inside note array elements.
-No guard has been relaxed and no note-array extension is currently retained.
+The bridge implements a restricted `directPitches` extension path; other
+unknown note-array fields remain guarded. The focused native MCP cases in
+`artifacts/feature-acceptance-1de6c1d0abc4/summary.json` verify retained fields,
+set/clear history, clone/reopen, duplicate positions and unsupported-operation
+guards on synthetic AI projects.
 
 ## Direct-pitch probe
 
@@ -20,7 +23,8 @@ The native engine can materialize intermediate pitch samples, as documented in
 `score-operations.md`. This probe does not establish whether generated points,
 replacement, note edits, duplication, split/join, undo/redo or clone preserve
 point identity. Phoneme positions were absent in this fixture. Position-only
-mapping and an extension overlay therefore remain unimplemented.
+matching is therefore not claimed as native identity; the later restricted
+implementation uses selected ticks as an explicit bridge policy.
 
 ## Extended transition observations
 
@@ -48,14 +52,15 @@ corrected transition probe and cleanup passed in
   1540/`ZeroPitch`. Joining produced 100/-900, 300/-700, 1920/`ZeroPitch`.
   These generated points and negative positions rule out naïve positional
   copying for split/join. Collision and metadata provenance remain unproved.
-* A copied VPR with `x_probe` on a direct-pitch item was rejected by the current
-  nested-unknown-field guard; its source bytes remained unchanged.
+* The old host rejected a copied VPR with `x_probe` on a direct-pitch item; its
+  source bytes remained unchanged. The updated path opened and preserved that
+  fixture in `artifacts/feature-acceptance-1dec42d402a5/summary.json`.
 
 Treat same-position upsert, replacement, split/join and history restoration as
 different identity decisions: neither matching solely on value nor copying
-metadata to generated points is justified by these observations. Unknown fields
-must remain guarded until explicit selection, collision detection, validation
-and transactional history are demonstrated on extended input.
+metadata to generated points is justified by these observations. Unsupported
+transitions remain guarded while the restricted set/clear implementation is
+awaiting its extended-input validation.
 
 ## Native clear boundary probe
 
@@ -82,14 +87,41 @@ validation guarantees `end >= begin + 1` and checks the complete point set while
 staged, then again after commit. The MCP cases in
 `artifacts/feature-acceptance-ecd0ad6f2b5c/summary.json` pass boundary, invalid
 and no-op intervals, native history, full clear and saved-project reopen. This
-fix does not enable unknown fields in note arrays.
+fix alone did not enable unknown note-array fields; the later restricted
+extension path is described below.
 
 ## Further integration work
 
-First test native serialization and identity transitions with extended input,
-generated points, replacement, note edits and history on private fixtures. Then
-add item state to the note's `ArchiveEntry`, include it in lifecycle and history
-snapshots, capture only after schema validation, validate against native point
-values before commit, and overlay only after note identity and complete point
-mapping are established. Extend the nested-array validator only for the proved
-case. Preserve existing guarded paths until all relevant transitions are proven.
+### Item observer and proposed restricted transition helper
+
+`tools/run_pitch_item_observer_probe.py` runs `tools/probe_pitch_item_observer.ps1`
+on a private desktop with the existing synthetic replace fixture. Receipt
+`artifacts/pitch-item-observer-8289ec7c9157.json` records set, clear, duplicate,
+split and join, with staged, committed, undo and redo snapshots. In this probe,
+`VSMDirectPitchData` exposes no `CppObjPtr`; `DidUpdateDirectPitch` notifications
+identify notes, not individual points. This is not evidence of native item identity.
+
+The expected-success extended-input regression
+`preservation.note_pitch_extension_roundtrip` was red on the previous host:
+`artifacts/feature-acceptance-63223b91968a/summary.json` records rejection at
+`project_open`, followed by successful cleanup. Its later clear and history
+assertions did not run. Invoke it directly using
+`python tools/check_note_array_extensions.py --case preservation.note_pitch_extension_roundtrip`.
+
+`native/ProjectArchiveNoteArrays.cs` and `ProjectArchiveNoteIntegration.cs`
+now define an identity-bound note state with complete point-set validation and
+transactional history. For the supported operations, an upsert at the selected
+tick retains its unknown fields, replacement creates fresh points without the
+old fields, and clear removes fields together with points. This is a bridge
+contract, not evidence of a native point object. Unknown point state is validated
+against the native note before mutation and again while staged and on history
+restoration; save overlays it only onto matching native output. Track, part and
+note duplicate/split/join, clipboard, source-track merge and media capture
+remain guarded while this state is tracked. The updated host passed the focused
+roundtrip and duplicate-tick rejection in
+`artifacts/feature-acceptance-1de6c1d0abc4/summary.json`. A mixed controller and
+direct-pitch extension fixture retained both fields and preserved the respective
+guards in `artifacts/feature-acceptance-97ee96429bd9/summary.json`.
+An emptied tracked map remains attached for the session so undo can restore the
+extensions; its operation restrictions remain until that session is reopened
+from a saved project with no remaining direct-pitch item extensions.

@@ -84,6 +84,8 @@ internal sealed partial class EngineHost
         {
             if (includeTracks && ArchiveHasControllerExtensions(source))
                 throw new InvalidOperationException("project_preservation: controller extension project merge has no verified identity mapping.");
+            if (includeTracks && ArchiveHasTrackAutomationExtensions(source))
+                throw new InvalidOperationException("project_preservation: track automation extension project merge has no verified identity mapping.");
             if (includeTracks && ArchiveHasNoteArrayState(source))
                 throw new InvalidOperationException("project_preservation: direct pitch extension project merge has no verified identity mapping.");
             bool timeSigExtensions = includeTempo &&

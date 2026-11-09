@@ -139,3 +139,16 @@ including a pre-mutation ambiguous-destination rejection, passed in
 `artifacts/feature-acceptance-17fec2e1ace1/summary.json`. Split/join and deletion
 remain guarded; generated `ZeroPitch` points and negative ticks are not assigned
 metadata by guessing their provenance.
+
+## Session 21 deletion review boundary
+
+The four expected-success deletion cases in
+`artifacts/feature-acceptance-830a85e95c28/summary.json` remain red at the old
+`directPitches` guard and are excluded from release acceptance. Auto-review
+blocked a proposed standalone guard relaxation because target-bound deletion
+hooks were not integrated and metadata could be lost. The guard remains intact;
+`preservation.note_pitch_delete_guards_21` in
+`artifacts/feature-acceptance-e8eb9b6496cb/summary.json` confirms that note,
+clear, part and track deletions are rejected before mutation for the fixture.
+The ignored candidate helper is unintegrated and unvalidated; see
+`docs/note-delete-21.md`.

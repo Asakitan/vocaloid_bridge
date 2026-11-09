@@ -134,16 +134,21 @@ focused metadata-only merge and history case has passed. Independent private-lib
 and external-WAV processing are available with their selected-content guards.
 Restricted MIDI/AI extension timeline edits preflight an independent native
 candidate and verify surviving native identities; insertion supports tested
-one-to-one tempo/meter event moves, while deletion requires unchanged extended
-maps. Controller-event, direct-pitch-item, master-volume-item and audio
-combinations remain guarded for time edits.
+one-to-one tempo/meter event moves. Tested deletion removes the deleted event
+payloads, retains mapped survivors and assigns no extension payload to a newly
+generated tempo boundary. Different-meter generated boundaries and deletion of
+the initial tempo remain guarded. Controller-event, direct-pitch-item,
+master-volume-item, track-automation-item and audio combinations remain guarded
+for time edits.
 Tracked `directPitches` unknown fields follow selected-tick upsert, replacement
 and clear policies with full native snapshot checks and history. Tested note,
 part and track duplication deep-copies their fields; track update/reorder and
 part update/move also retain verified owners. Split/join, deletion, clipboard,
 source-track merge and media capture paths remain guarded. Master volume item
-extensions have selected-tick edit, history and saved-output validation; track
-volume/pan item extensions remain guarded.
+extensions have selected-tick edit, history and saved-output validation. Track
+volume/pan item extensions use owner-bound full-map validation for tested edits,
+track update/reorder, history, clone and reopen; their other mutations and
+cross-project transfers remain guarded.
 Owned AI MIDI media may retain tested part/note unknown fields in versioned
 clip metadata; an isolated native candidate validates the import and archive
 overlay before the target transaction, and schema validation excludes native

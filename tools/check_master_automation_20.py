@@ -106,16 +106,32 @@ async def master_volume_extensions(check):
     invalid_original = invalid.read_bytes()
     await check.rejected("project_open", "duplicate|project_preservation", path=str(invalid))
     v.require(invalid.read_bytes() == invalid_original, "Rejected duplicate event changed source")
-    unsupported = json.loads(json.dumps(sequence))
-    for event in unsupported["masterTrack"]["volume"]["events"]:
-        event.pop(KEY, None)
-    unsupported["tracks"][0]["volume"]["events"][0][KEY] = "track-volume-not-mapped"
-    members["Project/sequence.json"] = json.dumps(unsupported, ensure_ascii=False).encode("utf-8")
-    invalid_track = v.ROOT / "output" / check.output("track-volume-extension-guard")
-    with zipfile.ZipFile(invalid_track, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+    mixed = json.loads(json.dumps(sequence))
+    mixed["tracks"][0]["volume"]["events"][0][KEY] = "track-volume-mixed"
+    members["Project/sequence.json"] = json.dumps(mixed, ensure_ascii=False).encode("utf-8")
+    mixed_path = v.ROOT / "output" / check.output("master-and-track-volume")
+    with zipfile.ZipFile(mixed_path, "x", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, payload in members.items():
             archive.writestr(name, payload)
-    await check.rejected("project_open", "unsupported nested unknown field", path=str(invalid_track))
+    mixed_original = mixed_path.read_bytes()
+    sid = (await check.call("project_open", path=str(mixed_path)))["session_id"]
+    try:
+        before, _ = await check.save(sid, "master-track-before")
+        bounds = await check.edit(sid, "automation.list", scope="track_volume", track_index=0)
+        await check.edit(sid, "automation.set", scope="track_volume", track_index=0,
+                         points=[{"tick": 0, "value": bounds["maximum"]}])
+        after, _ = await check.save(sid, "master-track-after")
+        v.require(after["tracks"][0]["volume"]["events"][0][KEY] == "track-volume-mixed" and
+                  events(after) == events(before), "Mixed track edit lost master or track fields")
+        await check.edit(sid, "undo")
+        undone, _ = await check.save(sid, "master-track-undo")
+        v.require(undone == before, "Mixed master/track undo differs")
+        await check.edit(sid, "redo")
+        redone, _ = await check.save(sid, "master-track-redo")
+        v.require(redone == after, "Mixed master/track redo differs")
+    finally:
+        await check.close(sid)
+    v.require(mixed_path.read_bytes() == mixed_original, "Mixed volume source archive changed")
 
 
 if __name__ == "__main__":

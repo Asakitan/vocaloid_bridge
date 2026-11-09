@@ -1271,6 +1271,7 @@ internal sealed partial class EngineHost
         WIVSMSequence sequence = session.Sequence;
         WIVSMTrack? track = scope == "master_volume" ? null : ScoreTrack(session, ScoreTrackIndex(session, options));
         ArchiveMasterVolumePreflight(session, scope);
+        ArchiveTrackAutomationPreflight(session, scope, track);
         int minimum = scope == "master_volume" ? sequence.GetMinVolumeValue()
             : scope == "track_volume" ? track!.GetMinVolumeValue() : track!.GetMinPanpotValue();
         int maximum = scope == "master_volume" ? sequence.GetMaxVolumeValue()
@@ -1292,6 +1293,7 @@ internal sealed partial class EngineHost
                     : track!.RemovePanpot(track.GetPanpot((ulong)index)!);
                 ScoreRequire(removed, operation, sequence);
                 ArchiveMasterVolumeTransition(session, scope, Array.Empty<(int Tick, int Value)>(), false, checked((int)tick));
+                ArchiveTrackAutomationTransition(session, scope, track, Array.Empty<(int Tick, int Value)>(), false, checked((int)tick));
                 return true;
             }, () => ScoreAutomationList(session, options));
         }
@@ -1344,6 +1346,7 @@ internal sealed partial class EngineHost
                     (item, value) => item.Value = value, track.RemovePanpot,
                     (tick, value) => track.InsertPanpot(new VSMRelTick(tick), value));
             ArchiveMasterVolumeTransition(session, scope, points, replace, null);
+            ArchiveTrackAutomationTransition(session, scope, track, points, replace, null);
             return true;
         }, () => ScoreAutomationList(session, options));
     }

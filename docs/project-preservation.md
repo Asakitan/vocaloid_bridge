@@ -206,30 +206,29 @@ redo reported corresponding inverse and repeated structural notifications.
 These are bounded observations: the staged candidate has no notification log
 from which to distinguish a removed object and a newly allocated object that
 reuses its address. The probe does not establish same-tick overwrite semantics,
-nonaligned meter collisions, or address reuse, so those remain explicit blockers
-for timeline edits that delete or generate extension-bearing events. The existing
+nonaligned meter collisions, or address reuse. These were blockers at that
+investigation checkpoint; the later restricted deletion contract and remaining
+generation guards are described in `docs/timeline-delete-21.md`. The existing
 audio and controller transfer guards are unchanged.
 
-A future timeline transaction must capture native identities and known values
-before mutation, apply the operation to a candidate, establish a unique
-operation-specific mapping for every retained or created event, validate the
-entire post-state, then commit the corresponding extension snapshot with native
-history. Deleted events must lose their metadata; collisions must map to the
-surviving native object, not merely to its destination tick. Any unknown or
-ambiguous correspondence must roll back. Additional evidence is needed for
-removed whole parts and their descendants, meter collisions and generated
-boundary events, native callback sequences and address reuse, mixed multiple
-tracks, extension-bearing rollback and clone/reopen. These observations alone do
-not justify mapping generated tempo and meter extensions.
+The subsequent restricted timeline transaction captures native identities and known values
+before mutation, applies the operation to a candidate, establishes an
+operation-specific mapping for retained events, validates the entire post-state,
+and commits the extension snapshot with native history. Deleted events lose
+their metadata; newly generated tempo boundaries inherit none. Additional
+evidence is needed for meter collisions, generated time-signature boundaries,
+address reuse and untested combinations. The earlier observations alone do not
+justify mapping all generated tempo and meter extensions.
 The bridge implements a restricted MIDI/AI route: it excludes audio tracks,
-controller-event, direct-pitch-item and master-volume-item extensions, preflights an independent
-clone and checks retained track, part and note identities and expected positions
-before and after commit. Insertion maps tested one-to-one tempo/meter event
-moves using the installed managed helper's move rules and checks native object
-identities, values and destinations. Deletion requires extension-bearing maps
-to remain unchanged; unextended event kinds may change. The focused cases in
-`artifacts/feature-acceptance-5b8f6372f11d/summary.json` pass insertion moves,
-unchanged deletion, entity movement, history, reopen and source preservation.
+controller-event, direct-pitch-item, master-volume-item and track-automation-item
+extensions, preflights an independent clone and checks retained track, part and
+note identities and expected positions before and after commit. Insertion maps
+tested one-to-one tempo/meter event moves. Restricted deletion maps survivors,
+discards deleted payloads and assigns no inherited extension to a generated
+tempo boundary; different-meter boundary generation remains guarded. The
+focused cases in `artifacts/feature-acceptance-5b8f6372f11d/summary.json` and
+`artifacts/feature-acceptance-e8eb9b6496cb/summary.json` pass the tested paths,
+history, reopen and source preservation.
 The controller-array case also checks timeline rejection, and
 `preservation.timeline_audio_guard` prepares an unextended project with an owned
 synthetic audio asset before adding an entity extension, then checks that rejected
@@ -336,7 +335,7 @@ new event starts without unknown fields rather than inheriting the earlier
 event's payload. Unextended lanes retain native split/join behavior. Tracked
 controller maps are checked before a native mutation commits.
 
-### Timeline edit investigation (changed event-extension guards retained)
+### Timeline edit investigation (historical baseline)
 
 `preservation.timeline_native_probe` exercises private AI projects with notes,
 controller points, nonzero tempo events and a meter change, both values of
@@ -356,11 +355,10 @@ not evidence of extension-aware timeline support. The passing
 both tempo options on a project with track, part, note, tempo and meter unknown
 fields: the event-extension guard rejects them, history remains unchanged, and the
 source, save, clone and reopen retain the fields. Controller-extension and
-extended-audio write guards remain unchanged. Identifying deleted/recreated or
-collision-prone tempo and meter identities and controller lanes needs further
-native evidence before deleted or generated extension-bearing events can be
-mapped. The current insertion-move and unchanged-deletion paths are described
-above and in `docs/timeline-move-20.md`.
+extended-audio write guards remain unchanged. The current insertion and
+restricted deletion paths are described above and in `docs/timeline-move-20.md`
+and `docs/timeline-delete-21.md`; different-meter generated boundaries and
+other unverified combinations still require evidence.
 
 ### Master volume event metadata
 
@@ -373,7 +371,8 @@ case in `artifacts/feature-acceptance-5b8f6372f11d/summary.json` covers edit,
 removal/recreation, undo/redo, clone/reopen, duplicate ticks and source
 preservation. A mixed master-volume/tempo extension fixture passed in
 `artifacts/feature-acceptance-551c645ece17/summary.json`. Time edits with this
-state and track volume/pan event extensions remain guarded.
+state remain guarded. Track volume/pan extensions now have their own restricted
+owner-bound transaction; see `docs/track-automation-21.md`.
 
 ### MIDI media entity metadata
 

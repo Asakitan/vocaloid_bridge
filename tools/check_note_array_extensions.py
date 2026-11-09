@@ -545,5 +545,79 @@ async def note_pitch_copy_ambiguous_signature(check):
     v.require(fixture.read_bytes() == original, "Ambiguous fixture changed")
 
 
+
+async def pitch_delete_lifecycle(check, operation, options):
+    seed = await check.call("score_compose", output_name=check.output("delete-seed"), title="Delete", bpm=120,
+        notes=[{"start": i, "duration": 0.6, "pitch": pitch, "lyric": "あ", "phoneme": "a", "lang_id": 0} for i, pitch in enumerate((60, 64))])
+    sid = seed["native_session"]["session_id"]
+    for i in range(2):
+        await check.edit(sid, "pitch.set", track_index=0, part_index=0, note_index=i, replace=True,
+                         points=[{"tick": 100, "value": 60+i}])
+    await check.edit(sid, "track.duplicate", track_index=0, name="Survivor")
+    sequence, source = await check.save(sid, "delete-native")
+    await check.close(sid)
+    for ti, track in enumerate(sequence["tracks"]):
+        for ni, note in enumerate(track["parts"][0]["notes"]):
+            note["directPitches"][0]["x_identity"] = {"track": ti, "note": ni, "nested": [ti, ni]}
+    _, members = v.read_vpr(source)
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    fixture = v.ROOT / "output" / check.output("delete-extended")
+    with zipfile.ZipFile(fixture, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    original = fixture.read_bytes()
+    def markers(data):
+        return [note["directPitches"][0]["x_identity"] for track in data["tracks"]
+                for part in track.get("parts", []) for note in part.get("notes", [])]
+    initial = [{"track": ti, "note": ni, "nested": [ti, ni]} for ti in range(2) for ni in range(2)]
+    remaining = initial[1:] if operation == "note.remove" else initial[2:]
+    sid = (await check.call("project_open", path=str(fixture)))["session_id"]
+    try:
+        before, _ = await check.save(sid, "delete-before")
+        v.require(markers(before) == initial, "Initial pitch identities differ")
+        await check.edit(sid, operation, **options)
+        after, saved = await check.save(sid, "delete-after")
+        v.require(markers(after) == remaining, "Deletion changed surviving markers")
+        await check.edit(sid, "undo")
+        undone, _ = await check.save(sid, "delete-undo")
+        v.require(undone == before, "Undo differs from initial state")
+        await check.edit(sid, "redo")
+        redone, saved = await check.save(sid, "delete-redo")
+        v.require(redone == after, "Redo differs from deleted state")
+        reopened = (await check.call("project_open", path=str(saved)))["session_id"]
+        try:
+            reopened_data, _ = await check.save(reopened, "delete-reopened")
+            v.require(reopened_data == after, "Reopened state differs")
+        finally:
+            await check.close(reopened)
+        await check.edit(sid, "undo")
+        await check.edit(sid, "track.update", track_index=1, name="Branch")
+        branched, _ = await check.save(sid, "delete-branch")
+        v.require(markers(branched) == initial, "Branch changed restored markers")
+        await check.rejected("project_edit", "redo|history|failed", session_id=sid, operation="redo", options={})
+    finally:
+        await check.close(sid)
+    v.require(fixture.read_bytes() == original, "Source fixture changed")
+
+
+@v.feature("preservation.note_pitch_delete_note", "preservation", "score_compose", "project_edit", "project_save", "project_open")
+async def note_pitch_delete_note(check):
+    await pitch_delete_lifecycle(check, "note.remove", {"track_index": 0, "part_index": 0, "note_index": 0})
+
+
+@v.feature("preservation.note_pitch_delete_clear", "preservation", "score_compose", "project_edit", "project_save", "project_open")
+async def note_pitch_delete_clear(check):
+    await pitch_delete_lifecycle(check, "note.clear", {"track_index": 0, "part_index": 0})
+
+
+@v.feature("preservation.note_pitch_delete_part", "preservation", "score_compose", "project_edit", "project_save", "project_open")
+async def note_pitch_delete_part(check):
+    await pitch_delete_lifecycle(check, "part.remove", {"track_index": 0, "part_index": 0})
+
+
+@v.feature("preservation.note_pitch_delete_track", "preservation", "score_compose", "project_edit", "project_save", "project_open")
+async def note_pitch_delete_track(check):
+    await pitch_delete_lifecycle(check, "track.remove", {"track_index": 0})
+
+
 if __name__ == "__main__":
     raise SystemExit(v.main())

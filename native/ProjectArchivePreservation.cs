@@ -10,10 +10,11 @@ internal sealed partial class EngineHost
     private readonly record struct ArchiveEntity(string Kind, nint Pointer);
     private sealed record ArchiveEntry(JsonObject Extra, ArchiveEntity? Parent,
         Dictionary<VSMControllerType, Dictionary<int, ProjectArchiveArrays.ControllerPoint>>? Controller = null,
-        Dictionary<int, ProjectArchiveNoteArrays.Point>? DirectPitch = null);
+        Dictionary<int, ProjectArchiveNoteArrays.Point>? DirectPitch = null,
+        Dictionary<string, Dictionary<int, ProjectArchiveArrays.ControllerPoint>>? TrackAutomation = null);
 
     private static bool ArchiveEntryHasPayload(ArchiveEntry entry) =>
-        entry.Extra.Count != 0 || entry.Controller is not null || entry.DirectPitch is not null;
+        entry.Extra.Count != 0 || entry.Controller is not null || entry.DirectPitch is not null || entry.TrackAutomation is not null;
     private sealed record ArchiveHistory(Dictionary<ArchiveEntity, ArchiveEntry> Live, JsonObject Root, JsonObject Master, Dictionary<string, string> Resources,
         Dictionary<int, ProjectArchiveArrays.Tempo>? Tempo, Dictionary<int, ProjectArchiveArrays.TimeSig>? TimeSig,
         Dictionary<int, ProjectArchiveArrays.ControllerPoint>? MasterVolume);
@@ -137,7 +138,7 @@ internal sealed partial class EngineHost
     // langIDs array omits items; its only declared member is handled explicitly.
     private static void ArchiveValidateNested(JsonNode? node, JsonObject schema, string path,
         bool owner = false, bool tempoExtensions = false, bool timeSigExtensions = false, bool controllerExtensions = false,
-        bool notePitchExtensions = false, bool masterVolumeExtensions = false)
+        bool notePitchExtensions = false, bool masterVolumeExtensions = false, bool trackAutomationExtensions = false)
     {
         if (node is null) return;
         JsonObject resolved = ArchiveResolveSchema(schema, ArchiveSchema());
@@ -159,15 +160,16 @@ internal sealed partial class EngineHost
                 if (tempoExtensions && path == "/masterTrack/tempo" && key == "events") continue;
                 if (timeSigExtensions && path == "/masterTrack/timeSig" && key == "events") continue;
                 if (masterVolumeExtensions && path == "/masterTrack/volume" && key == "events") continue;
+                if (trackAutomationExtensions && (path == "/tracks[]/volume" || path == "/tracks[]/panpot") && key == "events") continue;
                 if (controllerExtensions && path == "/tracks[]/parts[]/controllers[]" && key == "events") continue;
                 if (notePitchExtensions && path == "/tracks[]/parts[]/notes[]" && key == "directPitches") continue;
-                ArchiveValidateNested(child, childSchema, path + "/" + key, owner && child is JsonObject, tempoExtensions, timeSigExtensions, controllerExtensions, notePitchExtensions, masterVolumeExtensions);
+                ArchiveValidateNested(child, childSchema, path + "/" + key, owner && child is JsonObject, tempoExtensions, timeSigExtensions, controllerExtensions, notePitchExtensions, masterVolumeExtensions, trackAutomationExtensions);
             }
         }
         else if (node is JsonArray array)
         {
             if (resolved["items"] is JsonObject items)
-                foreach (JsonNode? child in array) ArchiveValidateNested(child, items, path + "[]", tempoExtensions: tempoExtensions, timeSigExtensions: timeSigExtensions, controllerExtensions: controllerExtensions, notePitchExtensions: notePitchExtensions, masterVolumeExtensions: masterVolumeExtensions);
+                foreach (JsonNode? child in array) ArchiveValidateNested(child, items, path + "[]", tempoExtensions: tempoExtensions, timeSigExtensions: timeSigExtensions, controllerExtensions: controllerExtensions, notePitchExtensions: notePitchExtensions, masterVolumeExtensions: masterVolumeExtensions, trackAutomationExtensions: trackAutomationExtensions);
             else if (path.EndsWith("/langIDs", StringComparison.Ordinal) && resolved["langID"] is JsonObject)
             {
                 foreach (JsonNode? child in array)
@@ -406,7 +408,8 @@ internal sealed partial class EngineHost
                 WIVSMTrack track = session.Sequence.GetTrack((ulong)ti) ?? throw new InvalidDataException("project_preservation: missing track.");
                 ArchiveValidateTrack(track, trackJson);
                 ArchiveBind(state, track, ArchiveUnknownFields(trackJson, trackSchema, "/tracks[]"), null);
-                ArchiveValidateNested(trackJson, trackSchema, "/tracks[]", true);
+                bool trackAutomationExtensions = ArchiveCaptureTrackAutomation(state, track, trackJson, trackSchema);
+                ArchiveValidateNested(trackJson, trackSchema, "/tracks[]", true, trackAutomationExtensions: trackAutomationExtensions);
                 JsonArray parts = ArchiveArray(trackJson["parts"], "/tracks[]/parts");
                 if ((ulong)parts.Count != track.NumParts) throw new InvalidDataException("project_preservation: part count changed while loading.");
                 for (int pi = 0; pi < parts.Count; pi++)
@@ -495,6 +498,7 @@ internal sealed partial class EngineHost
                 ValidateArchiveControllersBeforeCommit(session);
                 ValidateArchiveNoteArraysBeforeCommit(session);
                 ValidateArchiveMasterVolumeBeforeCommit(session);
+                ValidateArchiveTrackAutomationBeforeCommit(session);
             };
         }
         catch
@@ -561,6 +565,7 @@ internal sealed partial class EngineHost
                 ValidateArchiveControllersBeforeCommit(session);
                 ValidateArchiveNoteArraysBeforeCommit(session);
                 ValidateArchiveMasterVolumeBeforeCommit(session);
+                ValidateArchiveTrackAutomationBeforeCommit(session);
             };
             return true;
         }
@@ -1071,6 +1076,8 @@ internal sealed partial class EngineHost
     internal void CheckArchiveExternalOperation(string? id, string domain, string operation)
     {
         if (id is null || !HasArchiveEntityExtensions(GetSession(id))) return;
+        if (domain == "clipboard" && operation is ("copy" or "cut" or "paste") && ArchiveHasTrackAutomationExtensions(GetSession(id)))
+            throw new InvalidOperationException("project_preservation: track automation clipboard transfer has no verified identity mapping.");
         if (domain == "clipboard" && operation is ("copy" or "cut" or "paste") && ArchiveHasControllerExtensions(GetSession(id)))
             throw new InvalidOperationException("project_preservation: controller extension clipboard transfer has no verified identity mapping.");
         RequireArchiveNoteArrayExternalOperation(GetSession(id), domain, operation);
@@ -1087,6 +1094,8 @@ internal sealed partial class EngineHost
     {
         if (!HasArchiveEntityExtensions(session)) return;
         RequireArchiveNoteArrayOperation(session, operation);
+        if (ArchiveHasTrackAutomationExtensions(session) && operation is not ("automation.set" or "automation.remove" or "track.update" or "track.reorder" or "undo" or "redo" or "history.rollback"))
+            throw new InvalidOperationException("project_preservation: track automation mutation has no verified identity mapping: " + operation);
         if (archiveStates[session.Id].MasterVolume is not null && operation is ("time.insert" or "time.delete"))
             throw new InvalidOperationException("project_preservation: master volume extension timeline mapping is not verified.");
         if (ArchiveHasControllerExtensions(session) && operation is not ("controller.set" or "controller.remove" or "track.duplicate" or "part.duplicate" or "part.split" or "part.join" or "undo" or "redo"))
@@ -1111,6 +1120,7 @@ internal sealed partial class EngineHost
             state.Live.Values.All(entry => !ArchiveEntryHasPayload(entry));
         if (state.HasEntityExtensions && ((action == "undo" && state.Undo.Count == 0 && !oldEmptyUndo) || (action == "redo" && state.Redo.Count == 0)))
             throw new InvalidOperationException("project_preservation: native history has no corresponding identity snapshot.");
+        ArchiveValidateTrackAutomation(state);
         state.Before = new(state.Live);
         state.BeforeRoot = (JsonObject)state.Root.DeepClone();
         state.BeforeMaster = (JsonObject)state.Master.DeepClone();
@@ -1216,6 +1226,7 @@ internal sealed partial class EngineHost
         if (state.TimeSig is not null) ProjectArchiveArrays.ValidateTimeSig(state.TimeSig, ArchiveNativeTimeSigs(session.Sequence));
         if (state.MasterVolume is not null) ProjectArchiveArrays.ValidateController(state.MasterVolume, ArchiveNativeMasterVolumes(session.Sequence));
         ArchiveValidateNoteArrays(state);
+        ArchiveValidateTrackAutomation(state);
         int limit = (int)Math.Min(state.Session.Sequence.GetMaxUndoCount(), 65536UL);
         if (state.Undo.Count > limit) state.PreUpgradeEmptyHistory = false;
         TrimArchiveHistory(state.Undo, limit);
@@ -1340,6 +1351,7 @@ internal sealed partial class EngineHost
             ArchiveValidateTrack(track, trackJson);
             if (hasEntityPayload) ArchiveValidateTrackDetails(track, trackJson);
             Overlay(track, trackJson);
+            if (state.Live.TryGetValue(ArchiveKey(track), out ArchiveEntry? trackEntry)) ArchiveOverlayTrackAutomation(track, trackJson, trackEntry);
             JsonArray parts = ArchiveArray(trackJson["parts"], "parts");
             if ((ulong)parts.Count != track.NumParts) throw new InvalidDataException("project_preservation: snapshot part count changed.");
             for (int pi = 0; pi < parts.Count; pi++)

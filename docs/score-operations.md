@@ -216,14 +216,17 @@ editor-owned phoneme service not initialized by the isolated VSM host. Call
 No editor singleton is synthesized and no fallback is run. Native audio boundary
 handling does not use that MIDI phoneme-reset branch. For projects with tracked
 archive extensions, timeline edits are restricted to MIDI/AI tracks without
-controller-event, direct-pitch-item or master-volume-event extensions. For
-insertion, tempo and meter extension maps follow the installed managed helper's
-one-to-one native moves; identity, expected position and value are checked on
-an independent candidate and before/after the actual commit. Deletion remains
-limited to unchanged extension-bearing maps. Event kinds without extensions may
-change according to native behavior. Audio, generated/deleted extended events
-and unverified combinations remain guarded. The focused cases passed in
-`artifacts/feature-acceptance-5b8f6372f11d/summary.json`.
+controller-event, direct-pitch-item, master-volume-event or track-automation-item
+extensions. For insertion, tempo and meter extension maps follow the installed
+managed helper's one-to-one native moves. Tested deletion maps surviving tempo
+and same-boundary-meter events, discards deleted events' extensions, and gives a
+newly generated tempo boundary no inherited extensions. Initial-tempo deletion
+and different-meter boundary generation remain guarded. Identity, position and
+value are checked on an independent candidate and around the actual transaction;
+event kinds without extensions retain native behavior. Audio and other unverified
+combinations remain guarded. Focused insertion and deletion cases passed in
+`artifacts/feature-acceptance-5b8f6372f11d/summary.json` and
+`artifacts/feature-acceptance-e8eb9b6496cb/summary.json`.
 
 ## Selection
 
@@ -356,9 +359,13 @@ retains unknown fields; `replace=true` retains fields for existing selected
 events and the required zero event, removes fields with removed events, and
 creates new events without prior fields. The complete map is checked against
 native values during the transaction and on history restoration and save.
-Timeline edits with these item extensions are guarded. Track volume/pan item
-extensions remain unsupported. The focused master-volume case passed in
-`artifacts/feature-acceptance-5b8f6372f11d/summary.json`.
+The same selected-tick policy applies to tested track-volume and track-pan item
+extensions, bound to their native track owner. Tested track update/reorder,
+undo/redo, clone/reopen and ambiguous-owner protection retain the fields.
+Timeline edits with any of these item extensions, and unverified track-extension
+mutations and transfers, remain guarded. The master-volume case passed in
+`artifacts/feature-acceptance-5b8f6372f11d/summary.json`; the track cases passed
+in `artifacts/feature-acceptance-e8eb9b6496cb/summary.json`.
 
 `artifacts/feature-acceptance-4d341970430a/summary.json` verifies editing,
 rejection and save/reopen for all three scopes. Actual master and track gain,

@@ -355,3 +355,13 @@ retention, concurrent changes, refresh failure after commit and crash atomicity
 remain unproven, so no production property update change was made. See
 `docs/media-property-preservation-20.md`; the corrected, reproducible process
 probe and cleanup passed in `artifacts/feature-acceptance-6db3c881f0f0/summary.json`.
+
+Session 21 repeated the ordinary private AI clip regression in
+`artifacts/feature-acceptance-25f45d337d42/summary.json`: production
+`media_update` succeeded while dropping synthetic root and `part` unknown
+fields. The separate-process experiment in
+`artifacts/feature-acceptance-2ca7dc2676b2/summary.json` manually restored only
+known fixture markers and detected one intervening write before replacement.
+It does not establish a generic array merge, a race-free transaction or recovery
+from native manager refresh failure. Production behavior and the
+archive-bearing property guard were not changed; see `docs/media-property-21.md`.

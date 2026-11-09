@@ -29,6 +29,9 @@ import check_metadata_history
 import check_note_array_extensions
 import check_tempo_metadata_noop
 import check_master_automation_20
+import check_track_automation_21
+import check_timeline_delete_21
+import check_note_delete_guards_21
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining
@@ -41,7 +44,9 @@ experimental = {"preservation.audio_mutation", "preservation.controller_split_na
                 "preservation.controller_split_generated_probe", "preservation.metadata_native_marker_probe",
                 "preservation.metadata_tempo_marker_probe", "preservation.note_pitch_array_probe",
                 "preservation.note_pitch_transitions", "preservation.tempo_collision_native_probe",
-                "preservation.tempo_same_collision_native_probe"}
+                "preservation.tempo_same_collision_native_probe", "preservation.note_pitch_delete_note",
+                "preservation.note_pitch_delete_clear", "preservation.note_pitch_delete_part",
+                "preservation.note_pitch_delete_track", "preservation.timeline_delete_native_21"}
 v.CASES[:] = [case for case in v.CASES if case.identifier in baseline_ids | release_interchange
               and case.identifier not in experimental]
 

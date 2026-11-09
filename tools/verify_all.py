@@ -47,6 +47,7 @@ import check_media_recovery_32
 import check_agent_completion_33
 import check_timeline_meter_collision_23
 import check_completion_34
+import check_runtime_35
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining

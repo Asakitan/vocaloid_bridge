@@ -9,7 +9,9 @@ import msvcrt
 import os
 from pathlib import Path
 import queue
+import re
 import shutil
+import stat
 import subprocess
 import threading
 from typing import Any
@@ -43,6 +45,7 @@ class IsolatedProcess:
         self.stdin = None
         self.stdout = None
         self.reader = None
+        self.exit_code = None
         self.lines: queue.Queue[bytes | Exception | None] = queue.Queue()
         runtime = workspace / ".runtime"
         runtime.mkdir(parents=True, exist_ok=True)
@@ -134,6 +137,8 @@ class IsolatedProcess:
             if win32event.WaitForSingleObject(self.process, 3000) != win32con.WAIT_OBJECT_0:
                 win32process.TerminateProcess(self.process, 1)
                 win32event.WaitForSingleObject(self.process, 1000)
+            if win32event.WaitForSingleObject(self.process, 0) == win32con.WAIT_OBJECT_0:
+                self.exit_code = win32process.GetExitCodeProcess(self.process)
             win32api.CloseHandle(self.process)
             self.process = None
         if self.reader is not None:
@@ -160,9 +165,67 @@ class NativeClient:
         self.install = install or Path(os.environ.get("VOCALOID_INSTALL", r"C:\Program Files\VOCALOID6\Editor"))
         self.child: IsolatedProcess | None = None
         self.counter = 0
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.failed = ""
         self.host_snapshot: Path | None = None
+        self.generation = 0
+        self.cache_namespace: str | None = None
+
+    def _running(self) -> bool:
+        return self.child is not None and self.child.process is not None and (
+            win32event.WaitForSingleObject(self.child.process, 0) == win32con.WAIT_TIMEOUT
+        )
+
+    def _release_child(self) -> None:
+        child, self.child = self.child, None
+        namespace, self.cache_namespace = self.cache_namespace, None
+        try:
+            if child is not None:
+                child.close()
+                if child.exit_code is not None and namespace is not None:
+                    self._remove_cache(namespace)
+        finally:
+            self._remove_snapshot()
+
+    @staticmethod
+    def _remove_cache(namespace: str) -> None:
+        if not re.fullmatch(r"VocaloidBridge-[0-9a-f]{32}", namespace):
+            raise NativeError("Invalid owned native cache namespace.")
+        for kind in ("VSM", "VSMCaches"):
+            base = (Path(os.environ["LOCALAPPDATA"]) / "VOCALOID6" / kind).resolve()
+            path = base / namespace
+            if not path.exists():
+                continue
+            if path.resolve().parent != base:
+                raise NativeError("Owned native cache escaped its parent.")
+            if any(p.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                   for p in (path, *path.rglob("*"))):
+                raise NativeError("Owned native cache contains a reparse point.")
+            shutil.rmtree(path)
+
+    def runtime(self, operation: str, discard_sessions: bool = False) -> dict[str, Any]:
+        """Manage only this MCP server's private VOCALOID process."""
+        with self.lock:
+            if operation not in {"status", "start", "stop", "restart"}:
+                raise NativeError("Unknown runtime operation.")
+            running = self._running()
+            previous_pid = self.child.pid if self.child is not None else None
+            if operation == "status" and not running:
+                return {"operation": operation, "running": False, "generation": self.generation,
+                        "last_error": self.failed or None, "managed_by_mcp": True}
+            if operation in {"stop", "restart"}:
+                status = self.request("ping") if running else {}
+                sessions = status.get("sessions", 0)
+                if sessions and not discard_sessions:
+                    raise NativeError("Close or save active projects first, or explicitly set discard_sessions=true.")
+                self._release_child()
+                self.failed = ""
+                if operation == "stop":
+                    return {"operation": operation, "running": False, "generation": self.generation,
+                            "previous_pid": previous_pid, "discarded_sessions": sessions, "managed_by_mcp": True}
+            status = self.request("ping")
+            return {**status, "operation": operation, "running": True, "generation": self.generation,
+                    "previous_pid": previous_pid, "managed_by_mcp": True}
 
     def _snapshot_host(self, host: Path) -> Path:
         # A running Windows CLR locks its assembly. Run the exact built artifacts
@@ -179,8 +242,17 @@ class NativeClient:
 
     def request(self, method: str, parameters: dict[str, Any] | None = None, timeout: float = 180) -> dict[str, Any]:
         with self.lock:
+            # Encode before touching the process: a local JSON error is not a
+            # dispatched native mutation and must not poison a healthy session.
+            parameters = parameters or {}
+            json.dumps(parameters, ensure_ascii=False, allow_nan=False)
+            if self.child is not None and not self._running():
+                self.failed = "Native host exited; previous project and object handles have expired."
+                self._release_child()
             if self.failed:
-                raise NativeError(self.failed)
+                if method not in {"ping", "create", "open", "import_project", "voices", "api_catalog"}:
+                    raise NativeError(self.failed + " Create/open a project or use vocaloid_runtime to start a fresh host.")
+                self.failed = ""
             if self.child is None:
                 dotnet = shutil.which("dotnet")
                 host = self.workspace / "native/bin/Release/net8.0-windows/VocaloidBridge.Host.dll"
@@ -189,32 +261,40 @@ class NativeClient:
                 try:
                     snapshot = self._snapshot_host(host)
                     self.child = IsolatedProcess([dotnet, str(snapshot), "--serve", str(self.install), str(self.workspace)], self.workspace)
+                    self.generation += 1
                 except BaseException:
                     self._remove_snapshot()
                     raise
-            self.counter += 1
-            request = {"id": self.counter, "method": method, "params": parameters or {}}
-            try:
-                payload = json.dumps(request, ensure_ascii=False, allow_nan=False).encode("utf-8") + b"\n"
-                self.child.stdin.write(payload)
-                response = json.loads(self.child.read_line(timeout).decode("utf-8"))
-                if response.get("id") != self.counter:
-                    raise NativeError("Native RPC response ID did not match the request.")
-            except Exception as error:
-                self.failed = str(error)
-                self.child.close()
-                raise
-            if "error" in response:
-                detail = response["error"]
-                raise NativeError(f"{detail.get('type', 'NativeError')}: {detail.get('message', detail)}")
-            return response["result"]
+                status = self._exchange("ping", {}, timeout)
+                if method == "ping":
+                    return status
+            return self._exchange(method, parameters, timeout)
+
+    def _exchange(self, method: str, parameters: dict[str, Any], timeout: float) -> dict[str, Any]:
+        self.counter += 1
+        payload = json.dumps({"id": self.counter, "method": method, "params": parameters},
+                             ensure_ascii=False, allow_nan=False).encode("utf-8") + b"\n"
+        try:
+            self.child.stdin.write(payload)
+            response = json.loads(self.child.read_line(timeout).decode("utf-8"))
+            if response.get("id") != self.counter:
+                raise NativeError("Native RPC response ID did not match the request.")
+        except Exception as error:
+            self.failed = "Native request outcome is unknown; the request was not replayed. " + str(error)
+            self._release_child()
+            raise NativeError(self.failed) from error
+        if "error" in response:
+            detail = response["error"]
+            raise NativeError(f"{detail.get('type', 'NativeError')}: {detail.get('message', detail)}")
+        result = response["result"]
+        if method == "ping" and isinstance(result.get("cache_namespace"), str):
+            self.cache_namespace = result["cache_namespace"]
+        return result
 
     def close(self) -> None:
         with self.lock:
-            if self.child is not None:
-                self.child.close()
-                self.child = None
-            self._remove_snapshot()
+            self._release_child()
+            self.failed = ""
 
     def _remove_snapshot(self) -> None:
         if self.host_snapshot is not None:

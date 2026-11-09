@@ -8,7 +8,14 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Any
+import tempfile
+from typing import Any, Literal
+
+WORKSPACE = Path(os.environ.get("VOCALOID_WORKSPACE", Path(__file__).resolve().parents[1])).resolve()
+MCP_TEMP = WORKSPACE / ".runtime" / "mcp-temp"
+MCP_TEMP.mkdir(parents=True, exist_ok=True)
+os.environ["TEMP"] = os.environ["TMP"] = str(MCP_TEMP)
+tempfile.tempdir = str(MCP_TEMP)
 
 from mcp.server.fastmcp import FastMCP
 import numpy as np
@@ -21,7 +28,6 @@ from .native_client import NativeClient
 from .projects import ProjectStore
 
 
-WORKSPACE = Path(os.environ.get("VOCALOID_WORKSPACE", Path(__file__).resolve().parents[1])).resolve()
 TEMPLATE = Path(__file__).parent / "templates" / "ai-starter.vpr"
 STORE = ProjectStore(WORKSPACE)
 NATIVE = NativeClient(WORKSPACE)
@@ -47,8 +53,21 @@ async def vocaloid_status() -> dict[str, Any]:
     """Initialize the isolated native engine and return its real version and session count."""
     result = await _rpc("ping")
     return {**result, "mcp_version": __version__, "workspace": str(WORKSPACE), "server_pid": os.getpid(),
+            "generation": NATIVE.generation, "managed_by_mcp": True,
             "isolation_desktop_expected": NATIVE.child.desktop_name, "fallbacks": False,
             "known_limitations": ["Complete editor-feature coverage has not been validated."]}
+
+
+@mcp.tool()
+async def vocaloid_runtime(operation: Literal["status", "start", "stop", "restart"] = "status",
+                           discard_sessions: bool = False) -> dict[str, Any]:
+    """Start, inspect, stop or restart this MCP's private VOCALOID background process.
+    Projects auto-start it. Stop/restart protect open projects unless discard_sessions=true.
+    A lost in-flight request is never automatically replayed; reopen the last saved project.
+    This controls VOCALOID, not Codex or the user's interactive editor.
+    """
+    result = await asyncio.to_thread(NATIVE.runtime, operation, discard_sessions)
+    return {**result, "mcp_version": __version__, "workspace": str(WORKSPACE)}
 
 
 @mcp.tool()

@@ -1,6 +1,12 @@
 # 当前状态
 
-日期：2026-11-10。版本：0.25.0。37 个工具、127 个结构化操作。
+日期：2026-11-10。版本：0.26.0。38 个工具、127 个结构化操作。
+
+## MCP 托管启动
+
+创建/打开工程按需启动 VOCALOID 私有实例；新增 `vocaloid_runtime` 管理 status/start/stop/restart。默认保护活动工程，确认进程退出后允许新建/重开；已派发请求的失联不自动重放。启动握手绑定缓存归属，退出后清理自有目录；MCP Python TEMP/TMP 也落在 E 盘。
+
+定向证据：`artifacts/feature-acceptance-0dc851857340/runtime.lifecycle_35.json` 与 `artifacts/feature-acceptance-dba96773341c/runtime.no_replay_35.json` 分别通过；后者同批生命周期夹具缺声库初始化的失败保留，修正夹具后单独通过。Python 代码变化，未重建原生宿主、未运行广泛套件。
 
 ## 已完成的剩余实现
 

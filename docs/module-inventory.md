@@ -19,8 +19,8 @@
 | `native/ProjectArchiveOutput.cs` | 带扩展工程的独立原生快照输出 | 人声渲染、MIDI 导出、离线混缩/分轨及源会话历史保护定向通过 |
 | `native/ProjectArchiveLibrary.cs`、`native/ProjectArchiveMedia.cs` | 素材元数据 v1/v2、音频绑定与候选核对 | 控制器/音高/其他数组/音频捕获导入、单次历史及重开通过 |
 | `native/RpcServer.cs` | 单线程 JSON 行协议、原生对象发现与精确签名调用 | 已编译 |
-| `vocaloid_bridge/native_client.py` | 私有 desktop、Job Object、管道客户端与 DLL 快照 | E 盘独占临时根、构建副本及关闭清理；自身缓存退出清理由原生宿主处理 |
-| `vocaloid_bridge/server.py` | 37 个 MCP 工具、资源、写歌提示 | 新 MIDI 工具在独立 stdio 连接实测；历史工具覆盖见历史回执 |
+| `vocaloid_bridge/native_client.py` | 私有进程、握手、代次、缓存及故障生命周期 | 按需启动、默认保护、确认退出重建和不重放失联请求通过定向验证 |
+| `vocaloid_bridge/server.py` | 38 个 MCP 工具、资源、写歌提示 | 增加托管 runtime 启停入口，所有工作保留在私有后台实例 |
 | `vocaloid_bridge/compose.py` | AI 编曲/替换缺省音素共用原生 G2PA、临时会话和独占发布 | asa 日英中单音节、替换源身份及保存重开定向通过；其他声库、扩展源及发音质量待验 |
 | `vocaloid_bridge/operations.json` | 原生 dispatch 对照的随包操作索引 | 127 操作均有精确契约行；发现与实测分开 |
 | `tools/generate_operation_catalog.py` | 操作目录生成及漂移检查 | 按源码与文档操作首列精确生成，缺契约行时检查失败 |
@@ -87,6 +87,8 @@
 | `native/ProjectArchiveNestedArrays.cs` | 其他对象数组的自然键、已知投影与暂存核对 | voices/语言/效果参数/颤音等元数据编辑和往返定向通过；身份歧义报错 |
 | `tools/check_completion_34.py`、`tools/check_transaction_readback_34.ps1` | 剩余时间、素材、数组、提交前失败与纯元数据历史 | 三项必要契约最终通过；原失败回执保留 |
 
+| `tools/check_runtime_35.py` | MCP 托管生命周期与未知结果不重放 | 两个定向用例及清理通过；无原生重编译 |
+
 ## 更新记录
 
 | 日期 | 更新 |
@@ -135,3 +137,4 @@
 | 2026-11-10 | 升级 0.23.0：素材访问串行化、独占发布、持久日志和提交前/后进程中断恢复，外部文件抢占保留原数据。 |
 | 2026-11-10 | 0.24.0：显式素材冲突决策、21 AI 首音符、完整短语、扩展删除/拆合/迁移、占用拍号与扩展音频定向验证。 |
 | 2026-11-10 | 0.25.0：复杂时间事务、素材元数据 v2、其他数组与读回回滚/元数据 no-op，剩余实现收齐。 |
+| 2026-11-10 | 0.26.0：MCP 按需拉起和管理 VOCALOID 私有实例，活动工程保护、确认退出后重建及失联不重放。 |

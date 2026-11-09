@@ -1,0 +1,7 @@
+# Score track field no-op, session 25
+
+The previous host was tested using a synthetic MidiAi project on its private desktop. In `artifacts/feature-acceptance-81a85f628a55/summary.json`, same-value color, mute, solo, bus number, and MIDI recording each made a clean project dirty; native history and IsStaged remained unchanged. Same-name was already handled. These observations concern the tested fixture only.
+
+A real combined edit and save/reopen in `artifacts/feature-acceptance-e4e3e4128287/summary.json` preserved name, color, mute and solo, but MIDI recording reverted to false after reopen. Thus recording remains on its original setter and mutation path; its semantics and persistence are not inferred from the no-op test.
+
+The implemented early return covers name, color, mute, solo and bus number only when every supplied value is unchanged and no recording field was supplied. These are precisely the cases in which the prior mutation body calls no setter. Normal field validation and `ScoreRequireUnstaged` remain; extension entry guards are unchanged. Real changes follow the existing mutation and readback path. `tools/check_score_noop_25.py` tests individual and combined clean no-ops, dirty state, real save/reopen, and staged-edit rejection. A single Release build passed with zero warnings and errors. `artifacts/feature-acceptance-3fc96299dad5/summary.json` passed this case and seven other selected cases plus cleanup. The case also checks that a same-value recording request retains its existing setter path.

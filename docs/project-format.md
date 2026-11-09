@@ -2,8 +2,9 @@
 
 ## Scope and Evidence
 
-This layer reads and writes files only. It does not start, focus, automate, or
-communicate with VOCALOID, and it does not implement an MCP server.
+This Windows-targeted layer reads and writes files only. VPR access uses pywin32.
+It does not start, focus, automate, or communicate with VOCALOID, and it does
+not implement an MCP server.
 
 The observed VOCALOID 6.5.1 fixtures are:
 
@@ -72,15 +73,23 @@ names, invalid characters, and trailing dots/spaces are rejected. Nested relativ
 directories are allowed. Missing suffixes become `.vpr` or `.mid`; incompatible
 suffixes are rejected. MIDI export also accepts `.midi`.
 
-Files are opened exclusively. Existing output files, including the source itself,
+Output files are opened exclusively. Existing outputs, including the source itself,
 are never replaced. A failed write removes only its newly created partial file.
+
+On Windows, the VPR source is opened with a single read-only handle that shares
+reads but not writes or deletion; this handle backs the same ZIP reader throughout
+the sequence edit and archive copy. A conflicting existing writer stops the edit
+before output creation. `write_copy` accepts caller-provided data and does not
+verify the revision from which the caller obtained that data. Controlled local
+concurrency evidence and its limits are in [source consistency](source-snapshot-25.md).
 
 VPR copy operations require exactly one `Project/sequence.json`. They preserve
 member ordering, member payloads other than that JSON, member metadata supported
 by `zipfile`, and the archive comment. Embedded audio is copied without decoding.
 Only the sequence JSON is reserialized; ZIP compression and JSON whitespace may
-change. Unknown JSON fields remain present unless the caller explicitly changes
-them. No archive member is extracted to the filesystem.
+change. Unknown JSON fields outside explicitly replaced structures remain present.
+The note replacement prototype behavior below can copy an unknown note field to
+other notes. No archive member is extracted to the filesystem.
 
 ## Notes and Voices
 
@@ -112,7 +121,9 @@ The selected part's first native note supplies defaults. For an empty type-2 AI
 part with `aiVoice`, defaults come from the exact observed `editor-note.vpr` schema
 embedded in the implementation. Other empty track types require a native prototype.
 Defaults include `exp`, `aiExp`, `singingSkill`, `vibrato`, protection flags, language,
-and velocity. Unknown prototype fields are retained. Nested `raw` dictionaries
+and velocity. Unknown prototype fields are copied to each replacement note, even
+when another original note has different fields. A synthetic red regression and
+the unresolved identity policy are documented in [file-note identity](file-notes-25.md). Nested `raw` dictionaries
 merge into these defaults, while lists/scalars replace their corresponding values.
 Raw extras cannot override native core fields `pos`, `duration`, `number`, `lyric`,
 `phoneme`, `velocity`, or `langID`; use their validated beat-note inputs instead.

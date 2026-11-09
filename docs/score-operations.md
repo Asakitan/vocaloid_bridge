@@ -83,12 +83,14 @@ Unchanged fields are skipped rather than treating native no-op setter results
 as failures. Changed color writes must succeed, and all requested fields must
 match freshly acquired native getters after commit.
 
-A `track.update` containing only the unchanged name returns the existing track
-summary without marking a clean session dirty or clearing an already dirty
-state. Pending native edits are still rejected. The focused AI project case in
-`artifacts/feature-acceptance-f4c4b6029e12/summary.json` also checks a real
-rename and saved-project reopen. Other no-op field combinations retain their
-existing behavior and have not been generalized by this change.
+A `track.update` containing only unchanged `name`, `color`, `mute`, `solo` and/or
+`bus_no` returns the current summary without changing a clean or already-dirty
+state, after checking for pending native edits. Requests containing
+`midi_recording` retain the native setter path even when the value is unchanged.
+The AI case in `artifacts/feature-acceptance-3fc96299dad5/summary.json` checks
+individual and combined no-ops, a real edit and reopen, and pending-edit rejection.
+An earlier observation found that an enabled recording flag reopened as false;
+the flag is not claimed to persist across reopening.
 
 For VPRs with supported entity extensions, note and part split/join also journal
 the opaque fields by native identity. Conflicting join fields or ambiguous

@@ -164,9 +164,13 @@ internal sealed partial class EngineHost
             throw new ArgumentException("midi_recording requires a MIDI track.");
         if (newName is null && color is null && mute is null && solo is null && bus is null && recording is null)
             throw new ArgumentException("track.update requires a track field to update.");
-        // A name-only update with the current name performs no native setter at all.
-        if (newName is not null && track.Name == newName && color is null && mute is null &&
-            solo is null && bus is null && recording is null)
+        // Return only when the existing mutation path would call no native setter.
+        // MIDI recording deliberately stays on its original setter path.
+        if (recording is null && (newName is null || track.Name == newName) &&
+            (color is null || track.Color == color.Value) &&
+            (mute is null || track.IsMute == mute.Value) &&
+            (solo is null || track.IsSolo == solo.Value) &&
+            (bus is null || track.GetBusNo() == (uint)bus.Value))
         {
             ScoreRequireUnstaged(sequence);
             return ScoreTrackSummary(track, trackIndex);

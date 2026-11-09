@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from copy import copy, deepcopy
 import json
 import math
+import msvcrt
+import os
 from pathlib import Path
 from typing import Any
 import zipfile
 
 import jsonpatch
 import jsonpointer
+import win32con
+import win32file
 
 from .music import PPQ, _exclusive_output, _integer, _notes, _number, _source, _ticks, _workspace
 
@@ -33,6 +38,26 @@ _EDITOR_AI_NOTE = {
                 "rates": [{"pos": 0, "value": 50}]},
 }
 _NOTE_FIELDS = {"pos", "duration", "number", "lyric", "phoneme", "velocity", "langID"}
+
+
+@contextmanager
+def _source_archive(workspace: Path, path: str | Path):
+    """Hold one read-only source handle against concurrent writes and replacement."""
+    source = _source(workspace, path)
+    handle = win32file.CreateFile(str(source), win32con.GENERIC_READ, win32con.FILE_SHARE_READ,
+                                  None, win32con.OPEN_EXISTING, win32con.FILE_ATTRIBUTE_NORMAL, None)
+    try:
+        descriptor = msvcrt.open_osfhandle(int(handle), os.O_RDONLY | os.O_BINARY)
+        handle.Detach()
+        try:
+            stream = os.fdopen(descriptor, "rb")
+        except BaseException:
+            os.close(descriptor)
+            raise
+        with stream, zipfile.ZipFile(stream, "r") as archive:
+            yield archive
+    finally:
+        handle.Close()
 
 
 def _invalid_constant(value: str) -> None:
@@ -170,15 +195,18 @@ class ProjectStore:
     def __init__(self, workspace: Path):
         self.workspace = _workspace(workspace)
 
-    def read(self, path: str | Path) -> dict:
-        source = _source(self.workspace, path)
-        with zipfile.ZipFile(source, "r") as archive:
-            if archive.namelist().count(SEQUENCE_MEMBER) != 1:
-                raise ValueError("VPR must contain exactly one Project/sequence.json")
-            data = json.loads(archive.read(SEQUENCE_MEMBER).decode("utf-8-sig"), parse_constant=_invalid_constant)
+    @staticmethod
+    def _read_archive(archive: zipfile.ZipFile) -> dict:
+        if archive.namelist().count(SEQUENCE_MEMBER) != 1:
+            raise ValueError("VPR must contain exactly one Project/sequence.json")
+        data = json.loads(archive.read(SEQUENCE_MEMBER).decode("utf-8-sig"), parse_constant=_invalid_constant)
         if not isinstance(data, dict):
             raise ValueError("Project/sequence.json must contain an object")
         return data
+
+    def read(self, path: str | Path) -> dict:
+        with _source_archive(self.workspace, path) as archive:
+            return self._read_archive(archive)
 
     def _summary(self, path: Path, data: dict) -> dict:
         tracks = []
@@ -210,57 +238,62 @@ class ProjectStore:
             raise ValueError("pointer must be an RFC 6901 string")
         return jsonpointer.resolve_pointer(self.read(path), pointer)
 
-    def write_copy(self, source: str | Path, data: dict, output_name: str) -> dict:
-        original = _source(self.workspace, source)
+    def _write_archive(self, archive: zipfile.ZipFile, data: dict, output_name: str) -> dict:
         if not isinstance(data, dict):
             raise ValueError("project data must be an object")
         serialized = json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
-        with zipfile.ZipFile(original, "r") as archive:
-            if archive.namelist().count(SEQUENCE_MEMBER) != 1:
-                raise ValueError("VPR must contain exactly one Project/sequence.json")
-            validity_count = archive.namelist().count(PHONEME_VALIDITY_MEMBER)
-            if validity_count > 1:
-                raise ValueError("VPR has duplicate phoneme-validity metadata")
-            if validity_count:
-                _validate_phoneme_validity(data, archive.read(PHONEME_VALIDITY_MEMBER))
-            with _exclusive_output(self.workspace, output_name, (".vpr",)) as (destination, handle):
-                with zipfile.ZipFile(handle, "w") as result:
-                    result.comment = archive.comment
-                    for member in archive.infolist():
-                        payload = serialized if member.filename == SEQUENCE_MEMBER else archive.read(member)
-                        result.writestr(copy(member), payload)
+        if archive.namelist().count(SEQUENCE_MEMBER) != 1:
+            raise ValueError("VPR must contain exactly one Project/sequence.json")
+        validity_count = archive.namelist().count(PHONEME_VALIDITY_MEMBER)
+        if validity_count > 1:
+            raise ValueError("VPR has duplicate phoneme-validity metadata")
+        if validity_count:
+            _validate_phoneme_validity(data, archive.read(PHONEME_VALIDITY_MEMBER))
+        with _exclusive_output(self.workspace, output_name, (".vpr",)) as (destination, handle):
+            with zipfile.ZipFile(handle, "w") as result:
+                result.comment = archive.comment
+                for member in archive.infolist():
+                    payload = serialized if member.filename == SEQUENCE_MEMBER else archive.read(member)
+                    result.writestr(copy(member), payload)
         return {"path": str(destination), "summary": self._summary(destination, data)}
+
+    def write_copy(self, source: str | Path, data: dict, output_name: str) -> dict:
+        with _source_archive(self.workspace, source) as archive:
+            return self._write_archive(archive, data, output_name)
 
     def patch(self, source: str, operations: list[dict], output_name: str) -> dict:
         if not isinstance(operations, list) or not all(isinstance(operation, dict) for operation in operations):
             raise ValueError("operations must be a JSON Patch array")
-        data = jsonpatch.JsonPatch(deepcopy(operations)).apply(self.read(source), in_place=False)
-        return self.write_copy(source, data, output_name)
+        with _source_archive(self.workspace, source) as archive:
+            data = jsonpatch.JsonPatch(deepcopy(operations)).apply(self._read_archive(archive), in_place=False)
+            return self._write_archive(archive, data, output_name)
 
     def compose(self, template: str, output_name: str, title: str, bpm: float, notes: list[dict],
                 track_index: int = 0, part_index: int = 0, voice_comp_id: str | None = None) -> dict:
         if not isinstance(title, str):
             raise ValueError("title must be a string")
-        data = self.read(template)
-        _, part = _part(data, track_index, part_index)
-        if voice_comp_id is not None:
-            if not isinstance(voice_comp_id, str) or not voice_comp_id:
-                raise ValueError("voice_comp_id must be a nonempty string")
-            voices = data.get("voices")
-            if not isinstance(voices, list) or not any(isinstance(voice, dict) and voice.get("compID") == voice_comp_id for voice in voices):
-                raise ValueError("voice_comp_id must already exist in the project's voices list")
-            if not isinstance(part.get("aiVoice"), dict):
-                raise ValueError("selected part has no aiVoice")
-            part["aiVoice"]["compID"] = voice_comp_id
-        _replace_notes(data, notes, track_index, part_index)
-        _tempo_events(data, [{"start": 0, "bpm": bpm}])
-        data["title"] = title
-        return self.write_copy(template, data, output_name)
+        with _source_archive(self.workspace, template) as archive:
+            data = self._read_archive(archive)
+            _, part = _part(data, track_index, part_index)
+            if voice_comp_id is not None:
+                if not isinstance(voice_comp_id, str) or not voice_comp_id:
+                    raise ValueError("voice_comp_id must be a nonempty string")
+                voices = data.get("voices")
+                if not isinstance(voices, list) or not any(isinstance(voice, dict) and voice.get("compID") == voice_comp_id for voice in voices):
+                    raise ValueError("voice_comp_id must already exist in the project's voices list")
+                if not isinstance(part.get("aiVoice"), dict):
+                    raise ValueError("selected part has no aiVoice")
+                part["aiVoice"]["compID"] = voice_comp_id
+            _replace_notes(data, notes, track_index, part_index)
+            _tempo_events(data, [{"start": 0, "bpm": bpm}])
+            data["title"] = title
+            return self._write_archive(archive, data, output_name)
 
     def edit_notes(self, source: str, output_name: str, notes: list[dict], track_index: int = 0, part_index: int = 0) -> dict:
-        data = self.read(source)
-        _replace_notes(data, notes, track_index, part_index)
-        return self.write_copy(source, data, output_name)
+        with _source_archive(self.workspace, source) as archive:
+            data = self._read_archive(archive)
+            _replace_notes(data, notes, track_index, part_index)
+            return self._write_archive(archive, data, output_name)
 
     def set_curve(self, source: str, output_name: str, controller: str, events: list[dict],
                   track_index: int = 0, part_index: int = 0) -> dict:
@@ -268,55 +301,57 @@ class ProjectStore:
             raise ValueError("controller must be an existing native controller name")
         if not isinstance(events, list):
             raise ValueError("curve events must be a list")
-        data = self.read(source)
-        _, part = _part(data, track_index, part_index)
-        controllers = part.get("controllers")
-        if not isinstance(controllers, list):
-            raise ValueError("no observed controller structure in this part; use an editor-authored curve or JSON Patch")
-        matches = [entry for entry in controllers if isinstance(entry, dict) and entry.get("name") == controller]
-        if len(matches) != 1 or not isinstance(matches[0].get("events"), list) or not matches[0]["events"]:
-            raise ValueError("controller must have a unique existing native event prototype")
-        target = matches[0]
-        prototype = target["events"][0]
-        if not isinstance(prototype, dict) or not isinstance(prototype.get("pos"), int) or isinstance(prototype.get("pos"), bool):
-            raise ValueError("controller has no verified pos/value event structure")
-        prototype_value = prototype.get("value")
-        if isinstance(prototype_value, bool) or not isinstance(prototype_value, (int, float)):
-            raise ValueError("controller prototype value must be numeric")
-        existing = {}
-        for old in target["events"]:
-            if not isinstance(old, dict) or isinstance(old.get("pos"), bool) or not isinstance(old.get("pos"), int):
-                raise ValueError("existing controller events must have integer positions")
-            position = old["pos"]
-            if position in existing:
-                raise ValueError("existing controller event positions must be distinct")
-            existing[position] = old
-        replacements = []
-        positions = set()
-        for event in events:
-            if not isinstance(event, dict):
-                raise ValueError("each curve event must be an object with start and value")
-            position = _ticks(event.get("start"), "curve.start")
-            value = event.get("value")
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError("curve.value must be a finite number")
-            try:
-                finite = math.isfinite(value)
-            except OverflowError:
-                finite = False
-            if not finite or (isinstance(prototype_value, int) and not isinstance(value, int)):
-                raise ValueError("curve.value must be finite and match the native numeric type")
-            if position in positions:
-                raise ValueError("curve events collide after tick quantization")
-            positions.add(position)
-            # Keep unknown fields only on an event at the selected source tick.
-            native = deepcopy(existing.get(position, {}))
-            native.update(pos=position, value=value)
-            replacements.append(native)
-        target["events"] = sorted(replacements, key=lambda event: event["pos"])
-        return self.write_copy(source, data, output_name)
+        with _source_archive(self.workspace, source) as archive:
+            data = self._read_archive(archive)
+            _, part = _part(data, track_index, part_index)
+            controllers = part.get("controllers")
+            if not isinstance(controllers, list):
+                raise ValueError("no observed controller structure in this part; use an editor-authored curve or JSON Patch")
+            matches = [entry for entry in controllers if isinstance(entry, dict) and entry.get("name") == controller]
+            if len(matches) != 1 or not isinstance(matches[0].get("events"), list) or not matches[0]["events"]:
+                raise ValueError("controller must have a unique existing native event prototype")
+            target = matches[0]
+            prototype = target["events"][0]
+            if not isinstance(prototype, dict) or not isinstance(prototype.get("pos"), int) or isinstance(prototype.get("pos"), bool):
+                raise ValueError("controller has no verified pos/value event structure")
+            prototype_value = prototype.get("value")
+            if isinstance(prototype_value, bool) or not isinstance(prototype_value, (int, float)):
+                raise ValueError("controller prototype value must be numeric")
+            existing = {}
+            for old in target["events"]:
+                if not isinstance(old, dict) or isinstance(old.get("pos"), bool) or not isinstance(old.get("pos"), int):
+                    raise ValueError("existing controller events must have integer positions")
+                position = old["pos"]
+                if position in existing:
+                    raise ValueError("existing controller event positions must be distinct")
+                existing[position] = old
+            replacements = []
+            positions = set()
+            for event in events:
+                if not isinstance(event, dict):
+                    raise ValueError("each curve event must be an object with start and value")
+                position = _ticks(event.get("start"), "curve.start")
+                value = event.get("value")
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ValueError("curve.value must be a finite number")
+                try:
+                    finite = math.isfinite(value)
+                except OverflowError:
+                    finite = False
+                if not finite or (isinstance(prototype_value, int) and not isinstance(value, int)):
+                    raise ValueError("curve.value must be finite and match the native numeric type")
+                if position in positions:
+                    raise ValueError("curve events collide after tick quantization")
+                positions.add(position)
+                # Keep unknown fields only on an event at the selected source tick.
+                native = deepcopy(existing.get(position, {}))
+                native.update(pos=position, value=value)
+                replacements.append(native)
+            target["events"] = sorted(replacements, key=lambda event: event["pos"])
+            return self._write_archive(archive, data, output_name)
 
     def set_tempo(self, source: str, output_name: str, events: list[dict]) -> dict:
-        data = self.read(source)
-        _tempo_events(data, events)
-        return self.write_copy(source, data, output_name)
+        with _source_archive(self.workspace, source) as archive:
+            data = self._read_archive(archive)
+            _tempo_events(data, events)
+            return self._write_archive(archive, data, output_name)

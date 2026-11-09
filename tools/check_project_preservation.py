@@ -901,11 +901,11 @@ async def timeline_extension_guard(check):
     original = source.read_bytes()
     sid = (await check.call("project_open", path=str(source)))["session_id"]
     history = await check.edit(sid, "history.status")
+    # With tempo inclusion, these fixtures move or delete the tick-1920 event.
     for operation in ("time.insert", "time.delete"):
-        for include_tempo in (False, True):
-            await check.rejected("project_edit", "identity transaction", session_id=sid, operation=operation,
-                options={"start_tick": 1920, "duration_tick": 1920, "include_tempo": include_tempo})
-            v.require(await check.edit(sid, "history.status") == history, "Guard changed native history")
+        await check.rejected("project_edit", "identity transaction", session_id=sid, operation=operation,
+            options={"start_tick": 1000, "duration_tick": 500, "include_tempo": True})
+        v.require(await check.edit(sid, "history.status") == history, "Guard changed native history")
     saved, out = await check.save(sid, "timeline-extension-guarded")
     v.require(saved == seq, "Guard changed project content")
     v.require(source.read_bytes() == original, "Guard changed source file")
@@ -924,6 +924,7 @@ async def timeline_entity_roundtrip(check):
         notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
     sid = seed["native_session"]["session_id"]
     await check.edit(sid, "part.move", track_index=0, part_index=0, start_tick=7680)
+    await check.edit(sid, "tempo.set", start_tick=2000, bpm=130)
     seq, path = await check.save(sid, "timeline-entity-native")
     await check.close(sid)
     _, members = v.read_vpr(path)
@@ -947,6 +948,8 @@ async def timeline_entity_roundtrip(check):
     moved, _ = await check.save(sid, "timeline-entity-moved")
     part = moved["tracks"][0]["parts"][0]
     v.require(part["pos"] == 8180 and part[KEY] == "part" and part["notes"][0][KEY] == "note", "Moved entity metadata mismatch")
+    v.require([e["pos"] for e in moved["masterTrack"]["tempo"]["events"]] == [0, 2500],
+              "Unextended tempo map did not follow timeline insertion")
     await check.edit(sid, "undo")
     restored, _ = await check.save(sid, "timeline-entity-move-undo")
     v.require(restored == before, "Move undo mismatch")
@@ -1037,6 +1040,85 @@ async def timeline_boundary_probe(check):
                 check.evidence("boundary_%s_%s" % (operation, include_tempo), {"before": before, "after": after})
             finally:
                 await check.close(sid)
+
+@v.feature("preservation.timeline_event_unchanged", "preservation", "score_compose", "project_open", "project_edit", "project_save")
+async def timeline_event_unchanged(check):
+    """Only an unchanged full event map may retain distinct event metadata."""
+    seed = await check.call("score_compose", output_name=check.output("event-map-seed"), title="Event map",
+        bpm=120, notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+    await check.edit(sid, "part.move", track_index=0, part_index=0, start_tick=7680)
+    for tick, bpm in ((1000, 130), (1200, 140), (1500, 150), (2000, 160)):
+        await check.edit(sid, "tempo.set", start_tick=tick, bpm=bpm)
+    await check.edit(sid, "time_signature.set", bar=2, numerator=3, denominator=4)
+    seq, path = await check.save(sid, "event-map-native")
+    await check.close(sid)
+    _, members = v.read_vpr(path)
+    seq["tracks"][0][KEY] = "track"
+    for index, event in enumerate(seq["masterTrack"]["tempo"]["events"]):
+        event[KEY] = "tempo-" + str(index)
+    for index, event in enumerate(seq["masterTrack"]["timeSig"]["events"]):
+        event[KEY] = "meter-" + str(index)
+    members["Project/sequence.json"] = json.dumps(seq, ensure_ascii=False).encode("utf-8")
+    source = v.ROOT / "output" / check.output("event-map-input")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    original = source.read_bytes()
+    sid = (await check.call("project_open", path=str(source)))["session_id"]
+    try:
+        before, _ = await check.save(sid, "event-map-before")
+        history = await check.edit(sid, "history.status")
+        for operation, include in (("time.insert", False), ("time.insert", True), ("time.delete", True)):
+            await check.rejected("project_edit", "timeline event", session_id=sid, operation=operation,
+                options={"start_tick": 1000, "duration_tick": 500, "include_tempo": include})
+            v.require(await check.edit(sid, "history.status") == history, "Rejected event map edit changed history")
+            rejected, _ = await check.save(sid, "event-map-rejected")
+            v.require(rejected == before, "Rejected event map edit changed content")
+        await check.edit(sid, "time.delete", start_tick=1000, duration_tick=500, include_tempo=False)
+        after, out = await check.save(sid, "event-map-after")
+        v.require(after["masterTrack"] == before["masterTrack"], "Unchanged event map lost metadata")
+        await check.edit(sid, "undo")
+        undone, _ = await check.save(sid, "event-map-undo")
+        v.require(undone == before, "Event map undo changed project")
+        await check.edit(sid, "redo")
+        redone, out = await check.save(sid, "event-map-redo")
+        v.require(redone == after, "Event map redo changed project")
+        reopened = (await check.call("project_open", path=str(out)))["session_id"]
+        try:
+            reopened_seq, _ = await check.save(reopened, "event-map-reopen")
+            v.require(reopened_seq == after, "Event map reopen changed project")
+        finally:
+            await check.close(reopened)
+    finally:
+        await check.close(sid)
+    v.require(source.read_bytes() == original, "Event map edit changed source archive")
+
+    # The unextended meter map may change when only tempo events carry fields.
+    tempo_only = json.loads(json.dumps(seq))
+    for event in tempo_only["masterTrack"]["timeSig"]["events"]:
+        event.pop(KEY, None)
+    members["Project/sequence.json"] = json.dumps(tempo_only, ensure_ascii=False).encode("utf-8")
+    tempo_source = v.ROOT / "output" / check.output("event-map-tempo-only-input")
+    with zipfile.ZipFile(tempo_source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    original_tempo_source = tempo_source.read_bytes()
+    sid = (await check.call("project_open", path=str(tempo_source)))["session_id"]
+    try:
+        before, _ = await check.save(sid, "event-map-tempo-only-before")
+        await check.edit(sid, "time.insert", start_tick=1000, duration_tick=500, include_tempo=False)
+        after, _ = await check.save(sid, "event-map-tempo-only-after")
+        v.require(after["masterTrack"]["tempo"] == before["masterTrack"]["tempo"] and
+                  after["masterTrack"]["timeSig"]["events"] != before["masterTrack"]["timeSig"]["events"],
+                  "Unextended meter did not move independently of retained tempo fields")
+        await check.edit(sid, "undo")
+        undone, _ = await check.save(sid, "event-map-tempo-only-undo")
+        v.require(undone == before, "Tempo-only extension timeline undo differs")
+        await check.edit(sid, "redo")
+        redone, _ = await check.save(sid, "event-map-tempo-only-redo")
+        v.require(redone == after, "Tempo-only extension timeline redo differs")
+    finally:
+        await check.close(sid)
+    v.require(tempo_source.read_bytes() == original_tempo_source, "Tempo-only timeline edit changed source archive")
 
 if __name__ == "__main__":
     raise SystemExit(v.main())

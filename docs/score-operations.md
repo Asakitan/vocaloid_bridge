@@ -182,8 +182,9 @@ voice information; this operation does not change licensing or install voices.
 For VPRs with unknown `masterTrack.tempo.events` fields, the selected native
 tempo operation carries those fields through moves and value changes; deletion
 followed by recreation does not inherit them. Undo/redo and save/reopen have a
-focused synthetic test. Tempo-map merge with either source or target tempo
-extensions remains guarded until its identity transfer is implemented.
+focused synthetic test. Tempo-map merge also maps the source event and its
+fields onto a shared destination tick, replacing the former target event fields;
+the complete native result and history are checked on an independent candidate.
 
 Set with an index edits that event; omitted position preserves its position.
 Without an index, position defaults to zero and the event at that position is
@@ -215,10 +216,13 @@ editor-owned phoneme service not initialized by the isolated VSM host. Call
 No editor singleton is synthesized and no fallback is run. Native audio boundary
 handling does not use that MIDI phoneme-reset branch. For projects with tracked
 archive extensions, timeline edits are restricted to MIDI/AI tracks without
-tempo, meter, controller-event or direct-pitch-item extensions. The bridge
-preflights an independent clone and validates entity identities before and after
-commit. Focused roundtrip and retained audio/controller/tempo guards passed in
-`artifacts/feature-acceptance-1de6c1d0abc4/summary.json`.
+controller-event or direct-pitch-item extensions. Tempo and meter event
+extensions are supported only when the corresponding complete native event map
+retains its identity, position and value; event kinds without extensions may
+change according to native behavior. An independent candidate is preflighted,
+and staged and committed identities are checked. Audio and event-changing
+extension cases remain guarded. The focused cases passed in
+`artifacts/feature-acceptance-970ae8c4e0d2/summary.json`.
 
 ## Selection
 
@@ -286,8 +290,9 @@ staged rollback path.
 For tracked `directPitches` item extensions, the selected tick retains its
 unknown fields on upsert; replacement creates new point metadata and clear
 removes the fields with the corresponding points. The full point set is
-validated against native output. Duplicate, split/join, clipboard, source-track
-merge and media capture remain guarded while these items are tracked.
+validated against native output. Tested note and part duplicates preserve the
+item metadata through native history and save/reopen; track duplicate,
+split/join, clipboard, source-track merge and media capture remain guarded.
 
 ## Part Performance
 

@@ -883,7 +883,17 @@ internal sealed partial class EngineHost
             if (from.Pointer == nint.Zero || to.Pointer == nint.Zero || from == to || state.Live.ContainsKey(to) ||
                 pending.Any(pair => pair.Target == to))
                 throw new InvalidDataException("project_preservation: duplicate native identity is invalid or already tracked.");
-            if (state.Live.ContainsKey(from)) pending.Add((from, to, parent));
+            if (state.Live.TryGetValue(from, out ArchiveEntry? sourceEntry))
+            {
+                if (sourceEntry.DirectPitch is not null)
+                {
+                    if (original is not WIVSMNote sourceNote || copy is not WIVSMNote copiedNote)
+                        throw new InvalidDataException("project_preservation: direct pitch duplicate owner is not a note.");
+                    ProjectArchiveNoteArrays.Validate(sourceEntry.DirectPitch, ScorePitchPoints(sourceNote));
+                    ProjectArchiveNoteArrays.Validate(sourceEntry.DirectPitch, ScorePitchPoints(copiedNote));
+                }
+                pending.Add((from, to, parent));
+            }
         }
         void CopyNotes(WIVSMMidiPart original, WIVSMMidiPart copy)
         {
@@ -961,7 +971,8 @@ internal sealed partial class EngineHost
             ArchiveEntry entry = state.Live[from];
             var controllers = entry.Controller?.ToDictionary(lane => lane.Key, lane => lane.Value.ToDictionary(
                 point => point.Key, point => new ProjectArchiveArrays.ControllerPoint(point.Value.Value, (JsonObject)point.Value.Extra.DeepClone())));
-            state.Live.Add(to, new ArchiveEntry((JsonObject)entry.Extra.DeepClone(), parent, controllers));
+            var directPitch = entry.DirectPitch is null ? null : ProjectArchiveNoteArrays.Clone(entry.DirectPitch);
+            state.Live.Add(to, new ArchiveEntry((JsonObject)entry.Extra.DeepClone(), parent, controllers, directPitch));
         }
     }
 

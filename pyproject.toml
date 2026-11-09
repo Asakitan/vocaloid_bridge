@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vocaloid6-mcp"
-version = "0.13.0"
+version = "0.14.0"
 description = "Local VOCALOID6 project editing and Windows desktop MCP bridge"
 requires-python = ">=3.11"
 dependencies = [

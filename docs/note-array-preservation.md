@@ -59,8 +59,8 @@ corrected transition probe and cleanup passed in
 Treat same-position upsert, replacement, split/join and history restoration as
 different identity decisions: neither matching solely on value nor copying
 metadata to generated points is justified by these observations. Unsupported
-transitions remain guarded while the restricted set/clear implementation is
-awaiting its extended-input validation.
+transitions were guarded at that observation checkpoint; the later restricted
+set/clear and note/part-copy validations are described below.
 
 ## Native clear boundary probe
 
@@ -115,9 +115,9 @@ tick retains its unknown fields, replacement creates fresh points without the
 old fields, and clear removes fields together with points. This is a bridge
 contract, not evidence of a native point object. Unknown point state is validated
 against the native note before mutation and again while staged and on history
-restoration; save overlays it only onto matching native output. Track, part and
-note duplicate/split/join, clipboard, source-track merge and media capture
-remain guarded while this state is tracked. The updated host passed the focused
+restoration; save overlays it only onto matching native output. Track duplicate,
+split/join, clipboard, source-track merge and media capture remain guarded while
+this state is tracked. The updated host passed the focused
 roundtrip and duplicate-tick rejection in
 `artifacts/feature-acceptance-1de6c1d0abc4/summary.json`. A mixed controller and
 direct-pitch extension fixture retained both fields and preserved the respective
@@ -125,3 +125,13 @@ guards in `artifacts/feature-acceptance-97ee96429bd9/summary.json`.
 An emptied tracked map remains attached for the session so undo can restore the
 extensions; its operation restrictions remain until that session is reopened
 from a saved project with no remaining direct-pitch item extensions.
+
+The `note.duplicate` and `part.duplicate` paths now validate the complete source
+and copied native point sets and deep-copy item metadata into the returned note
+identities. Child notes in a part are matched by unique semantic signatures,
+not collection order. The synthetic two-note, four-marker case in
+`artifacts/feature-acceptance-970ae8c4e0d2/summary.json` passed source checks,
+undo/redo and save/reopen. An ambiguous-signature fixture was rejected at open,
+not on the duplicate path. Track duplicate and split/join remain guarded;
+generated `ZeroPitch` points and negative ticks are not assigned metadata by
+guessing their provenance.

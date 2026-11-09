@@ -1,4 +1,3 @@
-using System.IO;
 using System.Text.Json.Nodes;
 
 internal sealed partial class EngineHost
@@ -28,8 +27,9 @@ internal sealed partial class EngineHost
         {
             int destination = checked((int)(position + offsetTick));
             JsonObject extra = sourceState?.Tempo is not null ? sourceState.Tempo[position].Extra : value.Extra;
-            if (!result.TryAdd(destination, new(destination, value.Value, (JsonObject)extra.DeepClone())))
-                throw new InvalidDataException("project_preservation: tempo merge destination conflicts with target identity.");
+            // Native PasteTempo replaces an event at the destination. Its
+            // imported fields therefore replace the former event's fields too.
+            result[destination] = new(destination, value.Value, (JsonObject)extra.DeepClone());
         }
         return result;
     }

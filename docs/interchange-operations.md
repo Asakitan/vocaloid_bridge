@@ -256,16 +256,20 @@ session closes, even after their history branch is discarded.
 
 When either map contains supported `tempo.events` extensions, the merge uses
 an independent candidate and explicit position mappings. Replacement maps the
-source events only; non-replacement retains target events and offsets source
-positions, rejecting every shared destination. Only unknown fields are copied,
+source events only; non-replacement retains uncollided target events and offsets
+source positions. At a shared destination, the source event and its unknown
+fields replace the target event and its fields, matching observed native paste
+semantics rather than merging two payloads. Only unknown fields are copied,
 and the complete native position/value result must match the planned map.
 Metadata changes require an actual native history entry and participate in the
 existing transaction journal. Source and target metadata remain independent.
 `artifacts/feature-acceptance-5f7c71ba55ed/summary.json` verifies source
-extensions with non-conflicting offset and replacement, conflict rejection,
-undo/redo and reopen on a synthetic AI project. The target-extension merge and
-undo case passed in `artifacts/feature-acceptance-0f5180183d62/summary.json`.
-Non-replacement shared tick destinations remain rejected, including tick zero.
+extensions with non-conflicting offset and replacement, and the historical
+collision guard. The target-extension merge and undo case passed in
+`artifacts/feature-acceptance-0f5180183d62/summary.json`. The later collision
+cases in `artifacts/feature-acceptance-d49e68e1f57f/summary.json` cover source
+and target fields, same-value and tick-zero collisions, undo/redo, reopen, and
+source-file protection. These are bounded synthetic fixtures.
 Time-signature extension merge replays the installed managed wrapper's native
 paste algorithm on an independent target snapshot, recording the destination
 bar for each source event immediately before native duplication. This also

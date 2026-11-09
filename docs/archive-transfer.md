@@ -68,7 +68,7 @@ guards pending integration and a focused native acceptance run; it is not yet
 evidence of clipboard or merge support.
 
 Direct-pitch-item extension state is bound to its owning native note for the
-tested same-note edits. Clipboard copy/cut/paste and source-track merge remain
+tested same-note edits and note/part duplicates. Clipboard copy/cut/paste and source-track merge remain
 guarded while that state is tracked; the transfer helper also rejects a
 direct-pitch-bearing source entry rather than discarding its metadata. The
 focused note fixture in `artifacts/feature-acceptance-1de6c1d0abc4/summary.json`

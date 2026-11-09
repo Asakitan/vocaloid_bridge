@@ -332,6 +332,13 @@ passing. Its subsequent locked-file and import/history/reopen assertions were
 not reached. Automatic review rejected a request to remove the guard because the
 ordinary-clip probe and lack of rebuilt end-to-end evidence do not establish
 that archive extensions survive; losing extension metadata remains the risk.
-The guard remains unchanged. The older `preservation.media_entities` case still
+The guard remains unchanged. A later independent private-desktop probe on a
+disposable archive-bearing AI clip found that native property `Save(true)` left
+the `.vsclip` bytes and its archive metadata unchanged, but removed an injected
+unknown nested field from `property.json`; a locked save left the tested files
+unchanged. See `artifacts/feature-acceptance-39dc398383e1/summary.json` and
+`docs/media-update-probe-19.md`. This exposes an additional property-field
+preservation issue, including for ordinary native property writes, and does not
+establish bridge update or crash atomicity. The older `preservation.media_entities` case still
 expects this rejection and would need reconciliation if the guard is changed
 through an approved, validated implementation.

@@ -138,7 +138,6 @@ async def note_pitch_extension_roundtrip(check):
                   "Rejected direct-pitch merge changed target")
     v.require(await check.edit(sid, "history.status") == history, "Rejected transfer changed source history")
     for operation, options in (
-        ("note.duplicate", {**target, "start_tick": 1200}),
         ("note.split", {**target, "split_tick": 480}),
         ("note.join", {"track_index": 0, "part_index": 0, "note_indices": [0, 1]}),
         ("time.insert", {"start_tick": 20000, "duration_tick": 480, "include_tempo": False}),
@@ -262,6 +261,113 @@ async def note_pitch_mixed_controller_guard(check):
                   "Mixed extension save lost metadata")
     finally:
         await check.close(sid)
+
+
+@v.feature("preservation.note_pitch_copy_roundtrip", "preservation", "score_compose", "project_edit", "project_save", "project_open")
+async def note_pitch_copy_roundtrip(check):
+    seed = await check.call("score_compose", output_name=check.output("pitch-copy-seed"), title="Pitch copy",
+                            bpm=120, notes=[{"start": i, "duration": 0.6, "pitch": pitch,
+                            "lyric": "あ", "phoneme": "a", "lang_id": 0} for i, pitch in enumerate((60, 64))])
+    sid = seed["native_session"]["session_id"]
+    scope = {"track_index": 0, "part_index": 0}
+    for index in range(2):
+        await check.edit(sid, "pitch.set", **scope, note_index=index, replace=True,
+                         points=[{"tick": 100, "value": 60 + index}, {"tick": 200, "value": 62 + index}])
+    sequence, source = await check.save(sid, "pitch-copy-native")
+    await check.close(sid)
+    notes = sequence["tracks"][0]["parts"][0]["notes"]
+    v.require(len(notes) == 2, "Expected two source notes")
+    for ni, note in enumerate(notes):
+        for pi, point in enumerate(note["directPitches"]):
+            point["x_identity"] = {"note": ni, "point": pi, "nested": [ni, pi, True]}
+    expected = [json.loads(json.dumps(n["directPitches"])) for n in notes]
+    _, members = v.read_vpr(source)
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    fixture = v.ROOT / "output" / check.output("pitch-copy-extended")
+    with zipfile.ZipFile(fixture, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    original = fixture.read_bytes()
+
+    def canonical(points):
+        return sorted(points, key=lambda item: item["pos"])
+    def check_parts(data, operation, copied):
+        parts = data["tracks"][0]["parts"]
+        v.require(len(parts) == (2 if copied and operation == "part.duplicate" else 1), "Unexpected part count", parts)
+        source_notes = parts[0]["notes"]
+        v.require(len(source_notes) == (3 if copied and operation == "note.duplicate" else 2), "Unexpected source note count")
+        for index in range(2):
+            v.require(canonical(source_notes[index]["directPitches"]) == canonical(expected[index]), "Source points changed")
+        if copied and operation == "note.duplicate":
+            v.require(canonical(source_notes[2]["directPitches"]) == canonical(expected[0]), "Copied note metadata differs")
+        if copied and operation == "part.duplicate":
+            v.require(len(parts[1]["notes"]) == 2, "Copied part note count differs")
+            for index in range(2):
+                v.require(canonical(parts[1]["notes"][index]["directPitches"]) == canonical(expected[index]), "Copied part metadata differs")
+
+    for operation in ("note.duplicate", "part.duplicate"):
+        sid = (await check.call("project_open", path=str(fixture)))["session_id"]
+        try:
+            options = {**scope, "start_tick": 1200 if operation == "note.duplicate" else 9600}
+            if operation == "note.duplicate": options["note_index"] = 0
+            await check.edit(sid, operation, **options)
+            result, saved = await check.save(sid, "pitch-copy-" + operation.replace(".", "-"))
+            check_parts(result, operation, True)
+            await check.edit(sid, "undo")
+            undone, _ = await check.save(sid, "pitch-copy-undo")
+            check_parts(undone, operation, False)
+            await check.edit(sid, "redo")
+            redone, saved = await check.save(sid, "pitch-copy-redo")
+            check_parts(redone, operation, True)
+            reopened = (await check.call("project_open", path=str(saved)))["session_id"]
+            try:
+                roundtrip, _ = await check.save(reopened, "pitch-copy-reopened")
+                check_parts(roundtrip, operation, True)
+            finally:
+                await check.close(reopened)
+        finally:
+            await check.close(sid)
+        v.require(fixture.read_bytes() == original, "Copy modified source archive")
+    check.evidence("copy_fixture", {"path": str(fixture), "source_unchanged": True})
+
+
+@v.feature("preservation.note_pitch_copy_ambiguous_signature", "preservation", "score_compose", "project_edit", "project_save", "project_open")
+async def note_pitch_copy_ambiguous_signature(check):
+    seed = await check.call("score_compose", output_name=check.output("pitch-copy-ambiguous-seed"),
+                            title="Ambiguous pitch copy", bpm=120,
+                            notes=[{"start": 0, "duration": 0.6, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+    await check.edit(sid, "pitch.set", track_index=0, part_index=0, note_index=0,
+                     points=[{"tick": 100, "value": 60}])
+    sequence, path = await check.save(sid, "pitch-copy-ambiguous-native")
+    await check.close(sid)
+    notes = sequence["tracks"][0]["parts"][0]["notes"]
+    notes[0]["directPitches"][0]["x_identity"] = "first"
+    duplicate = json.loads(json.dumps(notes[0]))
+    duplicate["directPitches"][0]["x_identity"] = "second"
+    notes.append(duplicate)
+    _, members = v.read_vpr(path)
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    fixture = v.ROOT / "output" / check.output("pitch-copy-ambiguous")
+    with zipfile.ZipFile(fixture, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    original = fixture.read_bytes()
+    try:
+        sid = (await check.call("project_open", path=str(fixture)))["session_id"]
+    except v.ToolFailure as error:
+        v.require("project_preservation" in str(error).lower(), "Unexpected open error", str(error))
+        check.evidence("rejected_at_open", str(error))
+    else:
+        try:
+            before, _ = await check.save(sid, "pitch-copy-ambiguous-before")
+            history = await check.edit(sid, "history.status")
+            await check.rejected("project_edit", "ambiguous|correspondence", session_id=sid,
+                                 operation="part.duplicate", options={"track_index": 0, "part_index": 0, "start_tick": 9600})
+            after, _ = await check.save(sid, "pitch-copy-ambiguous-after")
+            v.require(before == after and history == await check.edit(sid, "history.status"), "Ambiguous copy changed state")
+            check.evidence("rejected_at_copy", True)
+        finally:
+            await check.close(sid)
+    v.require(fixture.read_bytes() == original, "Ambiguous fixture changed")
 
 
 if __name__ == "__main__":

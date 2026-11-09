@@ -161,8 +161,9 @@ BPM to 150 BPM, removed the event at 1200, and moved the event at 2000 to
 cases restored the exact saved track/master snapshots on undo and redo. These
 are observations of serialized values, not proof of native event identity or of
 extension migration. Nonaligned meter mapping, collision ownership, controller
-identity, failure rollback, and extension-bearing clone/reopen still require
-independent proof; event-extension time edits remain guarded.
+identity, failure rollback, and extension-bearing clone/reopen required
+independent proof at that checkpoint. Changed event-extension time edits remain
+guarded; the later unchanged-map path is described below.
 
 The separate private-desktop pointer probe is reproducible by running the
 boundary case above and then `python tools/run_timeline_identity_probe.py
@@ -206,8 +207,8 @@ These are bounded observations: the staged candidate has no notification log
 from which to distinguish a removed object and a newly allocated object that
 reuses its address. The probe does not establish same-tick overwrite semantics,
 nonaligned meter collisions, or address reuse, so those remain explicit blockers
-for opening timeline edits with event extensions. The existing audio and controller
-transfer guards are unchanged.
+for timeline edits that change extension-bearing event maps. The existing audio
+and controller transfer guards are unchanged.
 
 A future timeline transaction must capture native identities and known values
 before mutation, apply the operation to a candidate, establish a unique
@@ -218,13 +219,16 @@ surviving native object, not merely to its destination tick. Any unknown or
 ambiguous correspondence must roll back. Additional evidence is needed for
 removed whole parts and their descendants, meter collisions and generated
 boundary events, native callback sequences and address reuse, mixed multiple
-tracks, extension-bearing rollback and clone/reopen. These observations do not justify opening tempo or meter event extension routes.
-The bridge now implements a narrower MIDI/AI entity-only route: it excludes audio
-tracks, tempo, meter, controller-event and direct-pitch-item extensions,
-preflights an independent clone and checks retained track, part and note
-identities and expected positions before and after commit. The focused case in
-`artifacts/feature-acceptance-1de6c1d0abc4/summary.json` passes movement, whole
-part deletion, prior history, undo/redo, clone, reopen and source preservation.
+tracks, extension-bearing rollback and clone/reopen. These observations do not
+justify mapping changed or generated tempo and meter extensions.
+The bridge implements a restricted MIDI/AI route: it excludes audio tracks,
+controller-event and direct-pitch-item extensions, preflights an independent
+clone and checks retained track, part and note identities and expected positions
+before and after commit. A tempo or meter map carrying extensions must retain
+all native event identities, positions and values through the transaction;
+unextended event kinds may change. The focused cases in
+`artifacts/feature-acceptance-970ae8c4e0d2/summary.json` pass tested unchanged
+event maps, entity movement/deletion, history, reopen and source preservation.
 The controller-array case also checks timeline rejection, and
 `preservation.timeline_audio_guard` prepares an unextended project with an owned
 synthetic audio asset before adding an entity extension, then checks that rejected
@@ -253,8 +257,8 @@ copied from the source. The focused run
 `artifacts/feature-acceptance-1fc72536a94a/` verified unknown fields in
 `masterTrack.loop` and `note.exp`, including escaped pointer characters and a
 structured value, while a native Accent change to 51 remained intact across
-save, reopen and source-independent clone. Unknown fields inside non-entity
-arrays other than tempo events and the pending time-signature implementation
+save, reopen and source-independent clone. Later work added restricted tempo,
+time-signature, controller and direct-pitch array paths; other non-entity arrays
 remain outside this support.
 
 `artifacts/feature-acceptance-f0e3121b86c8/` additionally verifies retained
@@ -331,7 +335,7 @@ new event starts without unknown fields rather than inheriting the earlier
 event's payload. Unextended lanes retain native split/join behavior. Tracked
 controller maps are checked before a native mutation commits.
 
-### Timeline edit investigation (event-extension guards retained)
+### Timeline edit investigation (changed event-extension guards retained)
 
 `preservation.timeline_native_probe` exercises private AI projects with notes,
 controller points, nonzero tempo events and a meter change, both values of
@@ -345,15 +349,17 @@ stayed there. This is one native fixture, not a general identity rule. The
 crossing MIDI/AI boundaries were rejected before mutation; the probe checks
 project snapshots and history. Both history directions passed in this fixture.
 
-`preservation.timeline_extension_guard` is a red baseline, not evidence of
-extension-aware timeline support. The passing
+The historical `preservation.timeline_extension_guard` was a guard baseline,
+not evidence of extension-aware timeline support. The passing
 `artifacts/feature-acceptance-46720e1ebe0a/summary.json` checks both edits and
 both tempo options on a project with track, part, note, tempo and meter unknown
 fields: the event-extension guard rejects them, history remains unchanged, and the
 source, save, clone and reopen retain the fields. Controller-extension and
 extended-audio write guards remain unchanged. Identifying deleted/recreated or
 collision-prone tempo and meter identities and controller lanes needs further
-native evidence before these timeline edits can be enabled for tracked data.
+native evidence before changed or generated extension-bearing events can be
+mapped. The current unchanged-map path and its distinct scope are described
+above and in `docs/timeline-event-mapping-19.md`.
 
 ### MIDI media entity metadata
 

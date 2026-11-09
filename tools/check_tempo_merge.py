@@ -42,10 +42,15 @@ async def tempo_merge(check):
             v.require(actual["masterTrack"]["tempo"]["events"] == events, "Reopen changed tempo metadata")
         finally:
             await check.close(reopened)
-        before = await check.call("project_status", session_id=target)
-        await check.rejected("project_merge", "tempo merge destination conflicts", session_id=target, path=str(source),
-                             include_tracks=False, include_tempo=True, offset_tick=3840)
-        v.require(await check.call("project_status", session_id=target) == before, "Tempo conflict changed target")
+        await check.call("project_merge", session_id=target, path=str(source), include_tracks=False,
+                         include_tempo=True, offset_tick=3840)
+        repeated, _ = await check.save(target, "tempo-merge-repeated")
+        v.require(repeated["masterTrack"]["tempo"]["events"] == events,
+                  "Repeated tempo collision changed the source fields")
+        await check.edit(target, "undo")
+        repeated_undo, _ = await check.save(target, "tempo-merge-repeated-undo")
+        v.require(repeated_undo["masterTrack"]["tempo"]["events"] == events,
+                  "Repeated tempo collision undo changed earlier metadata")
 
     async with check.project() as target:
         await check.edit(target, "tempo.set", start_tick=960, bpm=90)

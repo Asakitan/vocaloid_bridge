@@ -2,7 +2,7 @@ using System.IO;
 using System.Text.Json.Nodes;
 using Yamaha.VOCALOID.VSM;
 
-// Integration is deliberately restricted to same-note operations. The central
+// The central
 // archive journal owns snapshots and must call these hooks at its boundaries.
 internal sealed partial class EngineHost
 {
@@ -37,7 +37,7 @@ internal sealed partial class EngineHost
     private void RequireArchiveNoteArrayOperation(EngineSession session, string operation)
     {
         if (!ArchiveHasNoteArrayState(session)) return;
-        if (operation is not ("note.update" or "pitch.set" or "pitch.clear" or "undo" or "redo" or "history.rollback"))
+        if (operation is not ("note.update" or "note.duplicate" or "part.duplicate" or "pitch.set" or "pitch.clear" or "undo" or "redo" or "history.rollback"))
             throw new InvalidOperationException("project_preservation: direct pitch extension operation has no verified identity mapping: " + operation);
     }
 

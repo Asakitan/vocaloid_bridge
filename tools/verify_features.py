@@ -550,7 +550,7 @@ async def score_performance_catalog(check: Acceptance) -> None:
 @feature("score.automation", "score", "project_edit", "project_create", "project_save", "project_open")
 async def score_automation(check: Acceptance) -> None:
     identifier = (await check.call("project_create", title="Automation acceptance", bpm=120))["session_id"]
-    await check.edit(identifier, "track.create", type="Midi", name="Automation track")
+    await check.edit(identifier, "track.create", type="MidiAi", name="Automation track")
     saved_points = {}
     for scope in ("track_volume", "track_pan", "master_volume"):
         options = {"scope": scope} if scope == "master_volume" else {"scope": scope, "track_index": 0}

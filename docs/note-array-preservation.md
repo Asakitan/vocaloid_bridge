@@ -115,8 +115,8 @@ tick retains its unknown fields, replacement creates fresh points without the
 old fields, and clear removes fields together with points. This is a bridge
 contract, not evidence of a native point object. Unknown point state is validated
 against the native note before mutation and again while staged and on history
-restoration; save overlays it only onto matching native output. Track duplicate,
-split/join, clipboard, source-track merge and media capture remain guarded while
+restoration; save overlays it only onto matching native output. Split/join,
+deletion, clipboard, source-track merge and media capture remain guarded while
 this state is tracked. The updated host passed the focused
 roundtrip and duplicate-tick rejection in
 `artifacts/feature-acceptance-1de6c1d0abc4/summary.json`. A mixed controller and
@@ -132,6 +132,10 @@ identities. Child notes in a part are matched by unique semantic signatures,
 not collection order. The synthetic two-note, four-marker case in
 `artifacts/feature-acceptance-970ae8c4e0d2/summary.json` passed source checks,
 undo/redo and save/reopen. An ambiguous-signature fixture was rejected at open,
-not on the duplicate path. Track duplicate and split/join remain guarded;
-generated `ZeroPitch` points and negative ticks are not assigned metadata by
-guessing their provenance.
+not on the duplicate path. The later track duplication and identity-preserving
+track update/reorder and part update/move cases passed in
+`artifacts/feature-acceptance-5b8f6372f11d/summary.json`; cross-track part move,
+including a pre-mutation ambiguous-destination rejection, passed in
+`artifacts/feature-acceptance-17fec2e1ace1/summary.json`. Split/join and deletion
+remain guarded; generated `ZeroPitch` points and negative ticks are not assigned
+metadata by guessing their provenance.

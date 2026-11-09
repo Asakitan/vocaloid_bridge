@@ -902,7 +902,7 @@ async def timeline_extension_guard(check):
     sid = (await check.call("project_open", path=str(source)))["session_id"]
     history = await check.edit(sid, "history.status")
     # With tempo inclusion, these fixtures move or delete the tick-1920 event.
-    for operation in ("time.insert", "time.delete"):
+    for operation in ("time.delete",):
         await check.rejected("project_edit", "identity transaction", session_id=sid, operation=operation,
             options={"start_tick": 1000, "duration_tick": 500, "include_tempo": True})
         v.require(await check.edit(sid, "history.status") == history, "Guard changed native history")
@@ -1068,7 +1068,7 @@ async def timeline_event_unchanged(check):
     try:
         before, _ = await check.save(sid, "event-map-before")
         history = await check.edit(sid, "history.status")
-        for operation, include in (("time.insert", False), ("time.insert", True), ("time.delete", True)):
+        for operation, include in (("time.delete", True),):
             await check.rejected("project_edit", "timeline event", session_id=sid, operation=operation,
                 options={"start_tick": 1000, "duration_tick": 500, "include_tempo": include})
             v.require(await check.edit(sid, "history.status") == history, "Rejected event map edit changed history")
@@ -1119,6 +1119,62 @@ async def timeline_event_unchanged(check):
     finally:
         await check.close(sid)
     v.require(tempo_source.read_bytes() == original_tempo_source, "Tempo-only timeline edit changed source archive")
+
+# timeline move probe
+@v.feature("preservation.timeline_event_move_20", "preservation", "score_compose", "project_open", "project_edit", "project_save")
+async def timeline_event_move_20(check):
+    seed = await check.call("score_compose", output_name=check.output("move-seed"), title="Move", bpm=120, notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+    await check.edit(sid, "part.move", track_index=0, part_index=0, start_tick=7680)
+    for tick, bpm in ((1000, 130), (1200, 140), (1500, 150), (2000, 160)):
+        await check.edit(sid, "tempo.set", start_tick=tick, bpm=bpm)
+    await check.edit(sid, "time_signature.set", bar=2, numerator=3, denominator=4)
+    await check.edit(sid, "time_signature.set", bar=4, numerator=5, denominator=8)
+    seq, path = await check.save(sid, "move-native")
+    await check.close(sid)
+    _, members = v.read_vpr(path)
+    for kind in ("tempo", "timeSig"):
+        for i, event in enumerate(seq["masterTrack"][kind]["events"]): event[KEY] = kind + str(i)
+    members["Project/sequence.json"] = json.dumps(seq, ensure_ascii=False).encode("utf-8")
+    source = v.ROOT / "output" / check.output("move-input")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    original = source.read_bytes()
+    for include_tempo in (False, True):
+        sid = (await check.call("project_open", path=str(source)))["session_id"]
+        try:
+            before, _ = await check.save(sid, "move-before")
+            await check.edit(sid, "time.insert", start_tick=1000, duration_tick=500, include_tempo=include_tempo)
+            after, out = await check.save(sid, "move-after")
+            old = before["masterTrack"]["tempo"]["events"]
+            new = after["masterTrack"]["tempo"]["events"]
+            v.require([(e["pos"], e[KEY]) for e in new] ==
+                      [(e["pos"] + (500 if include_tempo and e["pos"] > 1000 else 0), e[KEY]) for e in old],
+                      "Tempo metadata move differs")
+            old = before["masterTrack"]["timeSig"]["events"]
+            new = after["masterTrack"]["timeSig"]["events"]
+            v.require([(e["bar"], e[KEY]) for e in new] ==
+                      [(e["bar"] + (1 if e["bar"] > 0 else 0), e[KEY]) for e in old],
+                      "Meter metadata move differs")
+            await check.edit(sid, "undo")
+            undone, _ = await check.save(sid, "move-undo")
+            v.require(undone == before, "Move undo differs")
+            await check.edit(sid, "redo")
+            redone, out = await check.save(sid, "move-redo")
+            v.require(redone == after, "Move redo differs")
+            clone = (await check.call("project_clone", session_id=sid))["session_id"]
+            try:
+                copied, _ = await check.save(clone, "move-clone")
+                v.require(copied == after, "Move clone differs")
+            finally: await check.close(clone)
+            reopened = (await check.call("project_open", path=str(out)))["session_id"]
+            try:
+                restored, _ = await check.save(reopened, "move-reopen")
+                v.require(restored == after, "Move reopen differs")
+            finally: await check.close(reopened)
+        finally: await check.close(sid)
+    v.require(source.read_bytes() == original, "Move changed source")
+
 
 if __name__ == "__main__":
     raise SystemExit(v.main())

@@ -207,8 +207,8 @@ These are bounded observations: the staged candidate has no notification log
 from which to distinguish a removed object and a newly allocated object that
 reuses its address. The probe does not establish same-tick overwrite semantics,
 nonaligned meter collisions, or address reuse, so those remain explicit blockers
-for timeline edits that change extension-bearing event maps. The existing audio
-and controller transfer guards are unchanged.
+for timeline edits that delete or generate extension-bearing events. The existing
+audio and controller transfer guards are unchanged.
 
 A future timeline transaction must capture native identities and known values
 before mutation, apply the operation to a candidate, establish a unique
@@ -219,16 +219,17 @@ surviving native object, not merely to its destination tick. Any unknown or
 ambiguous correspondence must roll back. Additional evidence is needed for
 removed whole parts and their descendants, meter collisions and generated
 boundary events, native callback sequences and address reuse, mixed multiple
-tracks, extension-bearing rollback and clone/reopen. These observations do not
-justify mapping changed or generated tempo and meter extensions.
+tracks, extension-bearing rollback and clone/reopen. These observations alone do
+not justify mapping generated tempo and meter extensions.
 The bridge implements a restricted MIDI/AI route: it excludes audio tracks,
-controller-event and direct-pitch-item extensions, preflights an independent
+controller-event, direct-pitch-item and master-volume-item extensions, preflights an independent
 clone and checks retained track, part and note identities and expected positions
-before and after commit. A tempo or meter map carrying extensions must retain
-all native event identities, positions and values through the transaction;
-unextended event kinds may change. The focused cases in
-`artifacts/feature-acceptance-970ae8c4e0d2/summary.json` pass tested unchanged
-event maps, entity movement/deletion, history, reopen and source preservation.
+before and after commit. Insertion maps tested one-to-one tempo/meter event
+moves using the installed managed helper's move rules and checks native object
+identities, values and destinations. Deletion requires extension-bearing maps
+to remain unchanged; unextended event kinds may change. The focused cases in
+`artifacts/feature-acceptance-5b8f6372f11d/summary.json` pass insertion moves,
+unchanged deletion, entity movement, history, reopen and source preservation.
 The controller-array case also checks timeline rejection, and
 `preservation.timeline_audio_guard` prepares an unextended project with an owned
 synthetic audio asset before adding an entity extension, then checks that rejected
@@ -258,8 +259,8 @@ copied from the source. The focused run
 `masterTrack.loop` and `note.exp`, including escaped pointer characters and a
 structured value, while a native Accent change to 51 remained intact across
 save, reopen and source-independent clone. Later work added restricted tempo,
-time-signature, controller and direct-pitch array paths; other non-entity arrays
-remain outside this support.
+time-signature, controller, direct-pitch and master-volume event array paths;
+other non-entity arrays remain outside this support.
 
 `artifacts/feature-acceptance-f0e3121b86c8/` additionally verifies retained
 extensions across title, tempo, loop, tuning, batch-note, VoiceColor and vibrato
@@ -357,9 +358,22 @@ fields: the event-extension guard rejects them, history remains unchanged, and t
 source, save, clone and reopen retain the fields. Controller-extension and
 extended-audio write guards remain unchanged. Identifying deleted/recreated or
 collision-prone tempo and meter identities and controller lanes needs further
-native evidence before changed or generated extension-bearing events can be
-mapped. The current unchanged-map path and its distinct scope are described
-above and in `docs/timeline-event-mapping-19.md`.
+native evidence before deleted or generated extension-bearing events can be
+mapped. The current insertion-move and unchanged-deletion paths are described
+above and in `docs/timeline-move-20.md`.
+
+### Master volume event metadata
+
+`ProjectArchiveMasterAutomation.cs` binds unknown fields on master-volume events
+to their explicitly selected native ticks and values. Upsert preserves fields on
+an existing tick; replacement preserves existing selected events and tick zero,
+removes fields for removed events, and assigns no old fields to new events.
+History snapshots and output overlays validate the full native map. The focused
+case in `artifacts/feature-acceptance-5b8f6372f11d/summary.json` covers edit,
+removal/recreation, undo/redo, clone/reopen, duplicate ticks and source
+preservation. A mixed master-volume/tempo extension fixture passed in
+`artifacts/feature-acceptance-551c645ece17/summary.json`. Time edits with this
+state and track volume/pan event extensions remain guarded.
 
 ### MIDI media entity metadata
 

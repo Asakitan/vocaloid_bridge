@@ -28,6 +28,7 @@ import check_pitch_clear_boundaries
 import check_metadata_history
 import check_note_array_extensions
 import check_tempo_metadata_noop
+import check_master_automation_20
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining

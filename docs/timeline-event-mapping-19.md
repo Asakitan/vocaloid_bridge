@@ -2,7 +2,7 @@
 
 ## Scope and conclusion
 
-The old blanket guard has been narrowed for transactions where each extension-bearing tempo or time-signature map remains unchanged in native identity, position and value. Generated, deleted, moved or collided extension-bearing events remain guarded because their source-to-result metadata mapping is not established.
+The old blanket guard was first narrowed for transactions where each extension-bearing tempo or time-signature map remained unchanged in native identity, position and value. Session 20 subsequently added tested one-to-one insertion moves, described in `docs/timeline-move-20.md`. Generated, deleted or collided extension-bearing events remain guarded because their source-to-result metadata mapping is not established.
 
 ## Existing native evidence
 
@@ -20,8 +20,8 @@ A future probe must isolate event metadata on each relevant tempo and meter, cov
 
 ## Validated unchanged-map transaction
 
-The session 19 implementation retains extension metadata only when each extension-bearing native tempo or meter map has the same event pointers, positions and values across the staged and committed operation. Duplicate pointers or positions are rejected. Maps without extensions retain native edit behavior. The existing candidate preflight executes the same checks before the real edit; the real mutation uses the existing rollback path on staged failure. Controller, pitch-item and audio exclusions remain.
+The session 19 implementation retained extension metadata only when each extension-bearing native tempo or meter map had the same event pointers, positions and values across the staged and committed operation. Duplicate pointers or positions were rejected. Maps without extensions retained native edit behavior. Session 20 extends insertion to tested one-to-one event moves; deletion still requires an unchanged extended map. The candidate preflight executes checks before the real edit; the real mutation uses the existing rollback path on staged failure. Controller, pitch-item and audio exclusions remain.
 
-The `preservation.timeline_event_unchanged` case places distinct markers on each tempo and meter event and uses `[1000,1500)`: deletion with `include_tempo=false` is the unchanged-map positive case; both insertion modes and deletion with `include_tempo=true` are negative cases. It checks history and saved content after rejections, and positive undo, redo, save and reopen. A tempo-only extension case also verifies that an unextended meter map may change. The integrated native build and these cases passed in `artifacts/feature-acceptance-970ae8c4e0d2/summary.json`.
+The session 19 `preservation.timeline_event_unchanged` case placed distinct markers on each tempo and meter event and used `[1000,1500)`: deletion with `include_tempo=false` was the unchanged-map positive case; insertion and deletion with `include_tempo=true` were negative cases under the former guard. It checked history and saved content after rejections, and positive undo, redo, save and reopen. A tempo-only extension case also verified that an unextended meter map could change. The session 19 native build and these cases passed in `artifacts/feature-acceptance-970ae8c4e0d2/summary.json`; the current insertion cases use the session 20 movement contract.
 
 Old-host red baseline: `artifacts/feature-acceptance-6f72924aa999/preservation.timeline_event_unchanged.json` records all three negative edits rejected with unchanged saved content and history, followed by rejection of the intended `time.delete` / `include_tempo=false` positive case by the old blanket guard. The older `timeline_extension_guard` case now uses only `include_tempo=true` edits of `[1000,1500)`, which move its tick-1920 tempo; separate controller/audio/pitch protections are untouched.

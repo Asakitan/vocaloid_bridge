@@ -330,6 +330,181 @@ async def note_pitch_copy_roundtrip(check):
     check.evidence("copy_fixture", {"path": str(fixture), "source_unchanged": True})
 
 
+@v.feature("preservation.note_pitch_track_copy_roundtrip", "preservation", "score_compose", "project_edit", "project_save", "project_open")
+async def note_pitch_track_copy_roundtrip(check):
+    seed = await check.call("score_compose", output_name=check.output("pitch-copy-seed"), title="Pitch copy",
+                            bpm=120, notes=[{"start": i, "duration": 0.6, "pitch": pitch,
+                            "lyric": "あ", "phoneme": "a", "lang_id": 0} for i, pitch in enumerate((60, 64))])
+    sid = seed["native_session"]["session_id"]
+    scope = {"track_index": 0, "part_index": 0}
+    for index in range(2):
+        await check.edit(sid, "pitch.set", **scope, note_index=index, replace=True,
+                         points=[{"tick": 100, "value": 60 + index}, {"tick": 200, "value": 62 + index}])
+    sequence, source = await check.save(sid, "pitch-copy-native")
+    await check.close(sid)
+    notes = sequence["tracks"][0]["parts"][0]["notes"]
+    v.require(len(notes) == 2, "Expected two source notes")
+    for ni, note in enumerate(notes):
+        for pi, point in enumerate(note["directPitches"]):
+            point["x_identity"] = {"note": ni, "point": pi, "nested": [ni, pi, True]}
+    expected = [json.loads(json.dumps(n["directPitches"])) for n in notes]
+    _, members = v.read_vpr(source)
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    fixture = v.ROOT / "output" / check.output("pitch-copy-extended")
+    with zipfile.ZipFile(fixture, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    original = fixture.read_bytes()
+
+    def canonical(points):
+        return sorted(points, key=lambda item: item["pos"])
+    def check_parts(data, operation, copied):
+        tracks = data["tracks"]
+        v.require(len(tracks) == (2 if copied else 1), "Unexpected track count")
+        parts = tracks[0]["parts"]
+        if copied:
+            copied_notes = tracks[1]["parts"][0]["notes"]
+            v.require(len(copied_notes) == 2, "Copied track note count differs")
+            for index in range(2):
+                v.require(canonical(copied_notes[index]["directPitches"]) == canonical(expected[index]), "Copied track metadata differs")
+        v.require(len(parts) == (2 if copied and operation == "part.duplicate" else 1), "Unexpected part count", parts)
+        source_notes = parts[0]["notes"]
+        v.require(len(source_notes) == (3 if copied and operation == "note.duplicate" else 2), "Unexpected source note count")
+        for index in range(2):
+            v.require(canonical(source_notes[index]["directPitches"]) == canonical(expected[index]), "Source points changed")
+        if copied and operation == "note.duplicate":
+            v.require(canonical(source_notes[2]["directPitches"]) == canonical(expected[0]), "Copied note metadata differs")
+        if copied and operation == "part.duplicate":
+            v.require(len(parts[1]["notes"]) == 2, "Copied part note count differs")
+            for index in range(2):
+                v.require(canonical(parts[1]["notes"][index]["directPitches"]) == canonical(expected[index]), "Copied part metadata differs")
+
+    for operation in ("track.duplicate",):
+        sid = (await check.call("project_open", path=str(fixture)))["session_id"]
+        try:
+            options = {"track_index": 0}
+            if operation == "note.duplicate": options["note_index"] = 0
+            await check.edit(sid, operation, **options)
+            result, saved = await check.save(sid, "pitch-copy-" + operation.replace(".", "-"))
+            check_parts(result, operation, True)
+            await check.edit(sid, "undo")
+            undone, _ = await check.save(sid, "pitch-copy-undo")
+            check_parts(undone, operation, False)
+            await check.edit(sid, "redo")
+            redone, saved = await check.save(sid, "pitch-copy-redo")
+            check_parts(redone, operation, True)
+            reopened = (await check.call("project_open", path=str(saved)))["session_id"]
+            try:
+                roundtrip, _ = await check.save(reopened, "pitch-copy-reopened")
+                check_parts(roundtrip, operation, True)
+            finally:
+                await check.close(reopened)
+        finally:
+            await check.close(sid)
+        v.require(fixture.read_bytes() == original, "Copy modified source archive")
+    check.evidence("copy_fixture", {"path": str(fixture), "source_unchanged": True})
+
+
+async def pitch_identity_lifecycle(check, operation, options):
+    seed = await check.call("score_compose", output_name=check.output("identity-seed"), title="Identity", bpm=120,
+        notes=[{"start": i, "duration": 0.6, "pitch": pitch, "lyric": "あ", "phoneme": "a", "lang_id": 0} for i, pitch in enumerate((60, 64))])
+    sid = seed["native_session"]["session_id"]
+    for i in range(2):
+        await check.edit(sid, "pitch.set", track_index=0, part_index=0, note_index=i, replace=True,
+                         points=[{"tick": 100, "value": 60+i}])
+    await check.edit(sid, "track.update", track_index=0, name="Original")
+    await check.edit(sid, "track.duplicate", track_index=0, name="Other")
+    sequence, source = await check.save(sid, "identity-native")
+    await check.close(sid)
+    for ti, track in enumerate(sequence["tracks"]):
+        for ni, note in enumerate(track["parts"][0]["notes"]):
+            note["directPitches"][0]["x_identity"] = {"track": ti, "note": ni}
+    _, members = v.read_vpr(source)
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    fixture = v.ROOT / "output" / check.output("identity-extended")
+    with zipfile.ZipFile(fixture, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    original = fixture.read_bytes()
+    def verify(data, changed):
+        tracks = data["tracks"]
+        expected_order = [1, 0] if changed and operation == "track.reorder" else [0, 1]
+        v.require(len(tracks) == 2, "Unexpected track count")
+        cross_move = operation == "part.move" and options.get("to_track_index") == 1
+        for track, ti in zip(tracks, expected_order):
+            if cross_move and changed:
+                expected_parts = [] if ti == 0 else [1, 0]
+            else:
+                expected_parts = [ti]
+            parts = track.get("parts", [])
+            v.require(len(parts) == len(expected_parts), "Unexpected part count", parts)
+            for part, origin in zip(parts, expected_parts):
+                v.require(len(part["notes"]) == 2, "Unexpected note count")
+                for ni, note in enumerate(part["notes"]):
+                    v.require(note["directPitches"][0]["x_identity"] == {"track": origin, "note": ni}, "Marker attached to wrong note")
+        return data
+    sid = (await check.call("project_open", path=str(fixture)))["session_id"]
+    try:
+        before, _ = await check.save(sid, "identity-before")
+        verify(before, False)
+        await check.edit(sid, operation, **options)
+        after, _ = await check.save(sid, "identity-after")
+        verify(after, True)
+        v.require(after != before, "Edit did not change the sequence")
+        await check.edit(sid, "undo")
+        undone, _ = await check.save(sid, "identity-undo")
+        verify(undone, False)
+        v.require(undone == before, "Undo differs from initial sequence")
+        await check.rejected("project_edit", "range|index|track", session_id=sid, operation=operation,
+                             options={**options, "track_index": 999})
+        rejected, _ = await check.save(sid, "identity-rejected")
+        v.require(rejected == before, "Rejected operation changed sequence")
+        if operation == "part.move" and options.get("to_track_index") == 1:
+            await check.rejected("project_edit", "range|index|track", session_id=sid, operation=operation,
+                                 options={**options, "to_track_index": 999})
+            await check.rejected("project_edit", "overlap|occupied|move|failed|range", session_id=sid, operation=operation,
+                                 options={**options, "start_tick": 0})
+            rejected_target, _ = await check.save(sid, "identity-target-rejected")
+            v.require(rejected_target == before, "Rejected target changed sequence")
+        await check.edit(sid, "redo")
+        redone, saved = await check.save(sid, "identity-redo")
+        verify(redone, True)
+        v.require(redone == after, "Redo differs from edited sequence")
+        reopened = (await check.call("project_open", path=str(saved)))["session_id"]
+        try:
+            reopened_data, _ = await check.save(reopened, "identity-reopened")
+            verify(reopened_data, True)
+            v.require(reopened_data == after, "Reopened sequence differs")
+        finally:
+            await check.close(reopened)
+    finally:
+        await check.close(sid)
+    v.require(fixture.read_bytes() == original, "Source fixture changed")
+
+
+@v.feature("preservation.note_pitch_track_update", "preservation", "score_compose", "project_edit", "project_save", "project_open")
+async def note_pitch_track_update(check):
+    await pitch_identity_lifecycle(check, "track.update", {"track_index": 0, "name": "Changed"})
+
+
+@v.feature("preservation.note_pitch_track_reorder", "preservation", "score_compose", "project_edit", "project_save", "project_open")
+async def note_pitch_track_reorder(check):
+    await pitch_identity_lifecycle(check, "track.reorder", {"track_index": 0, "to_index": 1})
+
+
+@v.feature("preservation.note_pitch_part_update", "preservation", "score_compose", "project_edit", "project_save", "project_open")
+async def note_pitch_part_update(check):
+    await pitch_identity_lifecycle(check, "part.update", {"track_index": 0, "part_index": 0, "name": "Changed part"})
+
+
+@v.feature("preservation.note_pitch_part_move", "preservation", "score_compose", "project_edit", "project_save", "project_open")
+async def note_pitch_part_move(check):
+    await pitch_identity_lifecycle(check, "part.move", {"track_index": 0, "part_index": 0, "start_tick": 9600})
+
+
+@v.feature("preservation.note_pitch_part_move_cross_track", "preservation", "score_compose", "project_edit", "project_save", "project_open")
+async def note_pitch_part_move_cross_track(check):
+    await pitch_identity_lifecycle(check, "part.move", {"track_index": 0, "part_index": 0, "to_track_index": 1, "start_tick": 9600})
+
+
 @v.feature("preservation.note_pitch_copy_ambiguous_signature", "preservation", "score_compose", "project_edit", "project_save", "project_open")
 async def note_pitch_copy_ambiguous_signature(check):
     seed = await check.call("score_compose", output_name=check.output("pitch-copy-ambiguous-seed"),

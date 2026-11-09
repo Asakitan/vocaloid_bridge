@@ -37,7 +37,7 @@ internal sealed partial class EngineHost
     private void RequireArchiveNoteArrayOperation(EngineSession session, string operation)
     {
         if (!ArchiveHasNoteArrayState(session)) return;
-        if (operation is not ("note.update" or "note.duplicate" or "part.duplicate" or "pitch.set" or "pitch.clear" or "undo" or "redo" or "history.rollback"))
+        if (operation is not ("note.update" or "note.duplicate" or "part.duplicate" or "track.duplicate" or "track.update" or "track.reorder" or "part.update" or "part.move" or "pitch.set" or "pitch.clear" or "undo" or "redo" or "history.rollback"))
             throw new InvalidOperationException("project_preservation: direct pitch extension operation has no verified identity mapping: " + operation);
     }
 
@@ -46,6 +46,19 @@ internal sealed partial class EngineHost
         if (!ArchiveHasNoteArrayState(session)) return;
         if (domain == "clipboard" && operation is ("copy" or "cut" or "paste"))
             throw new InvalidOperationException("project_preservation: direct pitch extension clipboard mapping is unverified.");
+    }
+
+    private void ArchiveNoteArrayPartDestinationPreflight(EngineSession session, WIVSMMidiPart part,
+        WIVSMMidiTrack target, int start, bool duplicate)
+    {
+        if (!ArchiveHasNoteArrayState(session)) return;
+        ArchivePartSignature destination = new(start, part.DurationTick.Value, part.Name);
+        foreach (WIVSMPart other in target.Parts)
+        {
+            if (!duplicate && ArchiveKey(other) == ArchiveKey(part)) continue;
+            if (ArchivePartKey(other) == destination)
+                throw new InvalidDataException("project_preservation: part move or duplicate would create ambiguous destination identities.");
+        }
     }
 
     private void ArchiveNoteArrayValidateBeforeEdit(EngineSession session, WIVSMNote note)
@@ -98,8 +111,28 @@ internal sealed partial class EngineHost
 
     private void ValidateArchiveNoteArraysBeforeCommit(EngineSession session)
     {
-        if (archiveStates.TryGetValue(session.Id, out ArchiveState? state) && state.Before is not null)
-            ArchiveValidateNoteArrays(state);
+        if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state) || state.Before is null) return;
+        if (state.Action is "track.update" or "track.reorder" or "part.update" or "part.move")
+        {
+            // A remove notification can temporarily evict descendants from Live.
+            // Require every pre-edit pitch owner by native identity before commit,
+            // independently of the observer's current Live map.
+            Dictionary<ArchiveEntity, WIVSMNote> notes = [];
+            foreach (WIVSMTrack track in session.Sequence.Tracks)
+                foreach (WIVSMPart part in track.Parts)
+                    if (part is WIVSMMidiPart midi)
+                        foreach (WIVSMNote note in midi.Notes)
+                            if (!notes.TryAdd(ArchiveKey(note), note))
+                                throw new InvalidDataException("project_preservation: duplicate note identity before commit.");
+            foreach ((ArchiveEntity key, ArchiveEntry entry) in state.Before)
+            {
+                if (entry.DirectPitch is null) continue;
+                if (!notes.TryGetValue(key, out WIVSMNote? note))
+                    throw new InvalidDataException("project_preservation: non-destructive edit replaced a direct pitch owner before commit.");
+                ProjectArchiveNoteArrays.Validate(entry.DirectPitch, ScorePitchPoints(note));
+            }
+        }
+        ArchiveValidateNoteArrays(state);
     }
 
     private static void ArchiveOverlayNoteArray(WIVSMNote note, JsonObject noteJson, ArchiveEntry entry)

@@ -216,13 +216,14 @@ editor-owned phoneme service not initialized by the isolated VSM host. Call
 No editor singleton is synthesized and no fallback is run. Native audio boundary
 handling does not use that MIDI phoneme-reset branch. For projects with tracked
 archive extensions, timeline edits are restricted to MIDI/AI tracks without
-controller-event or direct-pitch-item extensions. Tempo and meter event
-extensions are supported only when the corresponding complete native event map
-retains its identity, position and value; event kinds without extensions may
-change according to native behavior. An independent candidate is preflighted,
-and staged and committed identities are checked. Audio and event-changing
-extension cases remain guarded. The focused cases passed in
-`artifacts/feature-acceptance-970ae8c4e0d2/summary.json`.
+controller-event, direct-pitch-item or master-volume-event extensions. For
+insertion, tempo and meter extension maps follow the installed managed helper's
+one-to-one native moves; identity, expected position and value are checked on
+an independent candidate and before/after the actual commit. Deletion remains
+limited to unchanged extension-bearing maps. Event kinds without extensions may
+change according to native behavior. Audio, generated/deleted extended events
+and unverified combinations remain guarded. The focused cases passed in
+`artifacts/feature-acceptance-5b8f6372f11d/summary.json`.
 
 ## Selection
 
@@ -290,9 +291,11 @@ staged rollback path.
 For tracked `directPitches` item extensions, the selected tick retains its
 unknown fields on upsert; replacement creates new point metadata and clear
 removes the fields with the corresponding points. The full point set is
-validated against native output. Tested note and part duplicates preserve the
-item metadata through native history and save/reopen; track duplicate,
-split/join, clipboard, source-track merge and media capture remain guarded.
+validated against native output. Tested note, part and track duplicates preserve
+item metadata through native history and save/reopen. Track update/reorder and
+part update/move verify each prior owner and complete point set before commit;
+an indistinguishable destination part is rejected before moving or duplicating.
+Split/join, deletion, clipboard, source-track merge and media capture remain guarded.
 
 ## Part Performance
 
@@ -347,6 +350,15 @@ native minimum, maximum, default and `{event_index,tick,value}` points.
 unspecified nonzero events while preserving the zero-tick baseline unless it is
 explicitly updated. `automation.remove` requires `event_index` and rejects the
 zero-tick event. All edits use the existing native commit and history path.
+
+For tracked `masterTrack.volume.events` item extensions, a same-tick upsert
+retains unknown fields; `replace=true` retains fields for existing selected
+events and the required zero event, removes fields with removed events, and
+creates new events without prior fields. The complete map is checked against
+native values during the transaction and on history restoration and save.
+Timeline edits with these item extensions are guarded. Track volume/pan item
+extensions remain unsupported. The focused master-volume case passed in
+`artifacts/feature-acceptance-5b8f6372f11d/summary.json`.
 
 `artifacts/feature-acceptance-4d341970430a/summary.json` verifies editing,
 rejection and save/reopen for all three scopes. Actual master and track gain,

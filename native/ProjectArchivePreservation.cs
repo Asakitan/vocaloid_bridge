@@ -15,7 +15,8 @@ internal sealed partial class EngineHost
     private static bool ArchiveEntryHasPayload(ArchiveEntry entry) =>
         entry.Extra.Count != 0 || entry.Controller is not null || entry.DirectPitch is not null;
     private sealed record ArchiveHistory(Dictionary<ArchiveEntity, ArchiveEntry> Live, JsonObject Root, JsonObject Master, Dictionary<string, string> Resources,
-        Dictionary<int, ProjectArchiveArrays.Tempo>? Tempo, Dictionary<int, ProjectArchiveArrays.TimeSig>? TimeSig);
+        Dictionary<int, ProjectArchiveArrays.Tempo>? Tempo, Dictionary<int, ProjectArchiveArrays.TimeSig>? TimeSig,
+        Dictionary<int, ProjectArchiveArrays.ControllerPoint>? MasterVolume);
 
     private sealed class ArchiveState
     {
@@ -43,6 +44,9 @@ internal sealed partial class EngineHost
         internal Dictionary<int, ProjectArchiveArrays.TimeSig>? TimeSig;
         internal Dictionary<int, ProjectArchiveArrays.TimeSig>? BeforeTimeSig;
         internal Dictionary<int, ProjectArchiveArrays.TimeSig>? UpgradeTimeSig;
+        internal Dictionary<int, ProjectArchiveArrays.ControllerPoint>? MasterVolume;
+        internal Dictionary<int, ProjectArchiveArrays.ControllerPoint>? BeforeMasterVolume;
+        internal Dictionary<int, ProjectArchiveArrays.ControllerPoint>? UpgradeMasterVolume;
         internal string? Invalid;
         internal bool HasEntityExtensions;
         internal bool ObserverAttached;
@@ -133,7 +137,7 @@ internal sealed partial class EngineHost
     // langIDs array omits items; its only declared member is handled explicitly.
     private static void ArchiveValidateNested(JsonNode? node, JsonObject schema, string path,
         bool owner = false, bool tempoExtensions = false, bool timeSigExtensions = false, bool controllerExtensions = false,
-        bool notePitchExtensions = false)
+        bool notePitchExtensions = false, bool masterVolumeExtensions = false)
     {
         if (node is null) return;
         JsonObject resolved = ArchiveResolveSchema(schema, ArchiveSchema());
@@ -154,15 +158,16 @@ internal sealed partial class EngineHost
                     (path == "/tracks[]/parts[]" && key == "notes")) continue;
                 if (tempoExtensions && path == "/masterTrack/tempo" && key == "events") continue;
                 if (timeSigExtensions && path == "/masterTrack/timeSig" && key == "events") continue;
+                if (masterVolumeExtensions && path == "/masterTrack/volume" && key == "events") continue;
                 if (controllerExtensions && path == "/tracks[]/parts[]/controllers[]" && key == "events") continue;
                 if (notePitchExtensions && path == "/tracks[]/parts[]/notes[]" && key == "directPitches") continue;
-                ArchiveValidateNested(child, childSchema, path + "/" + key, owner && child is JsonObject, tempoExtensions, timeSigExtensions, controllerExtensions, notePitchExtensions);
+                ArchiveValidateNested(child, childSchema, path + "/" + key, owner && child is JsonObject, tempoExtensions, timeSigExtensions, controllerExtensions, notePitchExtensions, masterVolumeExtensions);
             }
         }
         else if (node is JsonArray array)
         {
             if (resolved["items"] is JsonObject items)
-                foreach (JsonNode? child in array) ArchiveValidateNested(child, items, path + "[]", tempoExtensions: tempoExtensions, timeSigExtensions: timeSigExtensions, controllerExtensions: controllerExtensions, notePitchExtensions: notePitchExtensions);
+                foreach (JsonNode? child in array) ArchiveValidateNested(child, items, path + "[]", tempoExtensions: tempoExtensions, timeSigExtensions: timeSigExtensions, controllerExtensions: controllerExtensions, notePitchExtensions: notePitchExtensions, masterVolumeExtensions: masterVolumeExtensions);
             else if (path.EndsWith("/langIDs", StringComparison.Ordinal) && resolved["langID"] is JsonObject)
             {
                 foreach (JsonNode? child in array)
@@ -388,8 +393,10 @@ internal sealed partial class EngineHost
                 ProjectArchiveArrays.ValidateTimeSig(state.TimeSig, ArchiveNativeTimeSigs(session.Sequence));
                 state.HasEntityExtensions = true;
             }
+            bool hasMasterVolumeExtensions = ArchiveCaptureMasterVolume(state, master, masterSchema);
             ArchiveValidateNested(root, schema, "", true);
-            ArchiveValidateNested(master, masterSchema, "/masterTrack", true, hasTempoExtensions, hasTimeSigExtensions);
+            ArchiveValidateNested(master, masterSchema, "/masterTrack", true, hasTempoExtensions, hasTimeSigExtensions,
+                masterVolumeExtensions: hasMasterVolumeExtensions);
             JsonArray tracks = ArchiveArray(root["tracks"], "/tracks");
             if ((ulong)tracks.Count != session.Sequence.NumTrack)
                 throw new InvalidDataException("project_preservation: track count changed while loading.");
@@ -487,6 +494,7 @@ internal sealed partial class EngineHost
             {
                 ValidateArchiveControllersBeforeCommit(session);
                 ValidateArchiveNoteArraysBeforeCommit(session);
+                ValidateArchiveMasterVolumeBeforeCommit(session);
             };
         }
         catch
@@ -540,6 +548,7 @@ internal sealed partial class EngineHost
             state.UpgradeResources = new(state.ResourcePaths, StringComparer.Ordinal);
             state.UpgradeTempo = state.Tempo;
             state.UpgradeTimeSig = state.TimeSig;
+            state.UpgradeMasterVolume = state.MasterVolume;
             session.ArchiveBegin = operation =>
             {
                 RequireArchiveMutationSupported(session, operation);
@@ -551,6 +560,7 @@ internal sealed partial class EngineHost
             {
                 ValidateArchiveControllersBeforeCommit(session);
                 ValidateArchiveNoteArraysBeforeCommit(session);
+                ValidateArchiveMasterVolumeBeforeCommit(session);
             };
             return true;
         }
@@ -571,7 +581,7 @@ internal sealed partial class EngineHost
             throw new InvalidOperationException("project_preservation: no tracking upgrade to drop.");
         ArchiveCheck(state);
         if (state.Undo.Count != 0 || state.Redo.Count != 0 || state.Live.Values.Any(ArchiveEntryHasPayload) ||
-            state.Tempo is not null || state.TimeSig is not null)
+            state.Tempo is not null || state.TimeSig is not null || state.MasterVolume is not null)
             throw new InvalidOperationException("project_preservation: tracking upgrade already contains committed identity data.");
         session.Sequence.RemoveUpdateObserver(state.Observer);
         state.Observer.Notified -= state.Handler;
@@ -581,9 +591,10 @@ internal sealed partial class EngineHost
         state.UpgradeRoot = null; state.UpgradeMaster = null; state.UpgradeResources = null;
         state.UpgradeTempo = null;
         state.UpgradeTimeSig = null;
+        state.UpgradeMasterVolume = null;
         state.Live.Clear();
         session.ArchiveBegin = null; session.ArchiveEnd = null; session.ArchiveCopy = null; session.ArchiveValidate = null;
-        if (state.Root.Count == 0 && state.Master.Count == 0 && state.ExtraFiles.Count == 0 && state.Tempo is null && state.TimeSig is null)
+        if (state.Root.Count == 0 && state.Master.Count == 0 && state.ExtraFiles.Count == 0 && state.Tempo is null && state.TimeSig is null && state.MasterVolume is null)
         {
             archiveStates.Remove(session.Id);
             state.Observer.Dispose();
@@ -1076,6 +1087,8 @@ internal sealed partial class EngineHost
     {
         if (!HasArchiveEntityExtensions(session)) return;
         RequireArchiveNoteArrayOperation(session, operation);
+        if (archiveStates[session.Id].MasterVolume is not null && operation is ("time.insert" or "time.delete"))
+            throw new InvalidOperationException("project_preservation: master volume extension timeline mapping is not verified.");
         if (ArchiveHasControllerExtensions(session) && operation is not ("controller.set" or "controller.remove" or "track.duplicate" or "part.duplicate" or "part.split" or "part.join" or "undo" or "redo"))
             throw new InvalidOperationException("project_preservation: controller extension mutation has no verified identity mapping: " + operation);
         if (operation is not ("track.create" or "track.update" or "track.reorder" or "track.remove" or "track.duplicate" or
@@ -1104,6 +1117,7 @@ internal sealed partial class EngineHost
         state.BeforeResources = new(state.ResourcePaths, StringComparer.Ordinal);
         state.BeforeTempo = state.Tempo;
         state.BeforeTimeSig = state.TimeSig;
+        state.BeforeMasterVolume = state.MasterVolume;
         state.Action = action;
     }
 
@@ -1146,11 +1160,12 @@ internal sealed partial class EngineHost
         Dictionary<string, string> beforeResources = state.BeforeResources ?? throw new InvalidOperationException("project_preservation: missing resource history snapshot.");
         Dictionary<int, ProjectArchiveArrays.Tempo>? beforeTempo = state.BeforeTempo;
         Dictionary<int, ProjectArchiveArrays.TimeSig>? beforeTimeSig = state.BeforeTimeSig;
+        Dictionary<int, ProjectArchiveArrays.ControllerPoint>? beforeMasterVolume = state.BeforeMasterVolume;
         state.Before = null;
-        state.BeforeRoot = null; state.BeforeMaster = null; state.BeforeResources = null; state.BeforeTempo = null; state.BeforeTimeSig = null;
-        ArchiveHistory HistorySnapshot(Dictionary<ArchiveEntity, ArchiveEntry> snapshot, JsonObject root, JsonObject master, Dictionary<string, string> resources, Dictionary<int, ProjectArchiveArrays.Tempo>? tempo, Dictionary<int, ProjectArchiveArrays.TimeSig>? timeSig) =>
-            new(state.PreUpgradeEmptyHistory && snapshot.Values.All(entry => !ArchiveEntryHasPayload(entry)) ? EmptyHistoryMarker : snapshot, root, master, resources, tempo, timeSig);
-        ArchiveHistory currentBefore = HistorySnapshot(before, beforeRoot, beforeMaster, beforeResources, beforeTempo, beforeTimeSig);
+        state.BeforeRoot = null; state.BeforeMaster = null; state.BeforeResources = null; state.BeforeTempo = null; state.BeforeTimeSig = null; state.BeforeMasterVolume = null;
+        ArchiveHistory HistorySnapshot(Dictionary<ArchiveEntity, ArchiveEntry> snapshot, JsonObject root, JsonObject master, Dictionary<string, string> resources, Dictionary<int, ProjectArchiveArrays.Tempo>? tempo, Dictionary<int, ProjectArchiveArrays.TimeSig>? timeSig, Dictionary<int, ProjectArchiveArrays.ControllerPoint>? masterVolume) =>
+            new(state.PreUpgradeEmptyHistory && snapshot.Values.All(entry => !ArchiveEntryHasPayload(entry)) ? EmptyHistoryMarker : snapshot, root, master, resources, tempo, timeSig, masterVolume);
+        ArchiveHistory currentBefore = HistorySnapshot(before, beforeRoot, beforeMaster, beforeResources, beforeTempo, beforeTimeSig, beforeMasterVolume);
         void Restore(ArchiveHistory history)
         {
             state.Live = history.Live;
@@ -1159,6 +1174,7 @@ internal sealed partial class EngineHost
             state.ResourcePaths = history.Resources;
             state.Tempo = history.Tempo;
             state.TimeSig = history.TimeSig;
+            state.MasterVolume = history.MasterVolume;
             state.ExtraFiles = history.Resources.Keys.ToList();
         }
         bool rebindEmpty = false;
@@ -1170,16 +1186,16 @@ internal sealed partial class EngineHost
                 { state.Invalid = "untracked undo"; break; }
                 state.Redo.Push(currentBefore);
                 Restore(state.Undo.Count == 0
-                    ? new ArchiveHistory(EmptyHistoryMarker, (JsonObject)state.UpgradeRoot!.DeepClone(), (JsonObject)state.UpgradeMaster!.DeepClone(), new(state.UpgradeResources!, StringComparer.Ordinal), state.UpgradeTempo, state.UpgradeTimeSig)
+                    ? new ArchiveHistory(EmptyHistoryMarker, (JsonObject)state.UpgradeRoot!.DeepClone(), (JsonObject)state.UpgradeMaster!.DeepClone(), new(state.UpgradeResources!, StringComparer.Ordinal), state.UpgradeTempo, state.UpgradeTimeSig, state.UpgradeMasterVolume)
                     : state.Undo.Pop());
                 rebindEmpty = ReferenceEquals(state.Live, EmptyHistoryMarker); break;
             case "redo":
                 if (state.Redo.Count == 0) { state.Invalid = "untracked redo"; break; }
                 state.Undo.Push(currentBefore); Restore(state.Redo.Pop());
                 rebindEmpty = ReferenceEquals(state.Live, EmptyHistoryMarker); break;
-            case "rollback": state.Live = before; state.Root = beforeRoot; state.Master = beforeMaster; state.ResourcePaths = beforeResources; state.Tempo = beforeTempo; state.TimeSig = beforeTimeSig; state.ExtraFiles = beforeResources.Keys.ToList(); break;
+            case "rollback": state.Live = before; state.Root = beforeRoot; state.Master = beforeMaster; state.ResourcePaths = beforeResources; state.Tempo = beforeTempo; state.TimeSig = beforeTimeSig; state.MasterVolume = beforeMasterVolume; state.ExtraFiles = beforeResources.Keys.ToList(); break;
             case "sync":
-                state.Root = beforeRoot; state.Master = beforeMaster; state.ResourcePaths = beforeResources; state.Tempo = beforeTempo; state.TimeSig = beforeTimeSig; state.ExtraFiles = beforeResources.Keys.ToList();
+                state.Root = beforeRoot; state.Master = beforeMaster; state.ResourcePaths = beforeResources; state.Tempo = beforeTempo; state.TimeSig = beforeTimeSig; state.MasterVolume = beforeMasterVolume; state.ExtraFiles = beforeResources.Keys.ToList();
                 if (!before.Keys.ToHashSet().SetEquals(state.Live.Keys)) { state.Undo.Clear(); state.Redo.Clear(); state.PreUpgradeEmptyHistory = false; }
                 break;
             default: state.Invalid = "unknown mutation boundary"; break;
@@ -1198,6 +1214,7 @@ internal sealed partial class EngineHost
         else ArchiveRefreshParents(state, preserveExisting ? before : null, action is "undo" or "redo");
         if (state.Tempo is not null) ProjectArchiveArrays.ValidateTempo(state.Tempo, ArchiveNativeTempos(session.Sequence));
         if (state.TimeSig is not null) ProjectArchiveArrays.ValidateTimeSig(state.TimeSig, ArchiveNativeTimeSigs(session.Sequence));
+        if (state.MasterVolume is not null) ProjectArchiveArrays.ValidateController(state.MasterVolume, ArchiveNativeMasterVolumes(session.Sequence));
         ArchiveValidateNoteArrays(state);
         int limit = (int)Math.Min(state.Session.Sequence.GetMaxUndoCount(), 65536UL);
         if (state.Undo.Count > limit) state.PreUpgradeEmptyHistory = false;
@@ -1299,6 +1316,11 @@ internal sealed partial class EngineHost
         {
             ProjectArchiveArrays.ValidateTimeSig(state.TimeSig, ArchiveNativeTimeSigs(session.Sequence));
             ProjectArchiveArrays.OverlayTimeSig(ArchiveArray(master["timeSig"]?["events"], "/masterTrack/timeSig/events"), state.TimeSig);
+        }
+        if (state.MasterVolume is not null)
+        {
+            ProjectArchiveArrays.ValidateController(state.MasterVolume, ArchiveNativeMasterVolumes(session.Sequence));
+            ProjectArchiveArrays.OverlayController(ArchiveArray(master["volume"]?["events"], "/masterTrack/volume/events"), state.MasterVolume);
         }
         JsonArray tracks = ArchiveArray(root["tracks"], "/tracks");
         if ((ulong)tracks.Count != session.Sequence.NumTrack) throw new InvalidDataException("project_preservation: snapshot track count changed.");

@@ -342,3 +342,16 @@ preservation issue, including for ordinary native property writes, and does not
 establish bridge update or crash atomicity. The older `preservation.media_entities` case still
 expects this rejection and would need reconciliation if the guard is changed
 through an approved, validated implementation.
+
+The ordinary bridge-owned AI clip regression in
+`artifacts/feature-acceptance-5f2872117662/summary.json` confirms that the current
+production `media_update` drops synthetic unknown property members at the root
+and under `part`. A same-process two-manager staging experiment did not isolate
+the intended roots (`artifacts/feature-acceptance-7069a2a902c4/summary.json`);
+a separate-process disposable-copy experiment preserved one top-level marker
+and observed lock and cache-refresh behavior
+(`artifacts/feature-acceptance-e07cbc63bd95/summary.json`). General nested
+retention, concurrent changes, refresh failure after commit and crash atomicity
+remain unproven, so no production property update change was made. See
+`docs/media-property-preservation-20.md`; the corrected, reproducible process
+probe and cleanup passed in `artifacts/feature-acceptance-6db3c881f0f0/summary.json`.

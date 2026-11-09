@@ -9,7 +9,7 @@ internal sealed partial class EngineHost
         Dictionary<nint, (long Tick, int Value)> Tempos,
         Dictionary<nint, (int Bar, int Numer, int Denom)> TimeSigs);
     private sealed record TimelineEntities(HashSet<ArchiveEntity> Tracks, Dictionary<ArchiveEntity, TimelinePart> Parts,
-        TimelineEventMap Events);
+        TimelineEventMap Events, TimelineEventMap BeforeEvents);
 
     private static TimelineEventMap ArchiveTimelineEvents(WIVSMSequence sequence, bool checkTempo, bool checkTimeSig)
     {
@@ -46,7 +46,7 @@ internal sealed partial class EngineHost
                 throw new InvalidOperationException("project_preservation: extended timeline edits require MIDI/AI tracks and exclude audio.");
     }
 
-    private TimelineEntities ArchiveTimelineCapture(EngineSession session, int start, int end, bool insert)
+    private TimelineEntities ArchiveTimelineCapture(EngineSession session, int start, int end, bool insert, bool includeTempo)
     {
         if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state))
             throw new InvalidOperationException("project_preservation: missing timeline archive state.");
@@ -74,7 +74,59 @@ internal sealed partial class EngineHost
                     throw new InvalidDataException("project_preservation: ambiguous timeline part or note identity.");
             }
         }
-        return new TimelineEntities(tracks, parts, ArchiveTimelineEvents(session.Sequence, state.Tempo is not null, state.TimeSig is not null));
+        TimelineEventMap before = ArchiveTimelineEvents(session.Sequence, state.Tempo is not null, state.TimeSig is not null);
+        if (state.Tempo is not null) ProjectArchiveArrays.ValidateTempo(state.Tempo, ArchiveNativeTempos(session.Sequence));
+        if (state.TimeSig is not null) ProjectArchiveArrays.ValidateTimeSig(state.TimeSig, ArchiveNativeTimeSigs(session.Sequence));
+        if (!insert) return new TimelineEntities(tracks, parts, before, before);
+        Dictionary<nint, (long Tick, int Value)> tempos = [];
+        foreach (var (key, value) in before.Tempos)
+            tempos.Add(key, (checked(value.Tick + (includeTempo && value.Tick > start ? duration : 0)), value.Value));
+        Dictionary<nint, (int Bar, int Numer, int Denom)> meters = [];
+        if (before.CheckTimeSig)
+        {
+            WIVSMTimeSig current = session.Sequence.GetTimeSig(new VSMAbsTick(start), true, false)
+                ?? throw new InvalidDataException("project_preservation: timeline current time signature is absent.");
+            int barTicks = checked(Yamaha.VOCALOID.Design.Sequence.resolution * 4 * current.Numer / current.Denom);
+            if (barTicks <= 0) throw new InvalidDataException("project_preservation: invalid timeline meter duration.");
+            int shift = checked((int)((duration + barTicks - 1) / barTicks));
+            foreach (var (key, value) in before.TimeSigs)
+                meters.Add(key, (checked(value.Bar + (value.Bar > current.PosBar ? shift : 0)), value.Numer, value.Denom));
+        }
+        return new TimelineEntities(tracks, parts, new TimelineEventMap(before.CheckTempo, before.CheckTimeSig, tempos, meters), before);
+    }
+
+
+    private void ArchiveTimelineApplyEvents(EngineSession session, TimelineEntities expected)
+    {
+        if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state) || state.Before is null)
+            throw new InvalidOperationException("project_preservation: timeline event transition outside mutation boundary.");
+        if (state.Tempo is not null)
+        {
+            Dictionary<int, ProjectArchiveArrays.Tempo> next = [];
+            foreach (var (key, old) in expected.BeforeEvents.Tempos)
+            {
+                var target = expected.Events.Tempos[key];
+                var entry = state.Tempo[checked((int)old.Tick)];
+                int tick = checked((int)target.Tick);
+                if (!next.TryAdd(tick, new ProjectArchiveArrays.Tempo(tick, target.Value, entry.Extra)))
+                    throw new InvalidDataException("project_preservation: timeline tempo destination collision.");
+            }
+            ProjectArchiveArrays.ValidateTempo(next, ArchiveNativeTempos(session.Sequence));
+            state.Tempo = next;
+        }
+        if (state.TimeSig is not null)
+        {
+            Dictionary<int, ProjectArchiveArrays.TimeSig> next = [];
+            foreach (var (key, old) in expected.BeforeEvents.TimeSigs)
+            {
+                var target = expected.Events.TimeSigs[key];
+                var entry = state.TimeSig[old.Bar];
+                if (!next.TryAdd(target.Bar, new ProjectArchiveArrays.TimeSig(target.Bar, target.Numer, target.Denom, entry.Extra)))
+                    throw new InvalidDataException("project_preservation: timeline time signature destination collision.");
+            }
+            ProjectArchiveArrays.ValidateTimeSig(next, ArchiveNativeTimeSigs(session.Sequence));
+            state.TimeSig = next;
+        }
     }
 
     private static void ArchiveTimelineValidate(EngineSession session, TimelineEntities expected)

@@ -306,6 +306,7 @@ internal sealed partial class EngineHost
             int start = ScoreInt(options, "start_tick", 0, int.MaxValue);
             if (part.DurationTick.Value > target.GetMaxPartDuration(start))
                 throw new ArgumentOutOfRangeException("start_tick", "Part end exceeds the native tick range.");
+            ArchiveNoteArrayPartDestinationPreflight(session, part, target, start, operation == "part.duplicate");
             return ScoreMutate(session, operation, () =>
             {
                 WIVSMMidiPart result = part;
@@ -926,7 +927,7 @@ internal sealed partial class EngineHost
                 finally { Close(candidate.Id, true); }
             }
         }
-        var identities = trackedTimeline ? ArchiveTimelineCapture(session, start, end, insert) : null;
+        var identities = trackedTimeline ? ArchiveTimelineCapture(session, start, end, insert, includeTempo) : null;
         return ScoreMutate(session, operation, () =>
         {
             VSMTickRange range = new(start, end);
@@ -934,7 +935,11 @@ internal sealed partial class EngineHost
                 ? Yamaha.VOCALOID.WIVSMSequenceExtension.InsertSilence(sequence, range, includeTempo)
                 : Yamaha.VOCALOID.WIVSMSequenceExtension.DeleteTime(sequence, range, includeTempo);
             ScoreRequire(success, operation, sequence);
-            if (identities is not null) ArchiveTimelineValidate(session, identities);
+            if (identities is not null)
+            {
+                ArchiveTimelineValidate(session, identities);
+                ArchiveTimelineApplyEvents(session, identities);
+            }
             return new { start_tick = start, duration_tick = duration, include_tempo = includeTempo, track_count = sequence.NumTrack };
         }, () =>
         {
@@ -1258,13 +1263,14 @@ internal sealed partial class EngineHost
         };
     }
 
-    private static object ScoreAutomationEdit(EngineSession session, string operation, JsonElement options)
+    private object ScoreAutomationEdit(EngineSession session, string operation, JsonElement options)
     {
         string scope = ScoreString(options, "scope");
         if (scope is not ("master_volume" or "track_volume" or "track_pan"))
             throw new ArgumentException("scope must be master_volume, track_volume, or track_pan.");
         WIVSMSequence sequence = session.Sequence;
         WIVSMTrack? track = scope == "master_volume" ? null : ScoreTrack(session, ScoreTrackIndex(session, options));
+        ArchiveMasterVolumePreflight(session, scope);
         int minimum = scope == "master_volume" ? sequence.GetMinVolumeValue()
             : scope == "track_volume" ? track!.GetMinVolumeValue() : track!.GetMinPanpotValue();
         int maximum = scope == "master_volume" ? sequence.GetMaxVolumeValue()
@@ -1285,6 +1291,7 @@ internal sealed partial class EngineHost
                     : scope == "track_volume" ? track!.RemoveVolume(track.GetVolume((ulong)index)!)
                     : track!.RemovePanpot(track.GetPanpot((ulong)index)!);
                 ScoreRequire(removed, operation, sequence);
+                ArchiveMasterVolumeTransition(session, scope, Array.Empty<(int Tick, int Value)>(), false, checked((int)tick));
                 return true;
             }, () => ScoreAutomationList(session, options));
         }
@@ -1336,6 +1343,7 @@ internal sealed partial class EngineHost
                 Apply(track!.PanpotsEnumerator, item => item.RelPosTick.Value, item => item.Value,
                     (item, value) => item.Value = value, track.RemovePanpot,
                     (tick, value) => track.InsertPanpot(new VSMRelTick(tick), value));
+            ArchiveMasterVolumeTransition(session, scope, points, replace, null);
             return true;
         }, () => ScoreAutomationList(session, options));
     }

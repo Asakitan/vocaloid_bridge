@@ -76,7 +76,7 @@
 | `.vscode/mcp.json` | 工作区 stdio 服务配置 | 已配置 |
 | `.vscode/tasks.json` | 安装、工程验收和原生合成验收任务 | 原生合成任务已运行通过 |
 | VS Code Stable/Insiders 用户 `mcp.json` | 跨工作区启动原生 MCP | 已注册；配置及共用启动检查通过 |
-| Claude Code 用户 `.claude.json` | 用户级 stdio MCP | 原生命令报告 Connected |
+| Claude Code 用户 `.claude.json` | 用户级 stdio MCP | 原生命令报告 Connected；会话 36 的实际聊天连接列出 38 个工具并返回 0.26.0 |
 | Claude Desktop `Claude-Data` / `Claude-3p` 配置 | 桌面客户端两种模式的 stdio MCP | 已注册；配置及共用启动检查通过，界面连接未验 |
 | Codex 用户 `config.toml` | 用户级 stdio MCP，180 秒工具期限 | enabled；配置及共用启动检查通过 |
 | `tools/check_media_recovery_32.py`、`tools/media_journal_child_32.ps1` | 素材发布阶段、进程终止与外部冲突 | 四阶段断言及独立冲突用例通过；测试脚本参数/编码失败记录保留 |
@@ -138,3 +138,4 @@
 | 2026-11-10 | 0.24.0：显式素材冲突决策、21 AI 首音符、完整短语、扩展删除/拆合/迁移、占用拍号与扩展音频定向验证。 |
 | 2026-11-10 | 0.25.0：复杂时间事务、素材元数据 v2、其他数组与读回回滚/元数据 no-op，剩余实现收齐。 |
 | 2026-11-10 | 0.26.0：MCP 按需拉起和管理 VOCALOID 私有实例，活动工程保护、确认退出后重建及失联不重放。 |
+| 2026-11-10 | 会话 36：Claude Code 新聊天的实际 MCP 连接经单次状态检查确认 0.26.0，TODO 无未完成项；无代码改动、未重跑功能测试。 |

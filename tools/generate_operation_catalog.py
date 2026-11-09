@@ -31,12 +31,16 @@ def generate() -> dict:
                 names.update(re.findall(r'if \(operation == "([a-z]+)"\)', source[:start]))
         document = (ROOT / "docs" / doc_name).read_text(encoding="utf-8-sig")
         rows = [line for line in document.splitlines() if line.startswith("|")]
+        operations = [
+            {"operation": name, "contract_rows": [row for row in rows if row.startswith("| `" + name + "` | ")]}
+            for name in sorted(names)
+        ]
+        missing = [entry["operation"] for entry in operations if not entry["contract_rows"]]
+        if missing:
+            raise ValueError(f"{domain}: missing exact operation contract rows: {', '.join(missing)}")
         result["domains"][domain] = {
             "tool": tool, "rpc": rpc, "documentation": "docs/" + doc_name,
-            "operations": [
-                {"operation": name, "contract_rows": [row for row in rows if "`" + name + "`" in row]}
-                for name in sorted(names)
-            ],
+            "operations": operations,
         }
     return result
 

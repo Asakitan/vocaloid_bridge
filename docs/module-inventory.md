@@ -20,8 +20,8 @@
 | `native/RpcServer.cs` | 单线程 JSON 行协议、原生对象发现与精确签名调用 | 已编译 |
 | `vocaloid_bridge/native_client.py` | 私有 desktop、Job Object、管道客户端与 DLL 快照 | 独立构建副本启动、关闭清理通过 |
 | `vocaloid_bridge/server.py` | 37 个 MCP 工具、资源、写歌提示 | 新 MIDI 工具在独立 stdio 连接实测；历史工具覆盖见历史回执 |
-| `vocaloid_bridge/operations.json` | 原生 dispatch 对照的随包操作索引 | 由生成器维护，区分入口发现与实测 |
-| `tools/generate_operation_catalog.py` | 操作目录生成及漂移检查 | 按源码和文档生成 |
+| `vocaloid_bridge/operations.json` | 原生 dispatch 对照的随包操作索引 | 125 个操作均有精确契约行；区分入口发现与实测 |
+| `tools/generate_operation_catalog.py` | 操作目录生成及漂移检查 | 按源码与文档操作首列精确生成，缺契约行时检查失败 |
 | `vocaloid_bridge/projects.py` | VPR 结构化编排 | 音素扩展冲突写入被拒绝，无关修改及重开通过 |
 | `vocaloid_bridge/music.py` | MIDI、音符与路径校验 | 定向检查通过 |
 | `vocaloid_bridge/templates/ai-starter.vpr` | 原生编辑器生成的 AI 片段模板 | 本机样本 |
@@ -52,6 +52,7 @@
 | `tools/check_master_automation_20.py`、`tools/check_part_overlap_native_20.py`、`tools/check_media_*_20.py` 及相关 PowerShell 探针 | 主音量项事务、片段重叠及素材属性暂存验证 | 主音量项及普通重叠原生观察通过；普通素材未知字段丢失，独立进程暂存仍缺失败事务证据 |
 | `tools/check_track_automation_21.py`、`tools/check_timeline_delete_21.py`、`tools/check_note_delete_guards_21.py`、`tools/check_media_process_21.py` | 轨道自动化项、时间删除、音高删除守卫与素材暂存定向验证 | 轨道项及部分时间删除通过；音高删除守卫保持，素材仅合成夹具手工恢复字段 |
 | `tools/check_timeline_meter_22.py`、`tools/check_extension_edit_guards_22.py`、`tools/check_track_edits_22.py`、`tools/check_controller_notes_22.py` | 拍号生成边界、现有守卫与潜在普通编辑正例 | 受测空位拍号生成及守卫通过；普通编辑候选为红基线，审查守卫未变 |
+| `tools/check_timeline_meter_collision_23.py`、`tools/probe_media_atomic_23.py` | 占用拍号碰撞预期正例和自有文件共享探针 | 拍号正例为守卫红基线，解除被审查拦截；文件共享观察不构成完整事务 |
 | `tools/check_clipboard_ambiguity.py`、`tools/check_archive_export_limits.ps1`、`tools/check_tempo_array_helper.ps1` | 剪贴板候选、ZIP 导出限制和 tempo 数组原语回归 | 合成候选、缩小阈值 ZIP 和原语通过；完整 MCP 证据见 STATUS |
 | `tools/probe_appcontainer_pipe.cs`、`tools/probe_appcontainer_child.go` | 随机合成管道的后台进程隔离探针 | 受限令牌及单一默认权限管道拒绝访问已观察；非插件隔离证明 |
 | `tools/probe_appcontainer_server.cs`、`tools/probe_appcontainer_server_child.go`、`tools/probe_appcontainer_peer.cs`、`tools/probe_appcontainer_peer_child.go` | 随机合成管道受限服务端与同/异 profile 对端探针 | LOCAL 双向收发和负对照已观察；未证明真实插件隔离 |
@@ -104,3 +105,4 @@
 | 2026-11-10 | 升级 0.15.0：主音量项、插入事件移动及音高项身份操作定向通过；普通素材未知属性丢失与事务边界继续调查。 |
 | 2026-11-10 | 升级 0.16.0：轨道音量/声像项和部分时间删除的受测元数据事务通过；音高删除守卫及素材未知字段风险保持。 |
 | 2026-11-10 | 升级 0.17.0：受测空位拍号边界生成及原生身份通过；普通编辑守卫放宽被自动审查拦截，素材刷新竞争有新证据。 |
+| 2026-11-10 | 升级 0.17.1：125 个操作均有精确参数契约；拍号碰撞守卫放宽被自动审查拦截，主音量与文件共享仅有有限原生/系统观察。 |

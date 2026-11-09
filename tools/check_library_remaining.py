@@ -13,9 +13,27 @@ async def operation_catalog(check):
     v.require(actual["total"] == sum(len(data["operations"]) for data in expected["domains"].values()), "Operation count mismatch")
     for domain, data in expected["domains"].items():
         v.require(actual["domains"][domain]["operations"] == data["operations"], "Native dispatch differs from exposed index", domain)
+        v.require(all(entry["contract_rows"] and all(row.startswith("| `" + entry["operation"] + "` | ")
+                      for row in entry["contract_rows"]) for entry in data["operations"]),
+                  "A structured operation lacks its exact contract row", domain)
         sample = data["operations"][0]["operation"]
         detail = await check.call("vocaloid_operations", domain=domain, operation=sample, include_documentation=True)
         v.require(detail["total"] == 1 and detail["domains"][domain]["documentation_text"], "Operation contract missing", sample)
+    for domain, operation, fields in (
+        ("score", "automation.set", ("scope", "track_index", "points")),
+        ("score", "note.add", ("track_index", "part_index", "start_tick", "duration_tick")),
+        ("score", "controller.set", ("track_index", "part_index", "type", "points")),
+        ("score", "note.batch_update", ("track_index", "part_index", "note_indices")),
+        ("clipboard", "cut", ("kind", "indices", "track_index", "part_index")),
+        ("clipboard", "paste", ("clipboard_id", "offset_tick")),
+        ("audio", "mixdown", ("output_name", "sample_rate", "channels")),
+        ("library", "lyrics_apply", ("track_index", "part_index", "note_index", "lyrics")),
+    ):
+        detail = await check.call("vocaloid_operations", domain=domain, operation=operation)
+        rows = detail["domains"][domain]["operations"][0]["contract_rows"]
+        v.require(detail["total"] == 1 and rows and all("`" + field + "`" in " ".join(rows) or
+                  "`" + field + "=" in " ".join(rows) for field in fields),
+                  "Targeted operation contract is missing selectors or options", operation)
     await check.rejected("vocaloid_operations", "domain", domain="absent")
     await check.rejected("vocaloid_operations", "operation", operation="absent")
     check.evidence("counts", {domain: len(data["operations"]) for domain, data in expected["domains"].items()})

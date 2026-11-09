@@ -114,15 +114,15 @@ All note operations require `track_index` and `part_index`.
 
 | Operation | Additional Options | `result` |
 | --- | --- | --- |
-| `note.list` | None | `notes`: note summaries |
-| `note.expression_bounds` | Target part | Current native part's minimum, maximum and default dictionaries for `expression` and `ai_expression` |
-| `note.add` | `start_tick`, `duration_tick`; optional note fields below | Inserted note summary |
-| `note.update` | `note_index`; one or more note fields below | Updated note summary |
-| `note.remove` | `note_index` | `removed`, old `note_index` |
-| `note.duplicate` | `note_index`, new `start_tick` | Native duplicate summary |
-| `note.clear` | None | `removed`, remaining `note_count` |
-| `note.split` | `note_index`, `split_tick` relative to the part and strictly inside the note | `notes`: original and created note summaries |
-| `note.join` | Distinct `note_indices` containing at least two indices | `notes`: the containing part's post-join note list |
+| `note.list` | `track_index`, `part_index` | `notes`: note summaries |
+| `note.expression_bounds` | `track_index`, `part_index` | Current native part's minimum, maximum and default dictionaries for `expression` and `ai_expression` |
+| `note.add` | `track_index`, `part_index`, `start_tick`, `duration_tick`; optional `number`, `velocity`, `lyric`, `phonemes`, `is_valid_phonemes`, `lang_id`, `expression`, `ai_expression`, `is_protected`, `ai_vibrato_enabled` | Inserted note summary |
+| `note.update` | `track_index`, `part_index`, `note_index`; one or more of `start_tick`, `duration_tick`, `number`, `velocity`, `lyric`, `phonemes`, `is_valid_phonemes`, `lang_id`, `expression`, `ai_expression`, `is_protected`, `ai_vibrato_enabled` | Updated note summary |
+| `note.remove` | `track_index`, `part_index`, `note_index` | `removed`, old `note_index` |
+| `note.duplicate` | `track_index`, `part_index`, `note_index`, new `start_tick` | Native duplicate summary |
+| `note.clear` | `track_index`, `part_index` | `removed`, remaining `note_count` |
+| `note.split` | `track_index`, `part_index`, `note_index`, `split_tick` relative to the part and strictly inside the note | `notes`: original and created note summaries |
+| `note.join` | `track_index`, `part_index`, distinct `note_indices` containing at least two indices | `notes`: the containing part's post-join note list |
 
 Note fields are `number`, `velocity`, `lyric`, `phonemes`,
 `is_valid_phonemes`, `lang_id`, `expression`, `ai_expression`, `is_protected`, and
@@ -160,8 +160,8 @@ Both operations require `track_index`, `part_index`.
 
 | Operation | Additional Options | `result` |
 | --- | --- | --- |
-| `voice.get` | None | Voice summary |
-| `voice.set` | MIDI: `voice_bank_id` and/or `secondary_voice_bank_id`; AI: `ai_voice_bank_id` and/or `secondary_ai_voice_bank_id` | Voice summary after native setters and readback |
+| `voice.get` | `track_index`, `part_index` | Voice summary |
+| `voice.set` | `track_index`, `part_index`; MIDI: `voice_bank_id` and/or `secondary_voice_bank_id`; AI: `ai_voice_bank_id` and/or `secondary_ai_voice_bank_id` | Voice summary after native setters and readback |
 
 IDs must be installed IDs accepted by VSM, not display names. MIDI and AI option
 names cannot be mixed. Voice summaries contain `ai`, all four IDs and names,
@@ -234,8 +234,8 @@ boundaries are covered by `artifacts/feature-acceptance-80b1c4779514/summary.jso
 
 | Operation | Options | `result` |
 | --- | --- | --- |
-| `selection.get` | `target` plus scope below | `target`, `selected_indices` |
-| `selection.set` | Same scope, distinct `indices` (may be empty); optional `selected` (default true), `clear_existing` (default true) | Selection after native setters and readback |
+| `selection.get` | `target` is `track`, `part`, `note`, `tempo`, `time_signature`, or `controller`; `part` requires `track_index`, `note` requires `track_index` and `part_index`, and `controller` also requires native `type` | `target`, `selected_indices` |
+| `selection.set` | `target` is `track`, `part`, `note`, `tempo`, `time_signature`, or `controller`; `part` requires `track_index`, `note` requires `track_index` and `part_index`, and `controller` also requires native `type`; distinct `indices` may be empty; optional `selected=true`, `clear_existing=true` | Selection after native setters and readback |
 
 `target` is one of `track`, `part`, `note`, `tempo`, `time_signature`, or
 `controller`. Tracks, tempos, and time signatures use the session list. Parts
@@ -253,13 +253,13 @@ Controller operations require `track_index`, `part_index`. Except
 
 | Operation | Additional Options | `result` |
 | --- | --- | --- |
-| `controller.types` | None | `types`: native names and min/max/default values |
-| `controller.list` | None | `type`, `points`, min/max/default values |
-| `controller.set` | `points`: array of `{tick, value}`; optional `replace` (default false); optional `controller_index` to move one selected point, requiring one point and `replace=false` | Updated controller list |
-| `controller.remove` | `controller_index` | `removed`, old index |
-| `pitch.list` | `note_index` | `points`: `{tick, value}` |
-| `pitch.set` | `note_index`, `points`: array of `{tick, value}`; optional `replace` | Updated pitch list |
-| `pitch.clear` | `note_index`; optional `begin_tick` (default 0), exclusive `end_tick` (default note duration) | Updated pitch list |
+| `controller.types` | `track_index`, `part_index` | `types`: native names and min/max/default values |
+| `controller.list` | `track_index`, `part_index`, native controller `type` | `type`, `points`, min/max/default values |
+| `controller.set` | `track_index`, `part_index`, native controller `type`, `points` array of `{tick,value}`; optional `replace=false`, `controller_index` to move one selected point with one point and `replace=false` | Updated controller list |
+| `controller.remove` | `track_index`, `part_index`, native controller `type`, `controller_index` | `removed`, old index |
+| `pitch.list` | `track_index`, `part_index`, `note_index` | `points`: `{tick, value}` |
+| `pitch.set` | `track_index`, `part_index`, `note_index`, `points` array of `{tick,value}`; optional `replace` | Updated pitch list |
+| `pitch.clear` | `track_index`, `part_index`, `note_index`; optional `begin_tick=0`, exclusive `end_tick` (default note duration) | Updated pitch list |
 
 Controller types in the inspected assembly are `DynamicsHmm`, `Dynamics`,
 `PitchBendSens`, `PitchBendHmm`, `PitchBend`, `WeightHmm`, `Breathiness`,
@@ -430,6 +430,25 @@ probe. Historical counts are not the current complete-function gate; do not
 repeatedly run unchanged passing checks.
 
 ## Additional native operations
+
+The following concise contracts complement the detailed behavior in the
+sections above. Track, part and note indices refer to the current native state.
+
+| Operation | Options | `result` |
+| --- | --- | --- |
+| `automation.list` | `scope` is `master_volume`, `track_volume`, or `track_pan`; track scopes require `track_index` | Bounds, default and indexed `{tick,value}` points |
+| `automation.set` | `scope` is `master_volume`, `track_volume`, or `track_pan`; track scopes require `track_index`; distinct `points` of `{tick,value}`; optional `replace=false` | Current automation list; replacement retains the zero-tick baseline |
+| `automation.remove` | `scope` is `master_volume`, `track_volume`, or `track_pan`; track scopes require `track_index`; `event_index` | Current automation list; the zero-tick baseline is protected |
+| `history.rollback` | None | `rolled_back` and `staged` |
+| `note.batch_update` | `track_index`, `part_index`, distinct `note_indices`; `transpose` and/or a `lyrics` array | Updated note list; lyrics do not run G2PA |
+| `performance.get` | `track_index`, `part_index` | Native Robot, Breath, Take, VoiceColor and MIDI-effect bypass state and bounds |
+| `performance.set` | `track_index`, `part_index`; one or more of `robot_mode`, `breath_mode`, `breath_type`, `breath_exhalation`, `take_lane`, `voice_colors`, `bypass` | Updated native performance state |
+| `phoneme_timing.get` | `track_index`, `part_index`, `note_index` | Current and original phoneme positions and native ranges |
+| `phoneme_timing.set` | `track_index`, `part_index`, `note_index`, `phoneme_index`, `tick` | Updated phoneme positions and ranges |
+| `phoneme_timing.reset` | `track_index`, `part_index`, `note_index`, `phoneme_index` | Reset phoneme positions and ranges |
+| `time.convert` | `from` is `tick`, `bar`, `sample`, or `seconds`; `value` | Seconds, tick, zero-based bar/beat/clock, sample and sample rate |
+| `vibrato.get` | `track_index`, `part_index`, `note_index` | Type, duration, AI enable state and depth/rate events |
+| `vibrato.set` | `track_index`, `part_index`, `note_index`; one or more of `type`, `duration_tick`, `ai_enabled`, `depth`, `rate` | Updated vibrato state; supplied event arrays replace that event type |
 
 The following changes were checked against installed managed wrapper signatures.
 The integrated host built with zero warnings/errors. A private-session smoke

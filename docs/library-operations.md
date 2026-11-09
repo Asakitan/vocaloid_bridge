@@ -46,32 +46,32 @@ integers; the default `track_index`, `part_index`, and `note_index` is `0`.
 | `languages` | Optional | `{}` | Array of `{language_id,name,default_lyric}` from real native managers |
 | `phoneme_table` | Optional | `language_id=0` | Manual symbol inventory, source pages, and documented Japanese AI restriction; `native_enumeration=false` |
 | `dvqm_catalog` | Optional | `is_attack=true`, `voice_id=""`, `offset=0`, `limit=100` (1..256) | Installed native Attack/Release component IDs, numeric IDs, level names, capabilities and total |
-| `dvqm_get` | Required | Target note, `is_attack=true` | Native selection, component/level names, speed, top factor and protection |
-| `dvqm_set` | Required | Target note, `is_attack=true`, `db_id`, `name_id`, optional `speed`, `top_factor`, `is_protected` | Committed native selection readback |
-| `dvqm_clear` | Required | Target note, `is_attack=true` | Cleared native selection readback |
+| `dvqm_get` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true` | Native selection, component/level names, speed, top factor and protection |
+| `dvqm_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true`, `db_id`, `name_id`, optional `speed`, `top_factor`, `is_protected` | Committed native selection readback |
+| `dvqm_clear` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true` | Cleared native selection readback |
 | `singing_skill_catalog` | Optional | `{}` | Installed Singing Skill plugin IDs, names, tags, timing and script availability |
-| `singing_skill_get` | Required | Target classic part | Skill, amount, plugin ID, bypass and native bounds |
-| `singing_skill_set` | Required | Target classic part; optional `plugin_id`, `skill`, `amount`, `bypassed` | Committed Singing Skill readback |
-| `note_skill_get` | Required | Target note | `duration_tick`, `pre_weight`, `post_weight` |
-| `note_skill_set` | Required | Target note; optional `duration_tick`, `pre_weight`, `post_weight` (weights 0..127) | Committed note-level HMM weights |
-| `note_skill_reset` | Required | Target note | Native default HMM weights |
+| `singing_skill_get` | Required | Target classic part (optional `track_index=0`, `part_index=0`) | Skill, amount, plugin ID, bypass and native bounds |
+| `singing_skill_set` | Required | Target classic part (optional `track_index=0`, `part_index=0`); optional `plugin_id`, `skill`, `amount`, `bypassed` | Committed Singing Skill readback |
+| `note_skill_get` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`) | `duration_tick`, `pre_weight`, `post_weight` |
+| `note_skill_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`); optional `duration_tick`, `pre_weight`, `post_weight` (weights 0..127) | Committed note-level HMM weights |
+| `note_skill_reset` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`) | Native default HMM weights |
 | `lyrics_can_convert` | Optional | `language_id=0, lyrics, is_ai=false, use_extension_dictionary=false` | `{language_id,lyrics,can_convert}` |
-| `lyrics_candidates` | Required | Target note, `lyrics`, optional `language_id` (default note language), `use_extension_dictionary=false` | `{language_id,lyrics,candidates:[[{lyric,phonemes}]]}` |
-| `lyrics_apply` | Required | Target note, `lyrics`, optional `language_id`, `use_extension_dictionary=false`, `protect` | Mutation result below |
-| `phonemes_apply` | Required | Target note, `phonemes`, optional `language_id`, `protect` | Mutation result below |
-| `lyrics_reset` | Required | Target part, optional `language_id` | Mutation result below |
-| `phonemes_reset` | Required | Target part, optional `language_id` | Mutation result below |
+| `lyrics_candidates` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `lyrics`, optional `language_id` (default note language), `use_extension_dictionary=false` | `{language_id,lyrics,candidates:[[{lyric,phonemes}]]}` |
+| `lyrics_apply` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `lyrics`, optional `language_id`, `use_extension_dictionary=false`, `protect` | Mutation result below |
+| `phonemes_apply` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `phonemes`, optional `language_id`, `protect` | Mutation result below |
+| `lyrics_reset` | Required | Target part (optional `track_index=0`, `part_index=0`), optional `language_id` | Mutation result below |
+| `phonemes_reset` | Required | Target part (optional `track_index=0`, `part_index=0`), optional `language_id` | Mutation result below |
 | `style_list` | Optional | `query=""`, `sub_genres=[]`, `colors=[]` | `{total,styles:[Style]}` |
 | `style_get` | Optional | `style_id` | Style with native effect parameter arrays |
-| `style_apply` | Required | Target part, `style_id`, `include_audio=true` | `{session_id,style_id,name,midi_effects_applied,audio_effects_applied,audio_effect_count,scope}` |
-| `style_capture` | Required | Target part, `name`; optional `sub_genres=[]`, `colors=[]`, `include_audio=true`, `overwrite_style_id` | Native private style snapshot and saved path |
+| `style_apply` | Required | Target part (optional `track_index=0`, `part_index=0`), `style_id`, `include_audio=true` | `{session_id,style_id,name,midi_effects_applied,audio_effects_applied,audio_effect_count,scope}` |
+| `style_capture` | Required | Target part (optional `track_index=0`, `part_index=0`), `name`; optional `sub_genres=[]`, `colors=[]`, `include_audio=true`, `overwrite_style_id` | Native private style snapshot and saved path |
 | `style_update` | Required | Private `style_id`; optional `name`, `add_sub_genres=[]`, `add_colors=[]` | Native saved property readback; existing tags preserved |
 | `style_delete` | Required | Private `style_id` | Native removal, verified file and catalog absence |
 | `media_list` | Optional | `query=""`, `genres=[]`, `types=[]` | `{total,clips:[Clip]}` |
 | `media_get` | Optional | `clip_id` | Clip with native part properties |
 | `media_update` | Required | `clip_id`, optional `name`, `tempo`, `add_genres=[]`, `add_types=[]` | `{session_id,clip:Clip}` |
 | `media_delete` | Required | `clip_id` | `{session_id,clip_id,deleted:true}` after native file/catalog removal |
-| `media_capture` | Required | Target part, optional `name`, `tempo` (native hundredths of BPM), `genres=[]`, `types=[]` | `{session_id,clip:Clip,preview_audio_created:false}` |
+| `media_capture` | Required | Target part (optional `track_index=0`, `part_index=0`), optional `name`, `tempo` (native hundredths of BPM), `genres=[]`, `types=[]` | `{session_id,clip:Clip,preview_audio_created:false}` |
 | `media_import` | Required | `clip_id`, `track_index=0`, `position_tick=0`, optional `name` | MIDI: `{session_id,clip_id,track_index,position_tick,duration,notes}`; audio: `{session_id,clip_id,track_index,imported}` |
 
 `Style` contains `style_id,name,type,path,vendor,languages,singers,genres,

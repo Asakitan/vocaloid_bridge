@@ -298,6 +298,14 @@ implicitly converted. Snapshots survive closing their original source session.
 Pasted asset caches remain owned until host shutdown; at most 128 active private
 clipboards and 1024 owned runtime directories are admitted.
 
+| Operation | Options | Result |
+| --- | --- | --- |
+| `copy` | Source `session_id`; `kind` (`tracks`, `parts`, or `notes`), distinct `indices`; optional `track_index` for parts/notes and `part_index` for notes (both default 0) | Independent private clipboard ID and native counts |
+| `cut` | Source `session_id`; `kind` (`tracks`, `parts`, or `notes`), distinct `indices`; optional `track_index` for parts/notes and `part_index` for notes (both default 0) | Private clipboard ID and counts; selected source entities are removed in native history |
+| `paste` | Target `session_id`, `clipboard_id`; optional `offset_tick=0`; track insertion `index` defaults to append and target `track_index`/`part_index` default to 0 | Native pasted count and clipboard ID |
+| `list` | No session or options | Active private clipboard summaries |
+| `clear` | `clipboard_id`; no session required | Cleared status and whether pasted asset caches remain owned |
+
 Native project import uses staged sources and explicit format dispatch for VPR,
 VSQX, PPSF and MIDI/SMF/VSQ. PPSF ZIP and legacy binary forms select their native
 loaders by file signature, not by retrying different backends. MIDI export uses

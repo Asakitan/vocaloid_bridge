@@ -470,6 +470,7 @@ internal sealed partial class EngineHost
 
     private object LibraryApplyLyrics(EngineSession session, string operation, JsonElement options)
     {
+        ScoreRequireUnstaged(session.Sequence);
         WIVSMMidiPart part = LibraryMidiPart(session, options);
         int affectedLength = 0;
         if (operation is "lyrics_reset" or "phonemes_reset")

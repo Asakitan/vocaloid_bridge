@@ -120,8 +120,12 @@ Without an explicit language, reset calls process the distinct valid native note
 and part languages, excluding unset (`-1`) part caches. If none is initialized,
 an explicit `language_id` is required. No user preference or multilingual
 priority setting is read.
-Mutation paths mark the session dirty and invalidate child references before
-calling the native mutation, including error paths that may leave staged data.
+Before `lyrics_apply`, `phonemes_apply`, `lyrics_reset` or `phonemes_reset`, the
+bridge requires the sequence to have no pending native staged edits. This prevents
+those calls from committing unrelated staged changes. After that check, the
+existing mutation path marks the session dirty and invalidates child references
+before calling native code; an error may still leave newly staged data, so
+post-mutation rollback is not claimed.
 Commits accept a native no-op false result only when no changes were staged and
 the native error remains `NoError`.
 

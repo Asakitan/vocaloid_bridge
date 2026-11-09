@@ -71,7 +71,7 @@ V 不由工具数量或能够枚举签名推导。当前为 37 个工具、125 �
 | N-03 | 音符复制、分割、连接 | project_edit note.duplicate / note.split / note.join | V | 17-18,45 |
 | N-04 | 多音符批量移调与编辑 | project_edit note.batch_update；歌词文字和移调，保存重开已验 | V | 49 |
 | N-05 | 歌词、音素、语言与保护 | project_edit note.add / update | V | 48-49,57 |
-| N-06 | 逐音节写入与延音连音 | project_library lyrics_apply 原生音节分配；歌词文字批量另见 note.batch_update | V | 19,48 |
+| N-06 | 逐音节写入与延音连音 | project_library lyrics_apply 原生音节分配；应用和重置前检查暂存状态，批量文字另见 note.batch_update | V | 19,48 |
 | N-07 | 歌词转音素、候选音素 | project_library 原生 G2PA；日语可合法返回空候选 | V | 19,48,57 |
 | N-08 | 元音、辅音时序编辑 | phoneme_timing.get/set/reset；原生渲染后生成位置，保存重开再渲染读回通过 | V | 40,59 |
 

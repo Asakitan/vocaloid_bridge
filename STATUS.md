@@ -1,6 +1,6 @@
 # 当前状态
 
-日期：2026-11-10。版本：0.19.0。完整目标继续进行，不把受测范围扩大为所有输入与环境组合。
+日期：2026-11-10。版本：0.19.1。完整目标继续进行，不把受测范围扩大为所有输入与环境组合。
 
 用户明确选择仅使用 VOCALOID:AI 声库，不安装经典试用。未指定类型的 `track.create` 默认创建 `MidiAi`；显式经典轨及旧工程的源文件与身份保护保留。较早的功能和验证历史见 [会话索引](docs/session-log/README.md)。
 
@@ -8,6 +8,7 @@
 
 - 37 个 MCP 工具，68 个乐谱、16 个音频、30 个素材、5 个剪贴板和 6 个 MIDI 录制操作，共 125 个；创建、打开、编辑、保存、关闭、克隆和恢复保留。会话 23 补齐其中 18 个原先为空的契约行，并补充音符、控制器、声库、音频和素材操作的公共选择器；生成器按操作首列精确匹配并拒绝缺项；可发现不等于所有输入与环境均已验收。
 - 工程未知字段、固定嵌套对象、额外 ZIP 资源及受测 AI 实体扩展按原生身份与历史保存；受测 tempo/拍号扩展插入和部分删除、音高项扩展编辑与复制、主音量及轨道音量/声像项扩展编辑有定向证据。
+- 会话 28 的歌词/音素应用与重置在原生调用前检查是否有暂存修改，避免提交无关 tempo 等未完成编辑；不宣称原生调用失败后的新暂存已自动回滚。
 - 会话 27 的 `score_patch` 在私有 JSON 树中按对象身份追踪无效音素 sidecar：受测移动更新索引、复制产生新条目、删除或替换移除旧条目；位置、时长和音高变更更新签名，歌词/音素/语言变更保持保护。
 - 会话 26 的 AI 文件音符使用 `source={index, expected}` 显式保留指定源音符，省略选择器表示新音符；选择器做严格快照和一对一检查，音素 sidecar 再核对来源索引及字段。先前被审查拦截的扩展项目守卫保持，并在文件音符替换入口检测相关扩展。
 - 会话 25 以同一只读源句柄贯穿文件级序列读取、修改和资源复制；受测并发写入/替换受到文件共享模式限制，已有写句柄时在创建输出前报错。`track.update` 的名称、颜色、静音、独奏和总线同值组合保持 clean/dirty 状态，`midi_recording` 仍走原 setter。
@@ -18,18 +19,16 @@
 
 ## 本轮证据
 
-本轮只改 Python、测试和文档，没有修改或构建 C#；Python AST 覆盖 97 个文件且无错误，操作目录检查通过。真实 MCP 验收使用此前构建的原生宿主。
+本轮按主人要求只运行一项必要的定向验收；构建前 Roslyn 检查 27 个文件及 208 个引用、Python AST 检查 104 个文件和操作目录均通过，一次 Release 构建为 0 警告、0 错误。
 
 | 范围 | 回执 | 结果 |
 | --- | --- | --- |
-| JSON Patch sidecar 身份 | `artifacts/feature-acceptance-840e52ca3977/summary.json` | 1 个功能用例及清理通过；受测复制、移动、删除、替换、音符位置/时长/音高、原生保存重开及资源保留 |
-| 旧版 sidecar 错绑与复制 | `artifacts/patch-sidecar-27-9dda41d946cb4cfe856b7b9c79a7b694/receipt.json`、`artifacts/feature-acceptance-2212e75bc34a/summary.json`、`artifacts/feature-acceptance-f428a8882714/summary.json` | 旧版同字段异身份错绑；复制音符原生重开后原标记 false、副本 true |
-| 补丁内部语义 | `tools/check_patch_semantics_27.py` | 多来源、连续复制、跨片段移动、根复制、插入、转义路径、失败原子性及内存守卫谓词通过 |
-| 生命周期与旧断言 | `artifacts/feature-acceptance-daac15c8755e/summary.json`、`artifacts/feature-acceptance-0f1de36b3862/summary.json` | 前批 5 通过、1 失败：旧用例仍要求音高补丁被拒；原生往返证明新行为后修改该用例，复验 1 用例及清理通过。失败批次自有素材已核对 ID/名称/路径并经私有原生接口删除 |
-| AI 歌词与新建音符 | `artifacts/feature-acceptance-081dbbadce90/lyrics_native27.json`、`artifacts/feature-acceptance-b3983340ab31/native_note27.json` | asa 中 `ni hao` 在双音符转换，`你好` 与 `ni3 hao3` 保留旧音素；单音符 `こんにちは` 截断为 `こ`，均为有限观察 |
-| 0.18.0 文件音符身份 | `artifacts/feature-acceptance-57ffec017ade/summary.json` | 1 个功能用例及清理通过；历史批次不与本轮相加 |
+| 歌词/音素暂存隔离 | `artifacts/feature-acceptance-c9c5f40275ad/summary.json` | 1 个功能用例及清理通过；四个应用/重置操作保持既有暂存、tempo、音符和 dirty 状态，清除暂存后正常歌词应用/保存/重开 |
+| 旧版事务观察 | `artifacts/feature-acceptance-0b599a61750f/lyrics_transaction28.json` | 旧版歌词应用会提交无关的已暂存 tempo；原生失败后显式 rollback 会一同撤销该暂存 |
+| AI 音素调查 | `artifacts/feature-acceptance-a8a508f71da6/compose_resolver28.json`、`artifacts/feature-acceptance-cba7992351b1/default_bootstrap28.json` | asa 上若干日/英/中单音节和默认引导有观察；空候选、多音节、其他声库及失败事务仍未构成通用转换方案 |
+| 0.19.0 文件补丁 sidecar | `artifacts/feature-acceptance-840e52ca3977/summary.json` | 1 个功能用例及清理通过；历史批次不与本轮相加 |
 
-更多历史回执及失败见 [会话索引](docs/session-log/README.md)。真实 PPSF3 样本、原生合成和 AI 声库证据见 [会话 07](docs/session-log/session-07.md)。
+更早回执见 [会话索引](docs/session-log/README.md)。已记录早期失败与后续复验，不将定向批次称为全量通过。
 
 ## 保留边界
 
@@ -38,6 +37,6 @@
 3. **普通素材属性**：生产 `media_update` 会丢失受测 `property.json` 未知字段。独立进程探针已证实检查后到替换前的并发写入可被覆盖；锁定素材时刷新返回成功值但枚举漏项且旧引用失效，解锁重刷只观察到新枚举恢复。通用数组身份、竞争隔离、失败后完整恢复和崩溃持久性尚未建立。详见 [素材属性调查](docs/media-property-21.md) 和 [刷新探针](docs/media-failure-22.md)。
 4. **时间与迁移**：拍号生成时开始位置碰撞、初始 tempo 删除、controller/音频/音高项/主音量项/轨道自动化项扩展的时间编辑，以及轨道自动化项跨工程传输等仍受保护。tempo/拍号扩展在无原生暂存变更时仍有合并限制；不宣称任意 VPR 无损编辑。详见 [工程保留](docs/project-preservation.md)。
 5. **设备与宿主**：物理 MIDI 采集和设备错误、真实 DAW 固定管道隔离与同步、实际听音质量仍未完成验收。内部声乐合成明确要求 44100 Hz，混缩输出采样率独立。
-6. **录音与客户端**：录音开关的 `true` 状态在一项普通 AI 工程保存重开后恢复 false，持久语义待确认。新独立 stdio 连接实测 0.19.0；本对话连接本轮仍报告 Python MCP 0.4.0、0 会话，原生宿主此前比对为 0.5.0。可见的 app-server 全局刷新没有线程或服务选择参数，可能影响其他会话，本轮未执行；没有操作用户前台编辑器。
+6. **录音与客户端**：录音开关的 `true` 状态在一项普通 AI 工程保存重开后恢复 false，持久语义待确认。新独立 stdio 连接实测 0.19.1；本对话连接本轮仍报告 Python MCP 0.4.0、0 会话，原生宿主此前比对为 0.5.0。可见的 app-server 全局刷新没有线程或服务选择参数，可能影响其他会话，本轮未执行；没有操作用户前台编辑器。
 
-当前模块状态见 [功能矩阵](docs/feature-matrix.md)、[会话 27](docs/session-log/session-27.md) 和 [TODO](TODO.md)。
+当前模块状态见 [功能矩阵](docs/feature-matrix.md)、[会话 28](docs/session-log/session-28.md) 和 [TODO](TODO.md)。

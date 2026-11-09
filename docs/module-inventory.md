@@ -12,7 +12,7 @@
 | `native/ProjectArchivePreservation.cs`、`native/ProjectArchiveArrays.cs` | 未知字段、实体身份、速度/拍号/控制器事件和额外归档资源保留 | 受测事件扩展编辑、控制器复制拆合及历史通过；跨工程控制器扩展和其他数组有限制 |
 | `native/ProjectArchiveTimeline.cs`、`native/ProjectArchiveNoteArrays.cs`、`native/ProjectArchiveNoteIntegration.cs`、`native/ProjectArchiveMasterAutomation.cs`、`native/ProjectArchiveTrackAutomation.cs` | 扩展时间编辑、音高项及主/轨道自动化项身份、事务和覆盖 | 受测事件插入和部分删除、音高项复制及身份操作、主/轨道自动化项编辑与历史通过；拍号生成位置碰撞、音高项删除及跨工程等边界保留 |
 | `native/MidiRecordingOperations.cs`、`native/MidiRecordingGuards.cs` | 设备枚举、MIDI 事件队列、事务录制及会话保护 | 六操作、静音同步、回调保护及自有虚拟输入通过；物理设备和驱动错误路径未验 |
-| `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 30 个操作有成功调用；样式及 HMM 通过，经典 Singing Skill 重开受身份问题影响 |
+| `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 30 个操作有成功调用；歌词/音素应用与重置先检查暂存状态，原生失败后的恢复仍待验证 |
 | `native/ProjectInterchange.cs`、`native/ProjectArchiveTempoMerge.cs`、`native/ProjectArchiveTimeSigMerge.cs` | 原生格式交换、复制、恢复与合并 | 真实 PPSF3/音频克隆、受测纯元数据历史及空操作状态、tempo/拍号扩展合并和速度碰撞覆盖通过；其他音频组合受限 |
 | `native/ProjectClipboard.cs`、`native/ProjectArchiveTransfer.cs` | 私有原生快照剪贴板及扩展身份迁移 | 受测 AI/音频扩展剪切/粘贴、原始及处理 WAV、工程级不透明资源迁移与候选预检通过；控制器扩展转移受限 |
 | `native/ProjectArchiveOutput.cs` | 带扩展工程的独立原生快照输出 | 人声渲染、MIDI 导出、离线混缩/分轨及源会话历史保护定向通过 |
@@ -57,6 +57,7 @@
 | `tools/check_source_snapshot_25.py`、`tools/check_score_noop_25.py`、`tools/check_file_note_identity_25.py`、`tools/probe_media_atomic_25.py` | 源工程竞争、轨道字段 no-op、音符原型和素材文件锁探针 | 源一致性及轨道字段定向通过；音符错贴为红基线，素材原生刷新恢复未验 |
 | `tools/check_file_notes_26.py`、`tools/probe_note_identity_26.py`、`tools/probe_ai_note_defaults_26.py`、`tools/probe_ai_lyrics_conversion_26.py`、`tools/probe_media_handle_26.py` | 文件音符身份、AI 默认/歌词转换和素材同句柄探针 | 显式身份及原生往返通过；空音素、转换错误及素材事务仍待处理 |
 | `tools/check_patch_sidecar_27.py`、`tools/check_patch_semantics_27.py`、`tools/probe_patch_sidecar_27.py`、`tools/probe_patch_copy_validity_27.py`、`tools/probe_lyrics_native_27.py`、`tools/probe_native_note_27.py` | JSON Patch sidecar 身份与 AI 转换观察 | 受测 sidecar 迁移和原生重开通过；自动转换及其他组合待验证 |
+| `tools/check_lyrics_staging_28.py` 及 `tools/probe_*28.py` | 歌词暂存边界与原生音素引导调查 | 一项暂存隔离用例通过；自动转换、原生失败恢复和其他声库仍待验证 |
 | `tools/check_clipboard_ambiguity.py`、`tools/check_archive_export_limits.ps1`、`tools/check_tempo_array_helper.ps1` | 剪贴板候选、ZIP 导出限制和 tempo 数组原语回归 | 合成候选、缩小阈值 ZIP 和原语通过；完整 MCP 证据见 STATUS |
 | `tools/probe_appcontainer_pipe.cs`、`tools/probe_appcontainer_child.go` | 随机合成管道的后台进程隔离探针 | 受限令牌及单一默认权限管道拒绝访问已观察；非插件隔离证明 |
 | `tools/probe_appcontainer_server.cs`、`tools/probe_appcontainer_server_child.go`、`tools/probe_appcontainer_peer.cs`、`tools/probe_appcontainer_peer_child.go` | 随机合成管道受限服务端与同/异 profile 对端探针 | LOCAL 双向收发和负对照已观察；未证明真实插件隔离 |
@@ -114,3 +115,4 @@
 | 2026-11-10 | 升级 0.17.3：源工程同句柄读取/复制及轨道字段组合 no-op 定向通过；音符原型错贴与素材事务保留为未完成。 |
 | 2026-11-10 | 升级 0.18.0：AI 文件音符显式源身份、干净新音符和 sidecar 索引保护定向通过；空音素及素材事务继续调查。 |
 | 2026-11-10 | 升级 0.19.0：JSON Patch 的受测无效音素 sidecar 随移动、复制和删除迁移；原生歌词转换边界补充实证。 |
+| 2026-11-10 | 升级 0.19.1：歌词与音素应用/重置先检查暂存变更，避免提交无关编辑；自动音素转换继续调查。 |

@@ -14,9 +14,22 @@ Voice identities are never silently substituted by this bridge.
 
 When `project_merge` imports tracked MIDI/AI entities with supported unknown
 fields, it maps them to the returned native duplicates inside the target
-history transaction. Source root/master unknown fields and opaque archive
-resources have no merge conflict contract and are rejected before target
-mutation. `artifacts/feature-acceptance-e57fec059ac3/summary.json` verifies
+history transaction. Direct unknown root/master properties are merged by JSON
+Pointer: equal values coexist, disjoint values are copied, and conflicting
+values are rejected before target mutation. Existing target-only values are
+retained. Newly introduced nested fields are preflighted against an independent
+snapshot of the target; a missing parent or conflicting output leaf is rejected
+before mutation. A merge introducing global fields must create a native history
+entry; otherwise it is rejected. An extension-aware merge is executed and saved
+on an independent candidate first, rejecting the tested indistinguishable-track
+conflict before modifying the target; this adds native copy and save overhead.
+Global fields follow merge undo/redo and rollback,
+and are project-level rather than owned by an imported track. Source opaque
+archive resources are rejected before mutation. The expanded global merge
+behavior, including newly introduced nested fields and no-history protection,
+passed its focused native MCP run in
+`artifacts/feature-acceptance-5a2c12f87c28/summary.json`.
+`artifacts/feature-acceptance-e57fec059ac3/summary.json` verifies
 synthetic AI merges, offset, tempo-only merge and history on two target types;
 it does not establish every format or resource combination.
 

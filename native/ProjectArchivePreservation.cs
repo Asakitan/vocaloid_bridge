@@ -9,6 +9,7 @@ internal sealed partial class EngineHost
 {
     private readonly record struct ArchiveEntity(string Kind, nint Pointer);
     private sealed record ArchiveEntry(JsonObject Extra, ArchiveEntity? Parent);
+    private sealed record ArchiveHistory(Dictionary<ArchiveEntity, ArchiveEntry> Live, JsonObject Root, JsonObject Master);
 
     private sealed class ArchiveState
     {
@@ -18,9 +19,13 @@ internal sealed partial class EngineHost
         internal JsonObject Root = new();
         internal JsonObject Master = new();
         internal Dictionary<ArchiveEntity, ArchiveEntry> Live = [];
-        internal readonly Stack<Dictionary<ArchiveEntity, ArchiveEntry>> Undo = new();
-        internal readonly Stack<Dictionary<ArchiveEntity, ArchiveEntry>> Redo = new();
+        internal readonly Stack<ArchiveHistory> Undo = new();
+        internal readonly Stack<ArchiveHistory> Redo = new();
         internal Dictionary<ArchiveEntity, ArchiveEntry>? Before;
+        internal JsonObject? BeforeRoot;
+        internal JsonObject? BeforeMaster;
+        internal JsonObject? UpgradeRoot;
+        internal JsonObject? UpgradeMaster;
         internal string? Action;
         internal readonly List<string> ExtraFiles = [];
         internal string? Invalid;
@@ -366,6 +371,8 @@ internal sealed partial class EngineHost
             state.ObserverAttached = true;
             state.HasEntityExtensions = true;
             state.PreUpgradeEmptyHistory = true;
+            state.UpgradeRoot = (JsonObject)state.Root.DeepClone();
+            state.UpgradeMaster = (JsonObject)state.Master.DeepClone();
             session.ArchiveBegin = operation =>
             {
                 RequireArchiveMutationSupported(session, operation);
@@ -398,6 +405,7 @@ internal sealed partial class EngineHost
         state.ObserverAttached = false;
         state.HasEntityExtensions = false;
         state.PreUpgradeEmptyHistory = false;
+        state.UpgradeRoot = null; state.UpgradeMaster = null;
         state.Live.Clear();
         session.ArchiveBegin = null; session.ArchiveEnd = null; session.ArchiveCopy = null;
         if (state.Root.Count == 0 && state.Master.Count == 0 && state.ExtraFiles.Count == 0)
@@ -761,6 +769,8 @@ internal sealed partial class EngineHost
         if (state.HasEntityExtensions && ((action == "undo" && state.Undo.Count == 0 && !oldEmptyUndo) || (action == "redo" && state.Redo.Count == 0)))
             throw new InvalidOperationException("project_preservation: native history has no corresponding identity snapshot.");
         state.Before = new(state.Live);
+        state.BeforeRoot = (JsonObject)state.Root.DeepClone();
+        state.BeforeMaster = (JsonObject)state.Master.DeepClone();
         state.Action = action;
     }
 
@@ -771,25 +781,38 @@ internal sealed partial class EngineHost
         if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state)) return;
         Dictionary<ArchiveEntity, ArchiveEntry> before = state.Before
             ?? throw new InvalidOperationException("project_preservation: mutation boundary was not started.");
+        JsonObject beforeRoot = state.BeforeRoot ?? throw new InvalidOperationException("project_preservation: missing root history snapshot.");
+        JsonObject beforeMaster = state.BeforeMaster ?? throw new InvalidOperationException("project_preservation: missing master history snapshot.");
         state.Before = null;
-        Dictionary<ArchiveEntity, ArchiveEntry> HistorySnapshot(Dictionary<ArchiveEntity, ArchiveEntry> snapshot) =>
-            state.PreUpgradeEmptyHistory && snapshot.Values.All(entry => entry.Extra.Count == 0) ? EmptyHistoryMarker : snapshot;
+        state.BeforeRoot = null; state.BeforeMaster = null;
+        ArchiveHistory HistorySnapshot(Dictionary<ArchiveEntity, ArchiveEntry> snapshot, JsonObject root, JsonObject master) =>
+            new(state.PreUpgradeEmptyHistory && snapshot.Values.All(entry => entry.Extra.Count == 0) ? EmptyHistoryMarker : snapshot, root, master);
+        ArchiveHistory currentBefore = HistorySnapshot(before, beforeRoot, beforeMaster);
+        void Restore(ArchiveHistory history)
+        {
+            state.Live = history.Live;
+            state.Root = history.Root;
+            state.Master = history.Master;
+        }
         bool rebindEmpty = false;
         switch (action)
         {
-            case "commit": state.Undo.Push(HistorySnapshot(before)); state.Redo.Clear(); break;
+            case "commit": state.Undo.Push(currentBefore); state.Redo.Clear(); break;
             case "undo":
                 if (state.Undo.Count == 0 && (!state.PreUpgradeEmptyHistory || before.Values.Any(entry => entry.Extra.Count != 0)))
                 { state.Invalid = "untracked undo"; break; }
-                state.Redo.Push(HistorySnapshot(before));
-                state.Live = state.Undo.Count == 0 ? EmptyHistoryMarker : state.Undo.Pop();
+                state.Redo.Push(currentBefore);
+                Restore(state.Undo.Count == 0
+                    ? new ArchiveHistory(EmptyHistoryMarker, (JsonObject)state.UpgradeRoot!.DeepClone(), (JsonObject)state.UpgradeMaster!.DeepClone())
+                    : state.Undo.Pop());
                 rebindEmpty = ReferenceEquals(state.Live, EmptyHistoryMarker); break;
             case "redo":
                 if (state.Redo.Count == 0) { state.Invalid = "untracked redo"; break; }
-                state.Undo.Push(HistorySnapshot(before)); state.Live = state.Redo.Pop();
+                state.Undo.Push(currentBefore); Restore(state.Redo.Pop());
                 rebindEmpty = ReferenceEquals(state.Live, EmptyHistoryMarker); break;
-            case "rollback": state.Live = before; break;
+            case "rollback": state.Live = before; state.Root = beforeRoot; state.Master = beforeMaster; break;
             case "sync":
+                state.Root = beforeRoot; state.Master = beforeMaster;
                 if (!before.Keys.ToHashSet().SetEquals(state.Live.Keys)) { state.Undo.Clear(); state.Redo.Clear(); state.PreUpgradeEmptyHistory = false; }
                 break;
             default: state.Invalid = "unknown mutation boundary"; break;
@@ -836,7 +859,7 @@ internal sealed partial class EngineHost
         state.Live = live;
     }
 
-    private static void TrimArchiveHistory(Stack<Dictionary<ArchiveEntity, ArchiveEntry>> history, int limit)
+    private static void TrimArchiveHistory(Stack<ArchiveHistory> history, int limit)
     {
         if (history.Count <= limit) return;
         var keep = history.Take(limit).Reverse().ToArray();

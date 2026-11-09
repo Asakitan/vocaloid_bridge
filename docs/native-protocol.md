@@ -106,15 +106,19 @@ VSM writes occur on the owning STA. Synchronized recording uses an already
 playing transport from that same session and releases it before score commit.
 Recording blocks session mutations and session-scoped clipboard/library calls;
 session close with pending recording requires explicit discard. Event-stream
-and muted-transport tests passed; hardware MIDI capture remains unverified.
+and muted-transport tests passed; an independently owned virtual input has
+also exercised the WinMM callback and endpoint cleanup. Physical MIDI-device
+capture and real driver-error notifications remain unverified.
 
 For VPR extensions, the host binds supported unknown properties to observed
 native entity lifetimes and transaction history, then overlays only those
 unknown properties onto native snapshots. MIDI/AI clipboard cut and paste and
 project merge use tracked native transactions and identity mapping. A failed
-cut retains its independent clipboard snapshot and reports its ID. Merge of
-source root/master extensions and transfer of opaque resources are explicit errors; plain
-projects retain their existing operation paths. Extra archive members are
+cut retains its independent clipboard snapshot and reports its ID. Merge combines
+nonconflicting source root/master extensions in the target history, preflighting
+new nested parents and the merged output in independent snapshots; metadata-only merges without a native
+history entry and opaque resource transfers are explicit errors. Plain projects
+retain their existing operation paths. Extra archive members are
 preserved on save without reviving deleted native-managed audio.
 
 Summaries contain `session_id`, native `title`, native `track_count`, host `dirty`,

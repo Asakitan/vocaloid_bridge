@@ -14,12 +14,52 @@ internal sealed partial class EngineHost
             throw new InvalidOperationException("project_preservation: source opaque archive resources have no transfer contract.");
     }
 
-    private void ArchiveMergeValidateSource(EngineSession source)
+    private (JsonObject Root, JsonObject Master) ArchiveMergePrepare(EngineSession source, EngineSession target)
     {
         ArchiveTransferValidateSource(source);
-        if (archiveStates.TryGetValue(source.Id, out ArchiveState? state) &&
-            (state.Root.Count != 0 || state.Master.Count != 0))
-            throw new InvalidOperationException("project_preservation: source root or master extensions have no merge contract.");
+        archiveStates.TryGetValue(source.Id, out ArchiveState? from);
+        archiveStates.TryGetValue(target.Id, out ArchiveState? to);
+        if (to is not null) ArchiveCheck(to);
+        JsonObject root = to is null ? new JsonObject() : (JsonObject)to.Root.DeepClone();
+        JsonObject master = to is null ? new JsonObject() : (JsonObject)to.Master.DeepClone();
+        JsonObject nestedRoot = new();
+        JsonObject nestedMaster = new();
+        static void Merge(JsonObject destination, JsonObject? sourceFields, JsonObject nested)
+        {
+            if (sourceFields is null) return;
+            foreach ((string pointer, JsonNode? value) in sourceFields)
+            {
+                if (destination.TryGetPropertyValue(pointer, out JsonNode? existing))
+                {
+                    if (!JsonNode.DeepEquals(existing, value))
+                        throw new InvalidDataException("project_preservation: source root or master extension conflicts at " + pointer);
+                    continue;
+                }
+                // Newly introduced nested leaves are validated against an
+                // independent current native snapshot before target mutation.
+                if (pointer.IndexOf('/', 1) >= 0)
+                    nested.Add(pointer, value?.DeepClone());
+                destination.Add(pointer, value?.DeepClone());
+            }
+        }
+        Merge(root, from?.Root, nestedRoot);
+        Merge(master, from?.Master, nestedMaster);
+        if (nestedRoot.Count != 0 || nestedMaster.Count != 0)
+        {
+            EngineSession snapshot = CloneProject(target.Id, null);
+            try
+            {
+                string path = Path.Combine(snapshot.Directory, "Project", "sequence.json");
+                PathGuard.NoLinks(path);
+                if (new FileInfo(path).Length > 128L * 1024 * 1024)
+                    throw new InvalidDataException("project_preservation: snapshot JSON exceeds 128 MiB.");
+                JsonObject current = ArchiveObject(JsonNode.Parse(File.ReadAllText(path)), "");
+                ArchiveOverlay(current, nestedRoot);
+                ArchiveOverlay(ArchiveObject(current["masterTrack"], "/masterTrack"), nestedMaster);
+            }
+            finally { Close(snapshot.Id, true); }
+        }
+        return (root, master);
     }
 
     // Call on a freshly returned native duplicate, inside a target archive

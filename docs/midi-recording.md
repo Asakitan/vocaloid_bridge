@@ -1,7 +1,8 @@
 # Background MIDI input and recording
 
-Status: integrated and tested with explicit event streams and a muted transport.
-No hardware MIDI input has been opened in this investigation.
+Status: integrated and tested with explicit event streams, a muted transport,
+and an independently owned virtual WinMM input. No physical MIDI hardware has
+been opened in this investigation.
 
 ## Installed editor evidence
 
@@ -102,10 +103,45 @@ opened. This verifies an explicitly submitted event stream, not physical device
 capture or sample-accurate alignment. The earlier wrapper enumeration failure
 is preserved at `artifacts/feature-acceptance-647c107fc2bd/summary.json`.
 
-An explicitly selected independent MIDI input remains unverified; neither
-CubaseAI port nor the user's interactive editor was opened for the test.
+An independently created virtual input has now been tested as described below;
+neither CubaseAI port nor the user's interactive editor was opened.
 
 `tools/check_midi_recording.py` performs the synthetic real-MCP test without
 opening a MIDI device. Pass `--transport-device-id` only when an independent,
 explicitly selected VAE output is available for the muted synchronized test;
 the script never selects an output device automatically.
+
+### Independent virtual input feasibility
+
+A read-only host inspection on 2026-11-10 returned Windows build `22631`,
+`DisplayVersion` `23H2`, and no service whose name contains `midi`; it did
+not open a MIDI port or modify the machine. The registry `ProductName` value
+was `Windows 10 Pro`, which by itself does not establish the Windows release.
+Microsoft documents that application-owned virtual endpoint creation requires
+the Windows MIDI Services API, while WinMM compatibility is optional and
+endpoint arrival can be delayed. The API requires Windows 11 25H2 or later:
+see the official [virtual device transport](https://microsoft.github.io/MIDI/kb/virtual-device-app/),
+[minimum requirements](https://microsoft.github.io/MIDI/kb/minimum-requirements/),
+and [MIDI 1.0 integration](https://microsoft.github.io/MIDI/kb/integrating-midi1-and-midi2-apis/)
+references. Existing installations of loopMIDI 1.0.16.27 and teVirtualMIDI
+SDK 1.3.0.43 were then found; `System32/teVirtualMIDI64.dll` has a valid
+Authenticode signature and an x64 PE header. No component was installed,
+uninstalled, or reconfigured. The installed SDK header states that named ports
+are removed when their creating process terminates, with an inactive endpoint
+possible while another application holds its frontend.
+
+`tools/check_midi_owned_input.py` creates a uniquely named input-only endpoint
+with the existing SDK, opens only its matching WinMM ID and name, sends short
+note-on/off messages with `virtualMIDISendData`, stops and commits, edits the
+note, saves and reopens it, closes the project and endpoint, and checks endpoint
+absence using a fresh enumeration process. It opens no WinMM output. Receipt
+`artifacts/midi-owned-78935c45c6f9.json` reports two received callback events,
+one committed note, successful edit/save/reopen, zero remaining owned sessions,
+and endpoint absence in the fresh process. The original template was unchanged.
+The previous `artifacts/midi-owned-608946611532.json` remains a failed receipt:
+same-process enumeration still listed the closed endpoint; a subsequent fresh
+process listed only the two original CubaseAI ports. This is virtual driver
+input, not a physical MIDI-device test; concurrent delivery, real device loss,
+and hardware timing remain unverified. The vendor's
+[SDK page](https://www.tobias-erichsen.de/software/virtualmidi/virtualmidi-sdk.html)
+documents evaluation and distribution restrictions.

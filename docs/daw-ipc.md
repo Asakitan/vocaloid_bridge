@@ -192,3 +192,47 @@ It might also make the fixed non-`LOCAL` pipe names unusable, preventing the
 intended VSTi/Bridge connection. Preserve the existing native project engine;
 do not load a plugin until isolation, access requirements and real transport
 behavior are demonstrated independently.
+
+### Synthetic restricted-server and peer controls
+
+A follow-up used only GUID-derived synthetic names and transient profiles; no
+plugin or user endpoint was touched. `tools/probe_appcontainer_server.cs` and
+`tools/probe_appcontainer_server_child.go` produced
+`artifacts/probe-appcontainer-server.txt`: full-trust ordinary-name server
+creation returned Win32 0; an AppContainer child (`TokenIsAppContainer=1`)
+returned Win32 5 for the same ordinary syntax and 0 for `LOCAL` syntax. The
+child closes any successful pipe handle before exit. All three child exits
+were 0, profile deletion HRESULT was 0, and desktop close returned true.
+
+`tools/probe_appcontainer_peer.cs` and `tools/probe_appcontainer_peer_child.go`
+produced `artifacts/probe-appcontainer-peer-controls.txt`. Two separately
+created transient profiles were used. For each case the server created a fresh
+random `LOCAL` pipe with default security and `FILE_FLAG_FIRST_PIPE_INSTANCE`;
+the peer sent byte `A` and received byte `B`. Both same-profile children
+reported `TokenIsAppContainer=1`, both reported `exchange_ok`, and both exited
+0. A client from the second profile reported AppContainer 1, repeatedly got
+file-not-found (Win32 2), and exited 4; the server timed out and the parent
+terminated and waited for that owned child. A full-trust client reported
+AppContainer 0 and the same file-not-found and exit 4; its server likewise
+was terminated after timeout. Both profile deletion HRESULTs were 0 and desktop
+close returned true. The harness uses the distinct profile SIDs provided by
+`CreateAppContainerProfile` but reports only token type, not the SID value;
+it does not independently audit profile storage or check termination return
+codes. Case labels and receipts, rather than the harness overall exit status,
+are the evidence. Its fixed timeouts and retry loop are probe mechanics, not a
+production host design.
+
+These controls establish a synthetic same-profile LOCAL byte exchange and
+observed non-discovery by two other token contexts on this machine. They do
+not establish an access boundary for other IPC mechanisms or for the vendor's
+fixed non-LOCAL names. In particular, this result does not make those plugin
+paths usable inside AppContainer. Runtime plugin, licensing, host, process
+discovery, network, files, registry, shared memory and audio requirements remain
+unexamined; private desktop remains separate from IPC isolation.
+
+Reproduce the two focused probes with the compiler commands above, replacing
+`probe_appcontainer_child.go` and `probe_appcontainer_pipe.cs` respectively
+with `probe_appcontainer_server_child.go` / `probe_appcontainer_server.cs`,
+then `probe_appcontainer_peer_child.go` / `probe_appcontainer_peer.cs`. Run each
+parent executable with its corresponding child executable path. The peer
+negative cases deliberately wait for timeout before terminating each server.

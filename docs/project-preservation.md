@@ -125,8 +125,16 @@ note identity signatures remain rejected. Unsupported unknown fields
 inside array elements are also rejected. With entity extensions present,
 unverified raw/native mutations, library/audio writes, and score operations
 outside the explicitly tracked subset are rejected. MIDI/AI clipboard cut/paste
-and track merge now use identity transactions; source root/master fields and
-opaque-resource transfer have separate restrictions. The focused cases in
+and track merge now use identity transactions. Source root/master fields with
+equal or disjoint pointers can be merged with target fields; new nested leaves
+are preflighted against a native target snapshot, while conflicting values and
+global-only merges without a native history entry are rejected. The focused
+`artifacts/feature-acceptance-5a2c12f87c28/summary.json` verifies direct and
+nested additions, save/reopen, undo/redo, source protection and rejection of
+an indistinguishable-track conflict on an independent candidate before target
+mutation. Other edit paths can still discover such ambiguity only at save.
+Opaque-resource
+transfer has separate restrictions. The focused cases in
 `artifacts/feature-acceptance-e57fec059ac3/summary.json` and
 `artifacts/feature-acceptance-4cb5b47a3915/summary.json` verify those bounded
 paths, not every source format, larger history permutation or resource case.

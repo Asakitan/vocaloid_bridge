@@ -1,16 +1,18 @@
 # 当前状态
 
-日期：2026-11-10。版本：0.5.0。完整目标继续进行，不把受测范围扩大为所有输入与环境组合。
+日期：2026-11-10。版本：0.6.0。完整目标继续进行，不把受测范围扩大为所有输入与环境组合。
 
 会话 09：用户明确选择仅使用 VOCALOID:AI 声库；不安装经典声库试用，继续扩展 AI 工程编辑及后台设备能力。
 未指定类型的 `track.create` 默认改为 `MidiAi`；空工程到显式选声、编辑、保存重开和合成的定向验证见 `artifacts/feature-acceptance-32f1c9da5151/summary.json`。显式 `Midi` 类型及旧工程保护保留。
 
 会话 10：带未知实体字段的音符及片段拆合、冲突回滚和历史有定向 MCP 验证；AI 剪贴板剪切/迁移、工程合并及旧历史、MIDI 错误回调的定向检查通过。DAW 固定命名管道隔离和真实 MIDI 硬件仍待验证。
 
+会话 11：源 root/master 的直接与受测嵌套未知字段可在受控合并中保留，支持冲突预检及合并历史；独立虚拟 MIDI 输入的实际 WinMM 回调和清理通过。随机合成管道的同 profile 双向通信已观察，实际插件隔离仍待验证。
+
 ## 当前入口与实测
 
 - 37 个 MCP 工具，68 个乐谱、16 个音频、30 个素材、5 个剪贴板和 6 个 MIDI 录制操作，共 125 个。创建、打开、编辑、保存、关闭、克隆和恢复保留。
-- `project_midi` 提供设备枚举、显式设备或事件流录制、状态、停止和取消；事件流的音符、速度映射、保存重开与静音 transport 同步已验。输入错误通知、回调故障和溢出阻止提交；逻辑测试未打开真实 MIDI 输入。
+- `project_midi` 提供设备枚举、显式设备或事件流录制、状态、停止和取消；事件流的音符、速度映射、保存重开与静音 transport 同步已验。独立虚拟输入已触发实际 WinMM 回调；输入错误通知、回调故障和溢出的提交保护另有逻辑测试。
 - 新增 `devices` 与 `transport_prepare/status/play/stop/seek/release`：明确选择设备，原生 VAE 独立播放；不改系统默认设备或用户编辑器。DirectSound 静音时钟、停止、异步定位、释放后保存、关闭自动释放通过。
 - 新增 `track.freeze/freeze_state/unfreeze`：只持有会话自有缓存；修正预送时基、多片段范围和重复音量/声像处理。保存与克隆写出原始作者状态，冻结缓存不持久化。多片段、非零起点、Gain 和音量自动化的受测混音差异约 0.054%。
 - 修复原生保存/克隆丢弃未知工程数据：保留 root/master/track/part/note 未知字段、固定嵌套对象字段，以及额外 ZIP 资源；仅覆盖未知键，不恢复旧的已知值。原生实体通知和真实历史边界防止删除重建时元数据错贴。
@@ -23,6 +25,13 @@
 
 | 范围 | 回执 | 结果 |
 | --- | --- | --- |
+| 0.6.0 独立 stdio 状态与工具发现 | `artifacts/stdio-v060-status-1679c32d6429.json` | 版本 0.6.0、37 工具、0 会话 |
+| root/master 扩展合并、歧义预检及旧历史 | `artifacts/feature-acceptance-5a2c12f87c28/summary.json` | 2 通过，含清理 |
+| 嵌套扩展合并与历史 | `artifacts/feature-acceptance-28ce06be4e32/summary.json` | 2 通过，含清理；先于整合并预检 |
+| 全局合并与既有旧历史、音符拆合回归 | `artifacts/feature-acceptance-818d9fb68a28/summary.json` | 4 通过，含清理；先于嵌套预检改动 |
+| 自有虚拟 MIDI 输入、回调、编辑和清理 | `artifacts/midi-owned-78935c45c6f9.json` | 通过；物理设备未验 |
+| 本对话旧连接的 AI 扩展轨道粘贴 | `artifacts/live-mcp-transfer-1794244477025.json` | 通过；Python 0.4.0、原生宿主为 0.5.0 构建 |
+| 随机合成 AppContainer 管道服务端和对端 | `artifacts/probe-appcontainer-server.txt`、`artifacts/probe-appcontainer-peer-controls.txt` | 同 profile LOCAL 收发及负对照已观察；非实际插件证明 |
 | 源不透明资源剪切/粘贴保护及正常扩展剪切 | `artifacts/feature-acceptance-adac1d5901d0/summary.json` | 3 通过，含清理 |
 | AI 扩展剪切、粘贴、合并、旧历史与普通兼容 | `artifacts/feature-acceptance-e57fec059ac3/summary.json` | 7 通过，含清理 |
 | 轨道、片段、音符扩展剪切 | `artifacts/feature-acceptance-4cb5b47a3915/summary.json` | 2 通过，含清理 |
@@ -48,9 +57,9 @@
 ## 保留边界
 
 1. **声库选择**：用户明确仅用 AI 声库，不安装经典试用。此前本机 Dse=0、Dnn=21；旧经典文件继续受到源文件与身份完整性保护，经典发声和往返不作为本轮 AI 声库的验收结论。
-2. **未知数据**：非实体数组内扩展、源工程 root/master 未知字段和额外资源跨工程迁移，以及部分原始写调用仍受保护性限制；拆合、剪切、粘贴和合并仅通过受测语义的映射，同形轨道若数据不一致也会拒绝，详见 [工程保留说明](docs/project-preservation.md)。没有把此范围称作任意 VPR 无损编辑。
-3. **设备与宿主**：传输验证使用一台 DirectSound 设备并静音；实时 MIDI 硬件采集、驱动通知、实际听音质量和 DAW 同步仍未完成验收。插件已观察到固定命名管道路径，[IPC 隔离调查](docs/daw-ipc.md) 尚未证明独立宿主隔离；编辑器不具备波形录音功能，见 [音频录制与宿主边界](docs/audio-recording.md)。
+2. **未知数据**：非实体数组内扩展、额外资源跨工程迁移、缺失父对象及纯元数据合并，以及部分原始写调用仍受保护性限制；拆合、剪切、粘贴和合并仅通过受测语义的映射。扩展工程合并使用独立候选预检同形轨道歧义；其他编辑路径仍可能在保存时发现此类歧义，详见 [工程保留说明](docs/project-preservation.md)。没有把此范围称作任意 VPR 无损编辑。
+3. **设备与宿主**：传输验证使用一台 DirectSound 设备并静音；虚拟 MIDI 驱动的独立输入已验，物理 MIDI 采集、真实设备丢失及驱动错误通知、实际听音质量和 DAW 同步仍未完成验收。插件已观察到固定命名管道路径，[IPC 隔离调查](docs/daw-ipc.md) 尚未证明独立宿主隔离；编辑器不具备波形录音功能，见 [音频录制与宿主边界](docs/audio-recording.md)。
 4. **采样率**：声乐内部合成明确要求 44100 Hz；输出混缩率独立。静态分支与 48 kHz 失败一致，但其他原生内部路径与 96 kHz 动态合成未证实。
-5. **客户端**：新 stdio 连接已验证 0.5.0 的定向操作；本对话连接从先前的 `Transport closed` 恢复，当前发现 37 个工具，但 `vocaloid_status` 的 MCP 版本仍为 0.4.0。重新连接 `vocaloid6-native` 后应核对版本；未重启客户端或用户编辑器。
+5. **客户端**：新 stdio 连接已验证本轮原生改动；本对话连接发现 37 个工具，但 `vocaloid_status` 的 Python MCP 版本仍为 0.4.0，运行中的原生宿主与上一轮 0.5.0 构建一致；本轮 0.6.0 原生改动需新连接载入。未重启客户端或用户编辑器。
 
-当前模块状态见 [功能矩阵](docs/feature-matrix.md)、[会话 10](docs/session-log/session-10.md) 和 [TODO](TODO.md)。
+当前模块状态见 [功能矩阵](docs/feature-matrix.md)、[会话 11](docs/session-log/session-11.md) 和 [TODO](TODO.md)。

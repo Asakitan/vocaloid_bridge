@@ -117,10 +117,13 @@ project merge use tracked native transactions and identity mapping. A failed
 cut retains its independent clipboard snapshot and reports its ID. Extended paste
 is preflighted on an independent candidate. Merge combines nonconflicting source
 root/master extensions and bounded opaque project resources in the target history,
-preflighting the merged output in independent snapshots. Metadata-only merges
-without a native history entry, clipboard opaque-resource transfer and tempo-map
-merge with tempo extensions are explicit errors. Tempo-event unknown fields have
-operation-specific transitions and history. Plain projects retain their existing
+preflighting the merged output in independent snapshots. Clipboard selections
+carry the source snapshot's complete project-scoped opaque member set; cut does
+not remove project-scoped members from the source. Resource additions and tempo
+event merge use the native history journal and candidate ZIP validation. Tempo
+and time-signature unknown fields have operation-specific transitions and history;
+time-signature extension merge and metadata-only merges without a native history
+entry are explicit errors. Plain projects retain their existing
 operation paths. Extra archive members are preserved on save without reviving
 deleted native-managed audio; the output ZIP is checked against extraction limits.
 

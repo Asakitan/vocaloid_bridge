@@ -5,6 +5,64 @@ using System.Text.Json.Nodes;
 // clone and merge boundaries and invokes this helper for tracked tempo metadata.
 internal static class ProjectArchiveArrays
 {
+    internal sealed record TimeSig(int Bar, int Numer, int Denom, JsonObject Extra);
+
+    internal static Dictionary<int, TimeSig> ReadTimeSig(JsonArray array, bool captureExtra)
+    {
+        Dictionary<int, TimeSig> result = [];
+        foreach (JsonNode? node in array)
+        {
+            JsonObject item = node as JsonObject ?? throw Error("time signature event is not an object");
+            int bar = item["bar"]?.GetValue<int>() ?? throw Error("time signature bar is absent");
+            int numer = item["numer"]?.GetValue<int>() ?? throw Error("time signature numerator is absent");
+            int denom = item["denom"]?.GetValue<int>() ?? throw Error("time signature denominator is absent");
+            JsonObject extra = new();
+            foreach ((string key, JsonNode? child) in item)
+                if (key is not ("bar" or "numer" or "denom"))
+                {
+                    if (!captureExtra) throw Error("native time signature output has unexpected fields");
+                    extra.Add(key, child?.DeepClone());
+                }
+            if (!result.TryAdd(bar, new TimeSig(bar, numer, denom, extra))) throw Error("duplicate time signature bar");
+        }
+        return result;
+    }
+
+    internal static Dictionary<int, TimeSig> TimeSigTransition(IReadOnlyDictionary<int, TimeSig> before,
+        JsonArray nativeAfter, int? oldBar, int? newBar, int? numer, int? denom)
+    {
+        if (oldBar is null && newBar is null) throw Error("empty time signature transition");
+        if ((newBar is null) != (numer is null) || (newBar is null) != (denom is null)) throw Error("incomplete time signature destination");
+        Dictionary<int, TimeSig> next = before.ToDictionary(p => p.Key,
+            p => new TimeSig(p.Value.Bar, p.Value.Numer, p.Value.Denom, (JsonObject)p.Value.Extra.DeepClone()));
+        TimeSig? retained = null;
+        if (oldBar is int old && !next.Remove(old, out retained)) throw Error("selected time signature is absent");
+        if (newBar is int bar && !next.TryAdd(bar, new TimeSig(bar, numer!.Value, denom!.Value, retained?.Extra ?? new JsonObject())))
+            throw Error("time signature destination is ambiguous");
+        ValidateTimeSig(next, nativeAfter);
+        return next;
+    }
+
+    internal static void ValidateTimeSig(IReadOnlyDictionary<int, TimeSig> state, JsonArray native)
+    {
+        Dictionary<int, TimeSig> observed = ReadTimeSig(native, false);
+        if (observed.Count != state.Count || state.Any(p => !observed.TryGetValue(p.Key, out TimeSig? item) || item.Numer != p.Value.Numer || item.Denom != p.Value.Denom))
+            throw Error("native time signature snapshot diverged from retained state");
+    }
+
+    internal static void OverlayTimeSig(JsonArray native, IReadOnlyDictionary<int, TimeSig> state)
+    {
+        ValidateTimeSig(state, native);
+        foreach (JsonNode? node in native)
+        {
+            JsonObject item = (JsonObject)node!;
+            foreach ((string key, JsonNode? value) in state[item["bar"]!.GetValue<int>()].Extra)
+            {
+                if (item.ContainsKey(key)) throw Error("time signature extension conflicts with native output");
+                item.Add(key, value?.DeepClone());
+            }
+        }
+    }
     internal sealed record Tempo(int Position, int Value, JsonObject Extra);
 
     internal static Dictionary<int, Tempo> ReadTempo(JsonArray array, bool captureExtra)

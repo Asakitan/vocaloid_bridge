@@ -829,7 +829,7 @@ internal sealed partial class EngineHost
         throw new InvalidOperationException("Native time signature is no longer attached.");
     }
 
-    private static object ScoreTimeSignatureEdit(EngineSession session, string operation, JsonElement options)
+    private object ScoreTimeSignatureEdit(EngineSession session, string operation, JsonElement options)
     {
         WIVSMSequence sequence = session.Sequence;
         WIVSMTimeSig? signature = null;
@@ -844,9 +844,12 @@ internal sealed partial class EngineHost
                 throw new ArgumentException("time_signature.remove requires time_signature_index.");
             if (signature.PosBar == 0)
                 throw new ArgumentException("The initial time signature cannot be removed; update it with time_signature.set.");
+            int oldBar = signature.PosBar;
+            ArchiveTimeSigPreflight(session, oldBar, null);
             return ScoreMutate(session, operation, () =>
             {
                 ScoreRequire(sequence.RemoveTimeSig(signature), operation, sequence);
+                ArchiveTimeSigTransition(session, oldBar, null, null, null);
                 return new { removed = true };
             });
         }
@@ -858,6 +861,8 @@ internal sealed partial class EngineHost
         if (signature?.PosBar == 0 && bar != 0)
             throw new ArgumentException("The initial time signature must remain at bar zero.");
         signature ??= sequence.TimeSigsEnumerator.FirstOrDefault(item => item.PosBar == bar);
+        int? previousBar = signature?.PosBar;
+        ArchiveTimeSigPreflight(session, previousBar, bar);
         return ScoreMutate(session, operation, () =>
         {
             WIVSMTimeSig edited = signature ?? sequence.InsertTimeSig(bar, new VSMTimeSigEvent(numerator, denominator))
@@ -868,6 +873,7 @@ internal sealed partial class EngineHost
                     ScoreRequire(sequence.MoveTimeSig(bar, edited), operation, sequence);
                 ScoreRequire(edited.SetTimeSig(numerator, denominator), operation, sequence);
             }
+            ArchiveTimeSigTransition(session, previousBar, bar, numerator, denominator);
             return ScoreTimeSignatureSummary(edited, ScoreTimeSignatureIndex(sequence, edited));
         });
     }

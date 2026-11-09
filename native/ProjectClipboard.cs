@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.Json;
 using Yamaha.VOCALOID.VSM;
 
@@ -88,8 +89,6 @@ internal sealed partial class EngineHost
                 if (!copied)
                     throw new InvalidOperationException("Native clipboard copy failed: " + clipboard.LastError);
             }
-            if (operation == "cut" && HasArchiveEntityExtensions(snapshot))
-                ArchiveTransferValidateSource(snapshot);
             ProjectClipboardData stored = new(clipboardId, kind, snapshot, clipboard, trackIndex, partIndex, indices);
             object summary = ClipboardSummary(stored);
             projectClipboards.Add(clipboardId, stored);
@@ -141,7 +140,8 @@ internal sealed partial class EngineHost
         long offset = checked((long)ClipboardIndex(options, "offset_tick", 0));
         if (offset > int.MaxValue)
             throw new ArgumentOutOfRangeException("offset_tick");
-        if (HasArchiveEntityExtensions(stored.Snapshot) || HasArchiveEntityExtensions(target))
+        if (HasArchiveEntityExtensions(stored.Snapshot) || HasArchiveEntityExtensions(target) ||
+            ArchiveHasResources(stored.Snapshot))
             return PastePreservedClipboard(target, stored, options, offset);
         ulong inserted = 0;
         target.Dirty = true;
@@ -209,7 +209,9 @@ internal sealed partial class EngineHost
     private object PastePreservedClipboard(EngineSession target, ProjectClipboardData stored, JsonElement options, long offset,
         bool preflight = true)
     {
-        ArchiveTransferValidateSource(stored.Snapshot);
+        // Opaque members are project-scoped, so every selection carries the
+        // complete snapshot resource set rather than claiming entity ownership.
+        var resources = ArchivePrepareClipboardResources(stored.Snapshot, target);
         WIVSMTrack? targetTrack = null;
         WIVSMMidiPart? targetPart = null;
         ulong insertion = 0;
@@ -247,7 +249,15 @@ internal sealed partial class EngineHost
             {
                 PastePreservedClipboard(candidate, stored, options, offset, false);
                 EngineSession verified = CloneProject(candidate.Id, null);
-                Close(verified.Id, true);
+                try
+                {
+                    if (resources.Count != 0)
+                    {
+                        string archive = Path.Combine(verified.Directory, "clipboard-resource-preflight-" + Guid.NewGuid().ToString("N") + ".vpr");
+                        WriteProjectArchive(verified, verified.Directory, archive, CaptureProjectValidity(verified.Sequence));
+                    }
+                }
+                finally { Close(verified.Id, true); }
             }
             finally { Close(candidate.Id, true); }
             // Reacquire target wrappers after saving the independent snapshot.
@@ -282,7 +292,7 @@ internal sealed partial class EngineHost
                                 if (!track.MovePanpot(panpot.RelPosTick + new VSMRelTick(offset), panpot))
                                     throw new InvalidOperationException("Native clipboard pan offset failed.");
                         }
-                        ArchiveTransferCopy(stored.Snapshot, target, source, track, partOffset: offset);
+                        ArchiveTransferCopy(stored.Snapshot, target, source, track, partOffset: offset, mergeResources: true);
                     }
                     else if (stored.Kind == "parts")
                     {
@@ -291,7 +301,7 @@ internal sealed partial class EngineHost
                         WIVSMTrack track = targetTrack ?? throw new InvalidOperationException("Clipboard target track is missing.");
                         WIVSMPart part = track.DuplicatePart(source.AbsBeginTick + new VSMRelTick(offset), source)
                             ?? throw new InvalidOperationException("Native clipboard part paste failed: " + track.LastError);
-                        ArchiveTransferCopy(stored.Snapshot, target, source, part, partOffset: offset);
+                        ArchiveTransferCopy(stored.Snapshot, target, source, part, partOffset: offset, mergeResources: true);
                     }
                     else
                     {
@@ -300,10 +310,11 @@ internal sealed partial class EngineHost
                         WIVSMMidiPart part = targetPart ?? throw new InvalidOperationException("Clipboard target part is missing.");
                         WIVSMNote note = part.DuplicateNote(source.RelPosTick + new VSMRelTick(offset), source)
                             ?? throw new InvalidOperationException("Native clipboard note paste failed: " + part.LastError);
-                        ArchiveTransferCopy(stored.Snapshot, target, source, note, noteOffset: offset);
+                        ArchiveTransferCopy(stored.Snapshot, target, source, note, noteOffset: offset, mergeResources: true);
                     }
                     inserted++;
                 }
+                ArchiveAddResources(target, resources);
                 return new { session_id = target.Id, clipboard_id = stored.Id, native = true, pasted = inserted };
             });
             if (preflight) stored.Pasted = true;

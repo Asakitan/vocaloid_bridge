@@ -4,8 +4,7 @@ using Yamaha.VOCALOID.VSM;
 
 internal sealed partial class EngineHost
 {
-    // Clipboard cut/paste still has no opaque-resource transfer contract.
-    // Project merge handles resources separately before target mutation.
+    // Callers that do not prepare resource transfer retain the strict guard.
     private void ArchiveTransferValidateSource(EngineSession source)
     {
         if (!archiveStates.TryGetValue(source.Id, out ArchiveState? state)) return;
@@ -92,6 +91,14 @@ internal sealed partial class EngineHost
         }
         return additions;
     }
+
+    private bool ArchiveHasResources(EngineSession session) =>
+        archiveStates.TryGetValue(session.Id, out ArchiveState? state) && state.ExtraFiles.Count != 0;
+
+    // Clipboard selections carry the entire project-scoped opaque set, even
+    // when the selected entities are parts or notes rather than whole tracks.
+    private List<(string Name, string Source)> ArchivePrepareClipboardResources(EngineSession source, EngineSession target) =>
+        ArchivePrepareResources(source, target, true);
 
     private static bool ArchiveFilesEqual(string first, string second)
     {

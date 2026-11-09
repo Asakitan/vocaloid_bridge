@@ -82,9 +82,16 @@ internal sealed partial class EngineHost
         bool trackedMutation = false;
         try
         {
-            if (includeTempo && ((archiveStates.TryGetValue(source.Id, out ArchiveState? sourceTempoState) && sourceTempoState.Tempo is not null) ||
-                                 (archiveStates.TryGetValue(target.Id, out ArchiveState? targetTempoState) && targetTempoState.Tempo is not null)))
-                throw new InvalidOperationException("project_preservation: tempo extensions require an explicit merge identity mapping.");
+            // Time signatures use bar identities, not tempo tick identities.
+            // Until their merge mapping is verified, protect either map before
+            // any mutation rather than assigning fields by array position.
+            if (includeTempo &&
+                ((archiveStates.TryGetValue(source.Id, out ArchiveState? sourceTimeSigState) && sourceTimeSigState.TimeSig is not null) ||
+                 (archiveStates.TryGetValue(target.Id, out ArchiveState? targetTimeSigState) && targetTimeSigState.TimeSig is not null)))
+                throw new InvalidOperationException("project_preservation: time signature extension merge has no verified bar identity mapping.");
+            bool tempoExtensions = includeTempo &&
+                ((archiveStates.TryGetValue(source.Id, out ArchiveState? sourceTempoState) && sourceTempoState.Tempo is not null) ||
+                 (archiveStates.TryGetValue(target.Id, out ArchiveState? targetTempoState) && targetTempoState.Tempo is not null));
             var globalFields = ArchiveMergePrepare(source, target);
             var resources = ArchivePrepareResources(source, target, includeTracks);
             if (includeTracks && target.Sequence.NumTrack + source.Sequence.NumTrack > 32)
@@ -92,7 +99,7 @@ internal sealed partial class EngineHost
             bool globalChange = !archiveStates.TryGetValue(target.Id, out ArchiveState? targetArchive)
                 ? globalFields.Root.Count != 0 || globalFields.Master.Count != 0
                 : !JsonNode.DeepEquals(globalFields.Root, targetArchive.Root) || !JsonNode.DeepEquals(globalFields.Master, targetArchive.Master);
-            if ((includeTracks && HasArchiveEntityExtensions(source)) || HasArchiveEntityExtensions(target) || globalChange || resources.Count != 0)
+            if ((includeTracks && HasArchiveEntityExtensions(source)) || HasArchiveEntityExtensions(target) || globalChange || resources.Count != 0 || tempoExtensions)
             {
                 if (includeTracks && source.Sequence.Tracks.Any(track => track.Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi)))
                     throw new InvalidOperationException("project_preservation: extended project merge requires MIDI or AI tracks.");
@@ -238,6 +245,8 @@ internal sealed partial class EngineHost
                         ArchiveTransferCopy(source, target, original, track, partOffset: offsetTick, mergeResources: true);
                     }
                 }
+                Dictionary<int, ProjectArchiveArrays.Tempo>? mergedTempo = includeTempo
+                    ? PrepareTempoMerge(target, source, offsetTick, replaceTempo) : null;
                 if (includeTempo)
                 {
                     WIVSMClipboard clipboard = manager.CreateClipboard(target.Sequence)
@@ -259,6 +268,13 @@ internal sealed partial class EngineHost
                             throw new InvalidOperationException("Native import clipboard cleanup failed.");
                         clipboard.Dispose();
                     }
+                }
+                if (mergedTempo is not null)
+                {
+                    ProjectArchiveArrays.ValidateTempo(mergedTempo, ArchiveNativeTempos(target.Sequence));
+                    if (!target.Sequence.IsStaged)
+                        throw new InvalidOperationException("project_preservation: tempo extension merge requires a native history entry.");
+                    archiveStates[target.Id].Tempo = mergedTempo;
                 }
                 ArchiveAddResources(target, resources);
                 if (globalChange)

@@ -33,7 +33,7 @@ powershell -NoProfile -File .\tools\setup.ps1
 
 这些条目均使用 `E:/VC/vocaloid_bridge/.venv/Scripts/python.exe -m vocaloid_bridge`，并显式设置 `VOCALOID_WORKSPACE`、`PYTHONPATH` 为 `E:/VC/vocaloid_bridge`，`PYTHONUTF8` 为 `1`。从其他目录启动时，输出仍写到本项目的 `output`。Codex 的 `tool_timeout_sec` 为 180。
 
-Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.7.0 提供 37 个工具和 125 个结构化操作，独立 stdio 客户端的定向测试已通过。本对话现有连接发现 37 个工具，Python MCP 状态仍报告 0.4.0；其运行中的原生宿主此前经比对为 0.5.0 构建，尚未装载本轮 0.7.0 原生改动。重新连接后应核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
+Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.8.0 提供 37 个工具和 125 个结构化操作，独立 stdio 客户端的定向测试已通过。本对话现有连接此前发现 37 个工具，Python MCP 状态报告 0.4.0；其运行中的原生宿主此前经比对为 0.5.0 构建，尚未证实载入 0.8.0。重新连接后应核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
 
 ## 工具
 
@@ -113,6 +113,8 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 0.6.0 的 [全局字段合并回执](artifacts/feature-acceptance-5a2c12f87c28/summary.json) 覆盖直接及受测嵌套 root/master 扩展的合并、歧义和冲突预检、历史与保存重开；[独立虚拟 MIDI 输入回执](artifacts/midi-owned-78935c45c6f9.json) 覆盖真实 WinMM 回调、录音和端口清理，不等于物理设备验收。
 
 0.7.0 的 [定向回执](artifacts/feature-acceptance-a2ec5efb0ad1/summary.json) 覆盖速度事件未知字段、剪贴板歧义预检、工程不透明资源合并及冲突与历史；[合成 ZIP 检查](artifacts/archive-export-4717c45e9a45.json) 验证缩小阈值下的数量、大小和路径冲突保护。受测范围不等于任意扩展格式和资源组合。
+
+0.8.0 的 [定向回执](artifacts/feature-acceptance-5f7c71ba55ed/summary.json) 覆盖 AI 剪贴板的工程级不透明资源、tempo 扩展合并及拍号扩展编辑；旧测试仍按原守卫预期失败，更新后的 [单项回执](artifacts/feature-acceptance-0f5180183d62/summary.json) 通过。拍号扩展合并、原生音频资源归属、物理 MIDI 和实际 DAW 隔离仍待处理。
 
 原生混缩输出整工程或所选整轨，各分轨保留自己的时长；分轨不使用主效果和主音量自动化。`start_seconds`、`end_seconds` 和 `tail_seconds` 不受此原生入口支持，传入会明确报错。素材属性写入独立的 `property.json`；新建自有素材可在 `.vsclip` 中附加桥接元数据。
 

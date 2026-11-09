@@ -324,3 +324,37 @@ initialization-time calls before patching, permissions, races, licensing,
 discovery or other IPC. The code is a test probe, not a general interposer or
 production host; it does not patch or load any Yamaha binary. It does not
 establish real plugin isolation, VST3/ARA behavior or transport synchronization.
+
+### ANSI import and timing boundary probe
+
+`tools/probe_iat_ansi_fixture.c` and `tools/probe_iat_ansi_host.c` add a
+separate x64 full-trust synthetic probe, not an AppContainer test. The host
+generates an externally supplied `CodexSynthetic`-prefixed random pipe name;
+the fixture creates and closes only that name. Its `DllMain` performs one
+creation before `LoadLibrary` returns. After loading, the host patches only
+that module's static `CreateNamedPipeA` and `CreateFileA` import slots with
+counting wrappers that deliberately return `ERROR_INVALID_NAME`; these are
+interception controls, not name-translation wrappers. It then invokes a
+`GetProcAddress`-resolved `CreateNamedPipeA` and loads a second copy of the
+owned fixture without patching it. The test uses no vendor binary or endpoint.
+
+In `artifacts/probe-iat-ansi-boundary.txt`, initialization creation returned
+Win32 0 before patching; two slots were patched; the static create and
+write-only open calls each reached a wrapper (cumulative counts 1 and 2),
+while the dynamically resolved create succeeded without increasing the count.
+The second module's initialization and static create also succeeded without
+increasing the count. The process exited 0 and closed successful pipe handles.
+This demonstrates the specific bypasses of a post-load per-module IAT patch,
+not that ANSI name translation works or that a dynamic-resolution hook is
+complete. No same-profile exchange or isolation was tested in this probe.
+Microsoft documents that [GetProcAddress returns an exported address](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getprocaddress)
+and that [DllMain runs under the loader lock](https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-best-practices);
+these observations do not establish the initialization behavior of the vendor
+plugins. Delay imports, alternate APIs, load races, other processes, actual
+AppContainer ANSI behavior and all real plugin paths remain unverified.
+
+The first compiler invocation failed with permission denied for its object
+file under the sandbox; the successful isolated probe was compiled and run
+with elevated execution. The fixture makes a named-pipe call in `DllMain`
+only to measure this timing boundary; it is not a recommended production
+initialization pattern.

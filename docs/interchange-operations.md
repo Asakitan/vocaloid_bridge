@@ -218,7 +218,8 @@ required for the voice-loss save/clone checks.
 Track-inclusive project merge treats opaque, unreferenced ZIP members as
 project-scoped data. It does not infer ownership by a track or claim support
 for transferring native-managed audio. A source with opaque members requires
-track import; clipboard transfer retains its separate rejection boundary.
+track import. Clipboard selections instead carry the complete source snapshot's
+project-scoped opaque set; the separate contract is described in `archive-transfer.md`.
 Identical names and identical bytes are shared; differing bytes, case-only
 name differences, and file/directory prefix conflicts are rejected. Paths are
 validated with the existing session path and link checks. Conflicts with
@@ -238,3 +239,20 @@ size limits as VPR extraction before the real target is modified. Successful
 save also checks its actual ZIP central directory before publication. Repeated
 undone or abandoned additions can consume session-private disk space until the
 session closes, even after their history branch is discarded.
+
+## Tempo event extension merge
+
+When either map contains supported `tempo.events` extensions, the merge uses
+an independent candidate and explicit position mappings. Replacement maps the
+source events only; non-replacement retains target events and offsets source
+positions, rejecting every shared destination. Only unknown fields are copied,
+and the complete native position/value result must match the planned map.
+Metadata changes require an actual native history entry and participate in the
+existing transaction journal. Source and target metadata remain independent.
+`artifacts/feature-acceptance-5f7c71ba55ed/summary.json` verifies source
+extensions with non-conflicting offset and replacement, conflict rejection,
+undo/redo and reopen on a synthetic AI project. The target-extension merge and
+undo case passed in `artifacts/feature-acceptance-0f5180183d62/summary.json`.
+Non-replacement shared tick destinations remain rejected, including tick zero.
+If either time-signature map has unknown event fields, tempo/time-signature
+merge is rejected before mutation pending an explicit bar-identity mapping.

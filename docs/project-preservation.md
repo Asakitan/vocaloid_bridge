@@ -88,7 +88,18 @@ implementation needs per-array identity or operation-specific pre/post mapping,
 transaction history for removal and reinsertion, explicit copy/transfer mapping,
 and rejection before mutation when unique correspondence is not established. It
 must apply unknown leaves only, never copy known values from the original element.
-These rules remain a requirement for arrays outside the tempo-specific change below.
+These rules remain a requirement for arrays outside the tempo and time-signature changes below.
+
+The source now also maps `masterTrack.timeSig.events` extensions using the
+selected native operation and unique bar, with full native-state validation,
+transaction history, collision rejection and deletion that discards the deleted
+extension. Schema capture checks the installed event fields (`bar`, `numer`,
+`denom`); no old array index is used for overlay. The focused
+`preservation.timesig_array_roundtrip` case exercises moves, changes, conflicts,
+undo/redo, deletion and same-value recreation, clone and reopen. The private-MCP
+run `artifacts/feature-acceptance-5f7c71ba55ed/summary.json` passed this case and
+checked that source or target time-signature extensions guard a tempo-map merge
+before mutation. This does not establish support for time-signature extension merge.
 
 A focused private-MCP probe (`preservation.tempo_array_semantics`, receipt
 `artifacts/feature-acceptance-dca2b07208c6/summary.json`) observed a tempo
@@ -96,7 +107,7 @@ move across another event, undo/redo, and deletion followed by same-value
 recreation. The last state serialized identically to the earlier moved state;
 the result does not establish native pointer or notification stability.
 
-`native/ProjectArchiveArrays.cs` contains a tempo-only transaction
+`native/ProjectArchiveArrays.cs` contains a tempo transaction
 primitive. Given an explicitly selected source and destination, it preserves
 only unknown leaves, validates the entire observed native post-state, rejects
 duplicate positions and destination collisions, and drops metadata on deletion
@@ -105,12 +116,14 @@ so reinsertion starts empty. The standalone in-memory
 preservation, deletion/recreation, snapshot isolation and duplicate rejection.
 The current source connects schema-aware capture, native-operation mapping before
 commit, history/rollback snapshots and save/clone overlay. Tempo merges with
-extensions are guarded until an explicit transfer mapping exists. The original
+extensions use explicit destination tick mappings and a candidate snapshot. The original
 `preservation.tempo_array_roundtrip` red result on the old binary is retained in
 `artifacts/feature-acceptance-39d061aa7454/summary.json`. The focused native MCP
 run `artifacts/feature-acceptance-a2ec5efb0ad1/summary.json` passes tempo extension
 editing, collision rejection, undo/redo, deletion and same-value recreation,
-clone, save/reopen, a track-only clipboard transfer, and the source guard. A
+clone, save/reopen and a track-only clipboard transfer. The updated target/source
+merge and undo case passed in `artifacts/feature-acceptance-0f5180183d62/summary.json`.
+The earlier source guard is historical, not the current contract. A
 separate case verifies that tempo-only metadata does not require unrelated
 same-shaped tracks with different known values to be treated as ambiguous.
 
@@ -135,7 +148,8 @@ copied from the source. The focused run
 `masterTrack.loop` and `note.exp`, including escaped pointer characters and a
 structured value, while a native Accent change to 51 remained intact across
 save, reopen and source-independent clone. Unknown fields inside non-entity
-arrays other than tempo events remain outside this support.
+arrays other than tempo events and the pending time-signature implementation
+remain outside this support.
 
 `artifacts/feature-acceptance-f0e3121b86c8/` additionally verifies retained
 extensions across title, tempo, loop, tuning, batch-note, VoiceColor and vibrato

@@ -9,11 +9,12 @@ import check_transport
 import check_project_preservation
 import check_track_freeze
 import check_midi_recording_case
-import check_clipboard_extension_guard
+import check_clipboard_resources
 import check_archive_transfer
 import check_clipboard_ambiguity
 import check_clipboard_extended_cut
 import check_archive_merge
+import check_tempo_merge
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining

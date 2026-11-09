@@ -1,16 +1,26 @@
 # Archive transfer investigation
 
 MIDI/AI clipboard cut/paste and track merge transfer supported entity extensions
-with identity-bound paths. Track-inclusive merge also transfers bounded opaque
-project resources. Clipboard resource transfer and other non-entity arrays remain
-separate work.
+with identity-bound paths. Track-inclusive merge and clipboard selections also
+transfer bounded opaque project resources. Native-managed audio transfer and
+unsupported non-entity arrays remain separate work.
 
-The private clipboard clones the source project and captures fresh archive bindings in the clone. Its lifetime is independent of the source session. The previous external-operation guard checked only the session supplied to the current call. `artifacts/feature-acceptance-fb8cedfece70/summary.json` confirms that a source with entity extensions could be pasted into a target without them, contrary to the required guard; the probe did not inspect the resulting JSON. Native clipboard duplication alone has no extension transfer. The integrated path now retains the explicit source selection in its owned snapshot, duplicates those native entities into the target, maps returned identities and unique child signatures, and journals the extension transfer. Source opaque extra resources and unsupported track kinds are rejected before clipboard mutation. Clipboard clear releases its snapshot observer; extended cut journals source removal and retains the snapshot if the cut result is uncertain.
+The private clipboard clones the source project and captures fresh archive bindings in the clone. Its lifetime is independent of the source session. The previous external-operation guard checked only the session supplied to the current call. `artifacts/feature-acceptance-fb8cedfece70/summary.json` confirms that a source with entity extensions could be pasted into a target without them, contrary to the guard then in place; the probe did not inspect the resulting JSON. Native clipboard duplication alone has no extension transfer. The integrated path retains the explicit source selection in its owned snapshot, duplicates those native entities into the target, maps returned identities and unique child signatures, and journals the extension transfer. Clipboard clear releases its snapshot observer; extended cut journals source removal and retains the snapshot if the cut result is uncertain. Resource-aware transfer currently requires MIDI/AI tracks or parts.
 
-Extended cut checks source opaque resources before removing any source entity.
-`artifacts/feature-acceptance-fdeed6a511d6/summary.json` preserves the earlier
-missing-guard result; `artifacts/feature-acceptance-adac1d5901d0/summary.json`
-verifies the guard, unchanged source session and normal extended cut.
+Clipboard tracks, parts and notes carry the complete opaque project-resource
+set from the independent snapshot; the bridge does not infer which entity owns
+a member. Cut keeps project-scoped resources in the source. Paste shares equal
+path/equal bytes, rejects differing bytes, case aliases, prefix and native ZIP
+collisions, and checks a candidate archive before target mutation. Added copies
+and entity changes share the native undo/redo journal. Resource-only sources
+use the same path even with no entity extension. The old binary rejected the
+cut in `artifacts/feature-acceptance-1a8e9b24ebfe/summary.json`; the maintained
+case passed in `artifacts/feature-acceptance-5f7c71ba55ed/summary.json`, covering
+AI track/part/note copies, note cut, source close, resource sharing and three
+conflict types, undo/redo, save/reopen and the resource-only case. The updated
+`artifacts/feature-acceptance-9cc33036cca5/summary.json` also verifies pasting
+the cut note and rejecting a collision with a native WAV before target mutation.
+Native audio asset ownership and all possible file combinations are not established by this case.
 
 `artifacts/feature-acceptance-b8c01e2d4375/summary.json` verifies AI track,
 part and note transfers with offsets, distinct note extensions, source close,
@@ -28,7 +38,7 @@ part and note cut; `artifacts/feature-acceptance-288f3f9a90b8/summary.json`
 also verifies that target root/master unknown fields and an existing opaque
 resource survive the first clipboard transfer.
 
-The transfer uses detached metadata copies, source snapshot indices rather than clipboard enumeration order, semantic unique child matching with explicit position offsets, and a target observer and archive state even when the target initially has no extensions. Native changes and archive journal changes are bracketed together. Extension-aware paste now verifies an independent candidate before target mutation; the tested identical-data duplicate remains allowed. Broader repeated-paste ambiguity, audio resources and failure permutations require additional fixture tests. Project-level fields, other non-entity arrays, tempo-map merge and clipboard ZIP extras require separate conflict and ownership semantics.
+The transfer uses detached metadata copies, source snapshot indices rather than clipboard enumeration order, semantic unique child matching with explicit position offsets, and a target observer and archive state even when the target initially has no extensions. Native changes and archive journal changes are bracketed together. Extension-aware paste verifies an independent candidate before target mutation; the tested identical-data duplicate remains allowed. Broader repeated-paste ambiguity, native audio resources and failure permutations require additional fixture tests. Project-level fields, other non-entity arrays and time-signature extension merge retain separate conflict and ownership semantics.
 
 ## Focused native clipboard observation
 
@@ -44,6 +54,6 @@ The identity probes require the locally generated `output/clipboard_probe_synthe
 
 ## Transfer helper
 
-`native/ProjectArchiveTransfer.cs` contains a transfer helper restricted to MIDI and MIDI AI tracks, parts and notes. It requires an independent source snapshot, an initialized target observer and identity transaction, and pairs child entities by unique semantic signatures. Track mapping occurs after offsetting its parts; direct part and note transfers pass their offset to the helper. Clipboard rejects source opaque extra files; track-inclusive merge handles them separately as project-level resources. The caller brackets the native change and archive journal together. Clipboard acceptance evidence is tracked in the session log.
+`native/ProjectArchiveTransfer.cs` contains a transfer helper restricted to MIDI and MIDI AI tracks, parts and notes. It requires an independent source snapshot, an initialized target observer and identity transaction, and pairs child entities by unique semantic signatures. Track mapping occurs after offsetting its parts; direct part and note transfers pass their offset to the helper. Clipboard and track-inclusive merge transfer opaque files as project-level resources. The caller brackets the native change and archive journal together. Clipboard acceptance evidence is tracked in the session log.
 
-Merge uses the same helper and `ScoreMutate`, combines disjoint or equal source root/master unknown fields and rejects conflicting values before mutation. New nested leaves are preflighted against an independent native target snapshot; missing parents and native output collisions are errors. The complete extension-aware merge is performed and saved on an independent candidate first, so the tested indistinguishable-track conflict is detected before changing the real target. A merge with added opaque resources additionally packs and checks the candidate ZIP. Root/master payloads and opaque resource mappings participate in the same undo/redo journal as entities. A global-field or resource addition requires a native history entry, and extension-aware track import is restricted to MIDI/AI. Tempo-event extensions are preserved for direct tempo editing but tempo-map merge remains guarded; other unknown array-contained fields remain guarded at capture. `artifacts/feature-acceptance-a2ec5efb0ad1/summary.json` covers the tested resource, tempo and clipboard paths; it does not prove all source formats or resource combinations. Other edit paths have not yet received the same ambiguity preflight.
+Merge uses the same helper and `ScoreMutate`, combines disjoint or equal source root/master unknown fields and rejects conflicting values before mutation. New nested leaves are preflighted against an independent native target snapshot; missing parents and native output collisions are errors. The complete extension-aware merge is performed and saved on an independent candidate first, so the tested indistinguishable-track conflict is detected before changing the real target. A merge with added opaque resources additionally packs and checks the candidate ZIP. Root/master payloads and opaque resource mappings participate in the same undo/redo journal as entities. A global-field or resource addition requires a native history entry, and extension-aware track import is restricted to MIDI/AI. Tempo-event extensions have a tested tick-based merge; time-signature extension merge and other unknown array-contained fields remain guarded. The session 13 receipts cover the tested resource, tempo and clipboard paths; they do not prove all source formats or resource combinations. Other edit paths have not yet received the same ambiguity preflight.

@@ -9,11 +9,11 @@
 | `native/AudioOperations.cs` | 原生离线音频、效果与整轨混缩 | 16 个音频操作含传输；冻结回放避免重复应用音量/声像 |
 | `native/TransportOperations.cs` | 原生设备枚举与私有会话播放、停止、定位、释放 | DirectSound 静音闭环通过；定位区分异步请求与观测 |
 | `native/TrackFreezeOperations.cs` | 会话自有冻结缓存、时基物化和作者态保存 | 多片段/非零起点/效果/自动化与正式 MCP 通过；不持久化冻结标志 |
-| `native/ProjectArchivePreservation.cs`、`native/ProjectArchiveArrays.cs` | 未知字段、实体身份、速度事件和额外归档资源保留 | 受测 tempo 扩展、资源历史及原有实体路径通过；其他数组有限制 |
+| `native/ProjectArchivePreservation.cs`、`native/ProjectArchiveArrays.cs` | 未知字段、实体身份、速度/拍号事件和额外归档资源保留 | 受测 tempo 与拍号扩展编辑、资源历史及原有实体路径通过；拍号合并及其他数组有限制 |
 | `native/MidiRecordingOperations.cs`、`native/MidiRecordingGuards.cs` | 设备枚举、MIDI 事件队列、事务录制及会话保护 | 六操作、静音同步、回调保护及自有虚拟输入通过；物理设备和驱动错误路径未验 |
 | `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 30 个操作有成功调用；样式及 HMM 通过，经典 Singing Skill 重开受身份问题影响 |
-| `native/ProjectInterchange.cs` | 原生格式交换、复制、恢复与合并 | 真实 PPSF3/音频克隆、AI 实体、root/master 和不透明资源的受测合并通过；纯元数据和原生音频归属受限 |
-| `native/ProjectClipboard.cs`、`native/ProjectArchiveTransfer.cs` | 私有原生快照剪贴板及扩展身份迁移 | 受测 AI 扩展剪切/粘贴与候选歧义预检通过；剪贴板资源受限 |
+| `native/ProjectInterchange.cs`、`native/ProjectArchiveTempoMerge.cs` | 原生格式交换、复制、恢复与合并 | 真实 PPSF3/音频克隆、AI 实体、root/master、不透明资源及受测 tempo 扩展合并通过；拍号扩展合并、纯元数据和原生音频归属受限 |
+| `native/ProjectClipboard.cs`、`native/ProjectArchiveTransfer.cs` | 私有原生快照剪贴板及扩展身份迁移 | 受测 AI 扩展剪切/粘贴、工程级不透明资源迁移与候选歧义预检通过；原生音频归属受限 |
 | `native/RpcServer.cs` | 单线程 JSON 行协议、原生对象发现与精确签名调用 | 已编译 |
 | `vocaloid_bridge/native_client.py` | 私有 desktop、Job Object、管道客户端与 DLL 快照 | 独立构建副本启动、关闭清理通过 |
 | `vocaloid_bridge/server.py` | 37 个 MCP 工具、资源、写歌提示 | 新 MIDI 工具在独立 stdio 连接实测；历史工具覆盖见历史回执 |
@@ -35,12 +35,13 @@
 | `tools/check_project_preservation.py` | 扩展数据和原生对象历史回归 | 未知字段、嵌套、额外资源、替换及参数编辑通过 |
 | `tools/check_midi_recording.py`、`tools/check_midi_recording_case.py` | MIDI 显式事件流、静音同步及操作目录回归 | 已验无硬件事件流及静音输出；虚拟输入另有用例 |
 | `tools/check_midi_owned_input.py` | 已安装 SDK 创建临时 MIDI 输入并通过 WinMM 回调录制 | 虚拟输入、保存重开及新进程端口消失通过；物理设备未验 |
-| `tools/check_midi_callback.ps1`、`tools/check_clipboard_extension_guard.py` | 输入回调错误和剪贴板源扩展保护回归 | 回调逻辑与真实 MCP 保护通过；硬件输入仍待验证，扩展迁移另有定向用例 |
-| `tools/check_archive_transfer.py`、`tools/check_clipboard_extended_cut.py`、`tools/check_archive_merge.py` | AI 扩展剪切、跨工程粘贴及合并回归 | 受测实体、偏移、历史及工程级不透明资源通过；剪贴板资源仍受限 |
+| `tools/check_midi_callback.ps1`、`tools/check_clipboard_extension_guard.py`、`tools/check_clipboard_resources.py` | 输入回调错误和剪贴板工程资源回归 | 回调逻辑与 AI 资源迁移定向通过；硬件输入仍待验证，旧入口调用当前资源用例 |
+| `tools/check_archive_transfer.py`、`tools/check_clipboard_extended_cut.py`、`tools/check_archive_merge.py`、`tools/check_tempo_merge.py` | AI 扩展剪切、跨工程粘贴及合并回归 | 受测实体、偏移、历史、工程级不透明资源及 tempo 扩展合并通过 |
 | `tools/check_clipboard_ambiguity.py`、`tools/check_archive_export_limits.ps1`、`tools/check_tempo_array_helper.ps1` | 剪贴板候选、ZIP 导出限制和 tempo 数组原语回归 | 合成候选、缩小阈值 ZIP 和原语通过；完整 MCP 证据见 STATUS |
 | `tools/probe_appcontainer_pipe.cs`、`tools/probe_appcontainer_child.go` | 随机合成管道的后台进程隔离探针 | 受限令牌及单一默认权限管道拒绝访问已观察；非插件隔离证明 |
 | `tools/probe_appcontainer_server.cs`、`tools/probe_appcontainer_server_child.go`、`tools/probe_appcontainer_peer.cs`、`tools/probe_appcontainer_peer_child.go` | 随机合成管道受限服务端与同/异 profile 对端探针 | LOCAL 双向收发和负对照已观察；未证明真实插件隔离 |
 | `tools/probe_appcontainer_mapping*.cs`、`tools/probe_appcontainer_mapping_child.go`、`tools/probe_appcontainer_iat_child.go`、`tools/probe_mapping_*.c` | 随机合成名称映射和自有 DLL 静态导入重定向 | 自有 DLL 的两项宽字符静态导入对照通过；非真实插件或完整 IPC 证明 |
+| `tools/probe_iat_ansi_fixture.c`、`tools/probe_iat_ansi_host.c` | 自有 ANSI 导入槽及动态解析时序探针 | 观察到加载初始化、动态解析和第二模块绕过；未验证实际插件隔离 |
 | `tools/check_audio_recording.py` | 录音与宿主接口静态证据 | 仅读取安装文件；未加载 VST 或打开音频输入 |
 | `tools/check_internal_rate_static.py` | 安装版本的采样率分支取证 | 只读静态证据；不当作 96 kHz 动态验收 |
 | `tools/fetch_public_ppsf_fixture.py` | 公开样本获取及来源记录 | 作者原始 PPSF3 与最小格式夹具分开标识；歌曲不入 Git |
@@ -78,3 +79,4 @@
 | 2026-11-10 | 升级 0.5.0：未知字段拆合、AI 剪切/粘贴/合并与旧历史、MIDI 错误逻辑通过；额外资源、固定 DAW 管道隔离与硬件输入仍待验证。 |
 | 2026-11-10 | 升级 0.6.0：root/master 受测扩展合并及历史、独立虚拟 MIDI 输入和随机 LOCAL 管道对照通过；物理设备、额外资源和实际插件隔离仍待验证。 |
 | 2026-11-10 | 升级 0.7.0：受测 tempo 扩展、不透明资源合并、剪贴板歧义预检和 ZIP 限制通过；其他数组、剪贴板资源与真实插件隔离继续保留边界。 |
+| 2026-11-10 | 升级 0.8.0：受测剪贴板资源迁移、tempo 扩展合并、拍号事件扩展编辑及 ANSI 合成边界探针；拍号扩展合并和真实插件隔离继续保留边界。 |

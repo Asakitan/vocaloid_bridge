@@ -50,6 +50,67 @@ async def array_guard(check):
         check.evidence("array_guard_" + label, {"path": str(path), "rejected": True})
 
 
+@v.feature("preservation.timesig_array_roundtrip", "preservation", "score_compose", "project_open", "project_edit", "project_save", "project_clone", "project_merge")
+async def timesig_array_roundtrip(check):
+    seed = await check.call("score_compose", output_name=check.output("timesig-seed"), title="Time signature extensions", bpm=120,
+                            notes=[{"start": 0, "duration": 1, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+    await check.edit(sid, "time_signature.set", bar=2, numerator=3, denominator=4)
+    await check.edit(sid, "time_signature.set", bar=4, numerator=5, denominator=4)
+    sequence, seed_path = await check.save(sid, "timesig-native")
+    await check.close(sid)
+    _, members = v.read_vpr(seed_path)
+    for event in sequence["masterTrack"]["timeSig"]["events"]:
+        event[KEY] = {"marker": event["bar"], "nested": [True, None]}
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    source = v.ROOT / "output" / check.output("timesig-input")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    original = source.read_bytes()
+    sid = (await check.call("project_open", path=str(source)))["session_id"]
+    before = await check.call("project_status", session_id=sid)
+    await check.rejected("project_merge", "time signature extension merge", session_id=sid, path=str(seed_path),
+                         include_tracks=False, include_tempo=True, replace_tempo=True)
+    v.require(await check.call("project_status", session_id=sid) == before, "Guarded time signature target changed")
+    async with check.project() as plain_target:
+        before = await check.call("project_status", session_id=plain_target)
+        await check.rejected("project_merge", "time signature extension merge", session_id=plain_target, path=str(source),
+                             include_tracks=False, include_tempo=True, replace_tempo=True)
+        v.require(await check.call("project_status", session_id=plain_target) == before, "Guarded time signature source changed target")
+
+    async def assert_events(session, label, expected):
+        result, path = await check.save(session, "timesig-" + label)
+        actual = [(e["bar"], e["numer"], e["denom"], e.get(KEY)) for e in result["masterTrack"]["timeSig"]["events"]]
+        v.require(actual == expected, "Time signature metadata state differs", {"actual": actual, "expected": expected})
+        return path
+
+    def marker(bar): return {"marker": bar, "nested": [True, None]}
+    initial = [(0, 4, 4, marker(0)), (2, 3, 4, marker(2)), (4, 5, 4, marker(4))]
+    moved = [(0, 4, 4, marker(0)), (4, 5, 4, marker(4)), (6, 7, 8, marker(2))]
+    await assert_events(sid, "initial", initial)
+    await check.rejected("project_edit", "time signature destination is ambiguous", session_id=sid,
+                         operation="time_signature.set", options={"time_signature_index": 1, "bar": 4, "numerator": 7, "denominator": 8})
+    await assert_events(sid, "collision", initial)
+    await check.edit(sid, "time_signature.set", time_signature_index=1, bar=6, numerator=7, denominator=8)
+    await assert_events(sid, "move", moved)
+    await check.edit(sid, "undo"); await assert_events(sid, "undo", initial)
+    await check.edit(sid, "redo"); await assert_events(sid, "redo", moved)
+    clone = (await check.call("project_clone", session_id=sid))["session_id"]
+    await check.edit(sid, "time_signature.remove", time_signature_index=2)
+    await check.edit(sid, "time_signature.set", bar=6, numerator=7, denominator=8)
+    recreated = moved[:-1] + [(6, 7, 8, None)]
+    await assert_events(sid, "recreated", recreated)
+    await check.edit(sid, "undo"); await assert_events(sid, "undo-insert", moved[:-1])
+    await check.edit(sid, "undo"); await assert_events(sid, "undo-remove", moved)
+    await check.edit(sid, "redo"); await check.edit(sid, "redo")
+    path = await assert_events(sid, "redo-recreated", recreated)
+    await assert_events(clone, "clone", moved)
+    reopened = (await check.call("project_open", path=str(path)))["session_id"]
+    await assert_events(reopened, "reopen", recreated)
+    v.require(source.read_bytes() == original, "Source project changed")
+    for session in (reopened, clone, sid): await check.close(session)
+
+
 @v.feature("preservation.tempo_array_semantics", "preservation", "score_compose", "project_edit", "project_save")
 async def tempo_array_semantics(check):
     """Observe serialized tempo transitions without opening user projects."""
@@ -81,7 +142,7 @@ async def tempo_array_semantics(check):
     await check.close(sid)
 
 
-@v.feature("preservation.tempo_array_roundtrip", "preservation", "score_compose", "project_open", "project_edit", "project_save", "project_clone", "project_clipboard", "project_create")
+@v.feature("preservation.tempo_array_roundtrip", "preservation", "score_compose", "project_open", "project_edit", "project_save", "project_clone", "project_clipboard", "project_create", "project_merge")
 async def tempo_array_roundtrip(check):
     seed = await check.call("score_compose", output_name=check.output("tempo-extension-seed"),
                             title="Tempo extensions", bpm=120,
@@ -122,16 +183,26 @@ async def tempo_array_roundtrip(check):
     await assert_events(sid, "collision", initial)
     await check.edit(sid, "tempo.set", tempo_index=1, start_tick=480, bpm=130)
     await assert_events(sid, "no-op", initial)
-    before = await check.call("project_status", session_id=sid)
-    await check.rejected("project_merge", "tempo extensions require an explicit merge", session_id=sid,
-                         path=str(seed_path), include_tracks=False, include_tempo=True, replace_tempo=True)
-    v.require(await check.call("project_status", session_id=sid) == before, "Rejected tempo merge changed the target")
+    await check.call("project_merge", session_id=sid, path=str(seed_path), include_tracks=False,
+                     include_tempo=True, offset_tick=1920)
+    merged, _ = await check.save(sid, "tempo-extension-target-merge")
+    merged_events = merged["masterTrack"]["tempo"]["events"]
+    v.require([e["pos"] for e in merged_events] == [0, 480, 960, 1920, 2400, 2880] and
+              [e.get(KEY) for e in merged_events] == [marker(0), marker(480), marker(960), None, None, None],
+              "Merge changed target tempo extensions")
+    await check.edit(sid, "undo")
+    await assert_events(sid, "merge-target-undo", initial)
     plain = (await check.call("project_open", path=str(seed_path)))["session_id"]
     try:
-        before = await check.call("project_status", session_id=plain)
-        await check.rejected("project_merge", "tempo extensions require an explicit merge", session_id=plain,
-                             path=str(source), include_tracks=False, include_tempo=True, replace_tempo=True)
-        v.require(await check.call("project_status", session_id=plain) == before, "Rejected tempo merge changed a plain target")
+        await check.edit(plain, "tempo.set", start_tick=1920, bpm=90)
+        await check.call("project_merge", session_id=plain, path=str(source), include_tracks=False,
+                         include_tempo=True, replace_tempo=True)
+        await assert_events(plain, "merge-source-replace", initial)
+        await check.edit(plain, "undo")
+        undone, _ = await check.save(plain, "tempo-extension-source-merge-undo")
+        v.require([e["pos"] for e in undone["masterTrack"]["tempo"]["events"]] == [0, 480, 960, 1920] and
+                  all(KEY not in e for e in undone["masterTrack"]["tempo"]["events"]),
+                  "Source tempo merge undo changed original target")
     finally:
         await check.close(plain)
     clip = (await check.call("project_clipboard", session_id=sid, operation="copy",

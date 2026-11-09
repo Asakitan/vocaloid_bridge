@@ -152,6 +152,16 @@ materialized WAV preserves format and applicable fact metadata, but does not
 claim to preserve unrelated WAV metadata chunks. That owned source remains
 available for native clip loading. Native clip-file existence is checked after save.
 
+On an extension-tracked project, `style_capture`, `style_update`, `style_delete`,
+`media_update` and `media_delete` remain available because they read the source
+or update only bridge-owned library files. `media_capture` is available when the
+selected part and its notes carry no unknown archive fields; if that selected
+content contains unknown part, note or controller-event fields, capture stops
+before creating a clip because native VMM does not retain those fields. Other
+project or track extensions do not by themselves prevent capturing an unextended
+part. The synthetic AI case in `artifacts/feature-acceptance-6cc1fd525f8e/summary.json`
+checks both branches, private style/media changes and source history and save.
+
 MIDI capture writes both primary and secondary voice IDs through native VMM.
 The installed VMM reader returns an empty secondary ID even when its native
 writer saved that ID in `.vsclip`. The bridge reads the native file's structured

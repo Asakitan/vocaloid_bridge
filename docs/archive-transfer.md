@@ -58,6 +58,20 @@ The identity probes require the locally generated `output/clipboard_probe_synthe
 
 Merge uses the same helper and `ScoreMutate`, combines disjoint or equal source root/master unknown fields and rejects conflicting values before mutation. New nested leaves are preflighted against an independent native target snapshot; missing parents and native output collisions are errors. The complete extension-aware merge is performed and saved on an independent candidate first, so the tested indistinguishable-track conflict is detected before changing the real target. A merge with added opaque resources additionally packs and checks the candidate ZIP. Root/master payloads and opaque resource mappings participate in the same undo/redo journal as entities. A global-field or resource addition requires a native history entry. Tempo and time-signature extensions have tested merge mappings; controller extension transfer and other unsupported array-contained fields remain guarded. The session 13 and 14 receipts cover the tested resource, tempo and clipboard paths; they do not prove all source formats or resource combinations. Other edit paths have not yet received the same ambiguity preflight.
 
+The transfer helper now also copies a MIDI part's retained controller-event
+payload into independent lane dictionaries and cloned JSON values. It validates
+each retained lane against both native parts before attaching the payload to the
+new native identity; a part offset changes the part position, not the relative
+controller ticks. Notes transferred alone do not carry their containing part's
+controller lanes. This implementation remains behind the controller transfer
+guards pending integration and a focused native acceptance run; it is not yet
+evidence of clipboard or merge support.
+`tools/check_controller_transfer.py` defines an independent synthetic AI
+acceptance scenario for track, part and note clipboard selections, source cut
+history and closure, clipboard clear, offsets, target history, merge conflict,
+merge history, delete/recreate, source-file preservation and save/reopen.
+The scenario has not yet been run against the modified host.
+
 ## Audio transfer implementation and focused validation
 
 The preserved clipboard path maps Audio tracks and parts by unique native

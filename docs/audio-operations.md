@@ -251,6 +251,18 @@ the selected readable VTB2 model, native `WaveOfflineRenderer.dll`, VAE's accept
 VST host connection and Manual mode, rooted callbacks, and a writable workspace
 output directory. No physical audio device should be required or selected.
 
-The suite uses actual native vocal synthesis as its input and closes all
-sessions without foreground activation. Existing source WAVs and user projects
-remain unchanged; no synthetic test tone or alternate backend is substituted.
+The earlier effect suite uses actual native vocal synthesis as its input. The
+focused transaction tests below use their own generated WAV fixtures. Both
+close sessions without foreground activation and leave source files unchanged;
+audio processing uses the installed native renderer.
+
+Import and edit now use the shared native score transaction boundary: staged
+changes commit with native undo history, and failures attempt native rollback.
+An ordinary-project import/edit/undo/redo/reopen case passed in
+`artifacts/feature-acceptance-eb4111329c4f/summary.json`; ordinary audio media
+capture/import also passed in `artifacts/feature-acceptance-6cc1fd525f8e/summary.json`.
+Archive-extension import/edit and effect mutations remain guarded pending their
+own focused native testing, including audio resource-name collisions.
+For extension-tracked projects, `process_audio` is available for an explicit
+external WAV because it changes no sequence data; the same receipt verifies
+native reverse samples, input protection, project history and saved fields.

@@ -123,8 +123,11 @@ not remove project-scoped members from the source. Resource additions and tempo
 event merge use the native history journal and candidate ZIP validation. Tempo
 and time-signature unknown fields have operation-specific transitions and tested
 merge mappings. Controller event fields support selected-point edits and native
-history; controller-extension transfer and metadata-only merges without a native
-history entry are explicit errors. Render, MIDI export and offline mix operations
+history; controller-extension track/part duplication and part split/join are
+mapped, while cross-project controller transfer and metadata-only merges without
+a native history entry are explicit errors. Independent private-library operations
+and external-WAV processing are available with their selected-content guards.
+Render, MIDI export and offline mix operations
 on tracked extension projects use an independent native project snapshot and
 return the original session ID. Plain projects retain their existing operation
 paths. Extra archive members are preserved on save without reviving

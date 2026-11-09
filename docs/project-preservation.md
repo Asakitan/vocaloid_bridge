@@ -80,8 +80,9 @@ not inherit their metadata. A single-point `controller.set` with
 `controller_index` explicitly moves the selected event; an occupied destination
 is rejected. Removing and later creating an event does not inherit metadata.
 The retained state participates in native undo/redo snapshots and clone uses a
-saved snapshot. Other score mutations and clipboard transfers on projects with
-controller extensions are guarded until their identity mappings are established;
+saved snapshot. Score mutations beyond direct controller edits and the tested
+track/part duplicate and part split/join paths, plus clipboard transfers on
+projects with controller extensions, remain guarded until their mappings are established;
 cross-project source transfer is guarded before mutation. When the last unknown
 controller field is deleted, unrelated edits are available again while older
 history retains the previous controller snapshot. The focused
@@ -218,3 +219,22 @@ clipboard resource transfer has the semantics in `docs/archive-transfer.md`. The
 `artifacts/feature-acceptance-e57fec059ac3/summary.json` and
 `artifacts/feature-acceptance-4cb5b47a3915/summary.json` verify those bounded
 paths, not every source format, larger history permutation or resource case.
+
+Controller extension duplication now stages independent copies for native track
+and part duplicates. Each tracked lane is checked against both source and
+duplicate native tick/value maps before its payload is attached. Other score
+mutations remain guarded while controller extensions are live, except controller
+edits, part split/join, duplication and history. Split/join map every native
+controller by lane and absolute tick, require equal native values and exactly
+one source and destination, and reject overlapping identities or changed/lost
+points within the staged transaction. A native unextended probe in
+`artifacts/feature-acceptance-10339d63e076/` observed that a split-boundary
+point moves to tick zero of the right part and rejoins at its original tick.
+The focused runs `artifacts/feature-acceptance-6d389ad715a5/summary.json` and
+`artifacts/feature-acceptance-6cc1fd525f8e/summary.json` verify these paths,
+including a marked event exactly at the split boundary, copied tracks/parts,
+undo/redo, reopen and rejection of overlapping extended controller identities.
+Native split may also create a boundary event carrying the preceding value; the
+new event starts without unknown fields rather than inheriting the earlier
+event's payload. Unextended lanes retain native split/join behavior. Tracked
+controller maps are checked before a native mutation commits.

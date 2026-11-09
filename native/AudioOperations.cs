@@ -669,34 +669,25 @@ internal sealed partial class EngineHost
         ulong trackIndex = options.TryGetProperty("track_index", out JsonElement requested)
             ? requested.GetUInt64() : session.Sequence.NumTrack;
         bool createTrack = !options.TryGetProperty("track_index", out _);
-        WIVSMAudioTrack track;
-        if (createTrack)
+        return ScoreMutate(session, "part.create", () =>
         {
-            session.Dirty = true;
-            WIVSMTrack inserted = session.Sequence.InsertTrackEx(trackIndex, VSMTrackType.Audio, name)
-                ?? throw new InvalidOperationException("Native audio track insertion failed: " + session.Sequence.LastError);
-            track = new WIVSMAudioTrack(inserted);
-        }
-        else
-            track = AudioTrack(session, trackIndex);
-        session.Dirty = true;
-        WIVSMAudioPart part = track.InsertPart(new VSMAbsTick(position), name)
-            ?? throw new InvalidOperationException("Native audio part insertion failed: " + track.LastError);
-        try
-        {
+            WIVSMAudioTrack track;
+            if (createTrack)
+            {
+                WIVSMTrack inserted = session.Sequence.InsertTrackEx(trackIndex, VSMTrackType.Audio, name)
+                    ?? throw new InvalidOperationException("Native audio track insertion failed: " + session.Sequence.LastError);
+                track = new WIVSMAudioTrack(inserted);
+            }
+            else
+                track = AudioTrack(session, trackIndex);
+            WIVSMAudioPart part = track.InsertPart(new VSMAbsTick(position), name)
+                ?? throw new InvalidOperationException("Native audio part insertion failed: " + track.LastError);
             if (!part.SetRegion(new VSMAudioPartRegion(0, (int)duration)))
                 throw new InvalidOperationException("Native audio region initialization failed: " + part.LastError);
             if (!part.SetOriginalWaveFile(source, Path.GetFileName(source)))
                 throw new InvalidOperationException("Native audio import failed: " + part.LastError);
-            CommitAudio(session);
             return DescribeAudioPart(session, trackIndex, track.IndexOf(part), part);
-        }
-        catch
-        {
-            track.RemovePart(part);
-            session.InvalidateChildren();
-            throw;
-        }
+        });
     }
 
     private object EditAudio(EngineSession session, JsonElement options)
@@ -711,15 +702,17 @@ internal sealed partial class EngineHost
         if (end <= begin)
             throw new ArgumentException("end_tick must be greater than begin_tick.");
         long position = AudioInteger(options, "position_tick", part.AbsPosTick.Value, 0, int.MaxValue);
-        session.Dirty = true;
-        if (options.TryGetProperty("name", out JsonElement name) && !part.SetName(name.GetString() ?? ""))
-            throw new InvalidOperationException("Native audio name update failed: " + part.LastError);
-        if (!part.SetRegion(new VSMAudioPartRegion(begin, end)))
-            throw new InvalidOperationException("Native audio region update failed: " + part.LastError);
-        if (position != part.AbsPosTick.Value && !track.MovePart(new VSMAbsTick(position), track, part))
-            throw new InvalidOperationException("Native audio move failed: " + track.LastError);
-        CommitAudio(session);
-        return DescribeAudioPart(session, trackIndex, track.IndexOf(part), part);
+        string? name = options.TryGetProperty("name", out JsonElement nameValue) ? nameValue.GetString() ?? "" : null;
+        return ScoreMutate(session, "part.update", () =>
+        {
+            if (name is not null && !part.SetName(name))
+                throw new InvalidOperationException("Native audio name update failed: " + part.LastError);
+            if (!part.SetRegion(new VSMAudioPartRegion(begin, end)))
+                throw new InvalidOperationException("Native audio region update failed: " + part.LastError);
+            if (position != part.AbsPosTick.Value && !track.MovePart(new VSMAbsTick(position), track, part))
+                throw new InvalidOperationException("Native audio move failed: " + track.LastError);
+            return DescribeAudioPart(session, trackIndex, track.IndexOf(part), part);
+        });
     }
 
     private object ExportAudio(EngineSession session, JsonElement options)

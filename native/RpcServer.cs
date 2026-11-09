@@ -90,10 +90,14 @@ internal sealed class RpcServer(EngineHost host, string desktop)
         }
         if (method == "library_op")
         {
-            host.CheckSessionExternalAccess(OptionalString(parameters, "session_id"));
-            host.CheckArchiveExternalOperation(OptionalString(parameters, "session_id"), "library", RequiredString(parameters, "operation"));
-            host.CheckFrozenExternalOperation(OptionalString(parameters, "session_id"), "library", RequiredString(parameters, "operation"));
-            return host.LibraryOperation(OptionalString(parameters, "session_id"), RequiredString(parameters, "operation"), Required(parameters, "options"));
+            string? id = OptionalString(parameters, "session_id");
+            string operation = RequiredString(parameters, "operation");
+            JsonElement options = Required(parameters, "options");
+            host.CheckSessionExternalAccess(id);
+            if (!host.IsIndependentArchiveLibraryOperation(id, operation, options))
+                host.CheckArchiveExternalOperation(id, "library", operation);
+            host.CheckFrozenExternalOperation(id, "library", operation);
+            return host.LibraryOperation(id, operation, options);
         }
         if (method == "clipboard")
         {

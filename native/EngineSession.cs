@@ -41,6 +41,7 @@ internal sealed class EngineSession
     internal Action<string>? ArchiveBegin { get; set; }
     internal Action<string>? ArchiveEnd { get; set; }
     internal Action<object, object>? ArchiveCopy { get; set; }
+    internal Action? ArchiveValidate { get; set; }
 
     internal object Summary() => new
     {

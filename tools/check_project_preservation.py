@@ -23,6 +23,22 @@ EXTRA_AUDIO = "Project/Audio/opaque-extra.bin"
 EXTRA_ROOT = "custom-probe/root.bin"
 
 
+@v.feature("preservation.controller_split_native_probe", "preservation", "score_compose", "project_edit", "project_save")
+async def controller_split_native_probe(check):
+    seed = await check.call("score_compose", output_name=check.output("controller-split-probe"), title="Controller split probe", bpm=120,
+                            notes=[{"start": 0, "duration": 0.5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+    await check.edit(sid, "controller.set", track_index=0, part_index=0, type="Dynamics", replace=True,
+                     points=[{"tick": 60, "value": 30}, {"tick": 480, "value": 40}, {"tick": 720, "value": 50}])
+    await check.edit(sid, "part.split", track_index=0, part_index=0, split_tick=480)
+    split, _ = await check.save(sid, "controller-split-probe-result")
+    check.evidence("controller_split_native", {"parts": [{"pos": p["pos"], "duration": p["duration"], "controllers": p["controllers"]} for p in split["tracks"][0]["parts"]]})
+    await check.edit(sid, "part.join", track_index=0, part_indices=[0, 1])
+    joined, _ = await check.save(sid, "controller-join-probe-result")
+    check.evidence("controller_join_native", {"parts": [{"pos": p["pos"], "duration": p["duration"], "controllers": p["controllers"]} for p in joined["tracks"][0]["parts"]]})
+    await check.close(sid)
+
+
 @v.feature("preservation.array_guard", "preservation", "score_compose", "project_open")
 async def array_guard(check):
     """Unknown array-element fields must be rejected, never silently dropped."""
@@ -125,8 +141,32 @@ async def controller_array_roundtrip(check):
     await check.edit(clone, "undo"); await snapshot(clone, "undo-replace", moved)
     reopened = (await check.call("project_open", path=str(path)))["session_id"]
     await snapshot(reopened, "reopen", [(240, 40, None)])
-    await check.rejected("project_edit", "controller extension mutation", session_id=clone,
-                         operation="part.duplicate", options={"track_index": 0, "part_index": 0, "start_tick": 9600})
+    await check.edit(clone, "part.duplicate", track_index=0, part_index=0, start_tick=9600)
+    duplicate, _ = await check.save(clone, "controller-duplicate")
+    parts = duplicate["tracks"][0]["parts"]
+    for part in parts:
+        events = next(c["events"] for c in part["controllers"] if c["name"] == "dynamics")
+        v.require([(e["pos"], e["value"], e.get(KEY)) for e in events] == moved, "Duplicated controller mapping differs", events)
+    await check.edit(clone, "undo")
+    await snapshot(clone, "duplicate-undo", moved)
+    await check.edit(clone, "redo")
+    await check.edit(clone, "undo")
+    await check.edit(clone, "part.split", track_index=0, part_index=0, split_tick=480)
+    split, _ = await check.save(clone, "controller-split")
+    events = next(c["events"] for c in split["tracks"][0]["parts"][0]["controllers"] if c["name"] == "dynamics")
+    v.require([(e["pos"], e["value"], e.get(KEY)) for e in events] == moved, "Split controller mapping differs", events)
+    right = next(c["events"] for c in split["tracks"][0]["parts"][1]["controllers"] if c["name"] == "dynamics")
+    v.require([(e["pos"], e["value"], e.get(KEY)) for e in right] == [(0, 40, None)],
+              "Generated native boundary point inherited metadata", right)
+    await check.edit(clone, "part.join", track_index=0, part_indices=[0, 1])
+    joined = moved + [(480, 40, None)]
+    joined_path = await snapshot(clone, "join", joined)
+    joined_session = (await check.call("project_open", path=str(joined_path)))["session_id"]
+    await snapshot(joined_session, "join-reopen", joined)
+    await check.close(joined_session)
+    await check.edit(clone, "undo")
+    await check.edit(clone, "undo")
+    await snapshot(clone, "split-undo", moved)
     v.require(source.read_bytes() == original, "Controller source fixture was modified")
     for session in (reopened, clone, sid): await check.close(session)
 

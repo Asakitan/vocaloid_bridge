@@ -265,7 +265,7 @@ internal sealed partial class EngineHost
             int[] indices = ScoreIndices(options, "part_indices", ScoreCount(track.NumParts), 2);
             WIVSMMidiPart[] selected = indices.Select(index => track.GetPart((ulong)index)
                 ?? throw new InvalidOperationException("Native part lookup failed.")).OrderBy(part => part.AbsPosTick.Value).ToArray();
-            ArchivePartSnapshot[] snapshots = HasArchiveEntityExtensions(session) ? selected.Select(ArchiveSnapshotPart).ToArray() : [];
+            ArchivePartSnapshot[] snapshots = HasArchiveEntityExtensions(session) ? selected.Select(part => ArchiveSnapshotPart(session, part)).ToArray() : [];
             return ScoreMutate(session, operation, () =>
             {
                 WIVSMMidiPart joined = track.JoinParts(selected)
@@ -278,7 +278,7 @@ internal sealed partial class EngineHost
         if (operation == "part.split")
         {
             int tick = ScoreInt(options, "split_tick", 1, checked((int)part.DurationTick.Value) - 1);
-            ArchivePartSnapshot[] snapshots = HasArchiveEntityExtensions(session) ? [ArchiveSnapshotPart(part)] : [];
+            ArchivePartSnapshot[] snapshots = HasArchiveEntityExtensions(session) ? [ArchiveSnapshotPart(session, part)] : [];
             return ScoreMutate(session, operation, () =>
             {
                 WIVSMMidiPart created = track.DividePart(new VSMRelTick(tick), part)
@@ -1696,6 +1696,7 @@ internal sealed partial class EngineHost
         try
         {
             object result = action();
+            session.ArchiveValidate?.Invoke();
             bool staged = sequence.IsStaged;
             if (staged && !sequence.Commit())
             {

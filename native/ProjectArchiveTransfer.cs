@@ -165,7 +165,21 @@ internal sealed partial class EngineHost
                 throw new InvalidDataException("project_preservation: source transfer parent identity changed.");
             if (parent is ArchiveEntity parentKey && !to.Live.ContainsKey(parentKey) && !pending.Any(item => item.Key == parentKey))
                 throw new InvalidDataException("project_preservation: target transfer parent is not tracked.");
-            pending.Add((b, new ArchiveEntry(extra, parent)));
+            Dictionary<VSMControllerType, Dictionary<int, ProjectArchiveArrays.ControllerPoint>>? controllers = null;
+            if (from is not null && from.Live.TryGetValue(a, out ArchiveEntry? retained) && retained.Controller is not null)
+            {
+                if (left is not WIVSMMidiPart sourcePart || right is not WIVSMMidiPart targetPart)
+                    throw new InvalidDataException("project_preservation: controller payload is not attached to a MIDI part.");
+                controllers = [];
+                foreach ((VSMControllerType type, Dictionary<int, ProjectArchiveArrays.ControllerPoint> points) in retained.Controller)
+                {
+                    ProjectArchiveArrays.ValidateController(points, ArchiveNativeControllers(sourcePart, type));
+                    ProjectArchiveArrays.ValidateController(points, ArchiveNativeControllers(targetPart, type));
+                    controllers.Add(type, points.ToDictionary(pair => pair.Key,
+                        pair => new ProjectArchiveArrays.ControllerPoint(pair.Value.Value, (JsonObject)pair.Value.Extra.DeepClone())));
+                }
+            }
+            pending.Add((b, new ArchiveEntry(extra, parent, controllers)));
         }
         void Notes(WIVSMMidiPart left, WIVSMMidiPart right)
         {
@@ -252,6 +266,6 @@ internal sealed partial class EngineHost
         else throw new InvalidDataException("project_preservation: unsupported transfer entity kind.");
 
         foreach ((ArchiveEntity key, ArchiveEntry entry) in pending) to.Live.Add(key, entry);
-        if (pending.Any(item => item.Entry.Extra.Count != 0)) to.HasEntityExtensions = true;
+        if (pending.Any(item => item.Entry.Extra.Count != 0 || item.Entry.Controller is not null)) to.HasEntityExtensions = true;
     }
 }

@@ -475,6 +475,7 @@ internal sealed partial class EngineHost
             };
             if (state.HasEntityExtensions) session.ArchiveEnd = action => EndArchiveMutation(session, action);
             if (state.HasEntityExtensions) session.ArchiveCopy = (source, target) => ArchiveCopyDuplicate(session, source, target);
+            if (state.HasEntityExtensions) session.ArchiveValidate = () => ValidateArchiveControllersBeforeCommit(session);
         }
         catch
         {
@@ -534,6 +535,7 @@ internal sealed partial class EngineHost
             };
             session.ArchiveEnd = action => EndArchiveMutation(session, action);
             session.ArchiveCopy = (source, target) => ArchiveCopyDuplicate(session, source, target);
+            session.ArchiveValidate = () => ValidateArchiveControllersBeforeCommit(session);
             return true;
         }
         catch
@@ -564,7 +566,7 @@ internal sealed partial class EngineHost
         state.UpgradeTempo = null;
         state.UpgradeTimeSig = null;
         state.Live.Clear();
-        session.ArchiveBegin = null; session.ArchiveEnd = null; session.ArchiveCopy = null;
+        session.ArchiveBegin = null; session.ArchiveEnd = null; session.ArchiveCopy = null; session.ArchiveValidate = null;
         if (state.Root.Count == 0 && state.Master.Count == 0 && state.ExtraFiles.Count == 0 && state.Tempo is null && state.TimeSig is null)
         {
             archiveStates.Remove(session.Id);
@@ -705,14 +707,30 @@ internal sealed partial class EngineHost
         string Lyric, string Phonemes, int Language, bool Valid);
     private readonly record struct ArchivePartSignature(long Position, long Duration, string Name);
     private sealed record ArchivePartSnapshot(ArchiveEntity Key, ArchiveEntity Parent,
-        (ArchiveEntity Key, ArchiveNoteSignature Signature)[] Notes);
+        (ArchiveEntity Key, ArchiveNoteSignature Signature)[] Notes, long Position,
+        Dictionary<VSMControllerType, Dictionary<int, ProjectArchiveArrays.ControllerPoint>> Controllers);
 
-    private static ArchivePartSnapshot ArchiveSnapshotPart(WIVSMMidiPart part)
+    private ArchivePartSnapshot ArchiveSnapshotPart(EngineSession session, WIVSMMidiPart part)
     {
         WIVSMMidiTrack parent = part.Parent ?? throw new InvalidDataException("project_preservation: part has no parent.");
         long offset = part.AbsPosTick.Value;
+        Dictionary<VSMControllerType, Dictionary<int, ProjectArchiveArrays.ControllerPoint>> controllers = [];
+        archiveStates.TryGetValue(session.Id, out ArchiveState? state);
+        ArchiveEntry? entry = null;
+        state?.Live.TryGetValue(ArchiveKey(part), out entry);
+        foreach (VSMControllerType type in Enum.GetValues<VSMControllerType>())
+        {
+            JsonArray native = ArchiveNativeControllers(part, type);
+            Dictionary<int, ProjectArchiveArrays.ControllerPoint> values = ProjectArchiveArrays.ReadController(native, false);
+            if (entry?.Controller is not null && entry.Controller.TryGetValue(type, out var retained))
+            {
+                ProjectArchiveArrays.ValidateController(retained, native);
+                values = retained;
+            }
+            if (values.Count != 0) controllers.Add(type, values);
+        }
         return new(ArchiveKey(part), ArchiveKey(parent), part.Notes.Select(note =>
-            (ArchiveKey(note), ArchiveNoteKey(note) with { Position = checked(offset + note.RelPosTick.Value) })).ToArray());
+            (ArchiveKey(note), ArchiveNoteKey(note) with { Position = checked(offset + note.RelPosTick.Value) })).ToArray(), offset, controllers);
     }
 
     private void ArchiveMigrateParts(EngineSession session, ArchivePartSnapshot[] sources, WIVSMMidiPart[] targets, bool split)
@@ -759,6 +777,52 @@ internal sealed partial class EngineHost
         var lookup = result.ToDictionary(n => n.Signature);
         if (original.Any(note => !lookup.ContainsKey(note.Signature)))
             throw new InvalidDataException("project_preservation: part operation changed a note identity.");
+        bool hasControllerPayload = sources.Any(source => source.Controllers.Values.Any(
+            lane => lane.Values.Any(point => point.Extra.Count != 0)));
+        Dictionary<ArchiveEntity, Dictionary<VSMControllerType, Dictionary<int, ProjectArchiveArrays.ControllerPoint>>> controllerTargets = [];
+        if (hasControllerPayload)
+        {
+            Dictionary<(VSMControllerType Type, long Position), ProjectArchiveArrays.ControllerPoint> controllerSource = [];
+            foreach (ArchivePartSnapshot source in sources)
+                foreach (var lane in source.Controllers)
+                    foreach (var point in lane.Value)
+                    {
+                        var key = (lane.Key, checked(source.Position + point.Key));
+                        if (!controllerSource.TryAdd(key, point.Value) &&
+                            (controllerSource[key].Extra.Count != 0 || point.Value.Extra.Count != 0))
+                            throw new InvalidDataException("project_preservation: overlapping extended controller identities in part operation.");
+                    }
+            HashSet<(VSMControllerType Type, long Position)> consumed = [];
+            foreach (WIVSMMidiPart target in targets)
+            {
+                Dictionary<VSMControllerType, Dictionary<int, ProjectArchiveArrays.ControllerPoint>> lanes = [];
+                foreach (VSMControllerType type in Enum.GetValues<VSMControllerType>())
+                {
+                    var native = ProjectArchiveArrays.ReadController(ArchiveNativeControllers(target, type), false);
+                    Dictionary<int, ProjectArchiveArrays.ControllerPoint> mapped = [];
+                    foreach (var point in native)
+                    {
+                        var key = (type, checked(target.AbsPosTick.Value + point.Key));
+                        if (!controllerSource.TryGetValue(key, out var prior))
+                        {
+                            // Native split may synthesize a boundary value; it
+                            // is a new event with no inherited unknown fields.
+                            mapped.Add(point.Key, new(point.Value.Value, new JsonObject()));
+                            continue;
+                        }
+                        bool first = consumed.Add(key);
+                        if ((prior.Value != point.Value.Value || !first) && prior.Extra.Count != 0)
+                            throw new InvalidDataException("project_preservation: part operation changed or ambiguously mapped an extended controller.");
+                        JsonObject extra = first && prior.Value == point.Value.Value ? (JsonObject)prior.Extra.DeepClone() : new JsonObject();
+                        mapped.Add(point.Key, new(point.Value.Value, extra));
+                    }
+                    if (mapped.Count != 0) lanes.Add(type, mapped);
+                }
+                controllerTargets.Add(ArchiveKey(target), lanes);
+            }
+            if (controllerSource.Any(pair => pair.Value.Extra.Count != 0 && !consumed.Contains(pair.Key)))
+                throw new InvalidDataException("project_preservation: part operation lost an extended controller identity.");
+        }
         foreach (ArchivePartSnapshot source in sources)
         {
             state.Live.Remove(source.Key);
@@ -769,7 +833,9 @@ internal sealed partial class EngineHost
             WIVSMMidiTrack parent = target.Parent ?? throw new InvalidDataException("project_preservation: migrated part has no parent.");
             if (sources.Any(source => source.Parent != ArchiveKey(parent)))
                 throw new InvalidDataException("project_preservation: part operation changed track identity.");
-            state.Live[ArchiveKey(target)] = new ArchiveEntry((JsonObject)merged.DeepClone(), ArchiveKey(parent));
+            controllerTargets.TryGetValue(ArchiveKey(target), out var lanes);
+            bool hasControllerExtra = lanes is not null && lanes.Values.Any(lane => lane.Values.Any(point => point.Extra.Count != 0));
+            state.Live[ArchiveKey(target)] = new ArchiveEntry((JsonObject)merged.DeepClone(), ArchiveKey(parent), hasControllerExtra ? lanes : null);
         }
         foreach (var note in original)
             if (state.Before.TryGetValue(note.Key, out ArchiveEntry? entry))
@@ -826,6 +892,16 @@ internal sealed partial class EngineHost
             if (original.Name != copy.Name || original.DurationTick.Value != copy.DurationTick.Value)
                 throw new InvalidDataException("project_preservation: duplicated part identity fields changed.");
             Add(original, copy, targetTrack);
+            if (state.Live.TryGetValue(ArchiveKey(original), out ArchiveEntry? sourceEntry) && sourceEntry.Controller is not null)
+            {
+                if (original is not WIVSMMidiPart sourceMidi || copy is not WIVSMMidiPart copyMidi)
+                    throw new InvalidDataException("project_preservation: controller duplicate requires MIDI parts.");
+                foreach ((VSMControllerType type, Dictionary<int, ProjectArchiveArrays.ControllerPoint> events) in sourceEntry.Controller)
+                {
+                    ProjectArchiveArrays.ValidateController(events, ArchiveNativeControllers(sourceMidi, type));
+                    ProjectArchiveArrays.ValidateController(events, ArchiveNativeControllers(copyMidi, type));
+                }
+            }
             if (original is WIVSMMidiPart midi && copy is WIVSMMidiPart targetMidi) CopyNotes(midi, targetMidi);
             else if ((original is WIVSMMidiPart) != (copy is WIVSMMidiPart))
                 throw new InvalidDataException("project_preservation: duplicated part kind changed.");
@@ -865,7 +941,12 @@ internal sealed partial class EngineHost
         }
         else throw new InvalidOperationException("project_preservation: duplicate kind does not match the native operation.");
         foreach ((ArchiveEntity from, ArchiveEntity to, ArchiveEntity? parent) in pending)
-            state.Live.Add(to, new ArchiveEntry((JsonObject)state.Live[from].Extra.DeepClone(), parent));
+        {
+            ArchiveEntry entry = state.Live[from];
+            var controllers = entry.Controller?.ToDictionary(lane => lane.Key, lane => lane.Value.ToDictionary(
+                point => point.Key, point => new ProjectArchiveArrays.ControllerPoint(point.Value.Value, (JsonObject)point.Value.Extra.DeepClone())));
+            state.Live.Add(to, new ArchiveEntry((JsonObject)entry.Extra.DeepClone(), parent, controllers));
+        }
     }
 
     // Copy the opaque payload while the native split is staged; the normal
@@ -935,7 +1016,9 @@ internal sealed partial class EngineHost
         if (method == "audio_op")
         {
             string operation = parameters.GetProperty("operation").GetString() ?? "";
-            if (operation is "devices" or "inspect_audio" or "export_audio" or "effects" or "transport_status" or "transport_release") return;
+            // Offline processing reads an explicit WAV and writes a separate
+            // output; it does not mutate the project sequence or its history.
+            if (operation is "devices" or "inspect_audio" or "export_audio" or "effects" or "transport_status" or "transport_release" or "process_audio") return;
         }
         throw new InvalidOperationException("project_preservation: this operation requires a verified entity-identity transaction: " + method);
     }
@@ -963,7 +1046,7 @@ internal sealed partial class EngineHost
     private void RequireArchiveMutationSupported(EngineSession session, string operation)
     {
         if (!HasArchiveEntityExtensions(session)) return;
-        if (ArchiveHasControllerExtensions(session) && operation is not ("controller.set" or "controller.remove" or "undo" or "redo"))
+        if (ArchiveHasControllerExtensions(session) && operation is not ("controller.set" or "controller.remove" or "track.duplicate" or "part.duplicate" or "part.split" or "part.join" or "undo" or "redo"))
             throw new InvalidOperationException("project_preservation: controller extension mutation has no verified identity mapping: " + operation);
         if (operation is not ("track.create" or "track.update" or "track.reorder" or "track.remove" or "track.duplicate" or
             "part.create" or "part.update" or "part.move" or "part.resize" or "part.remove" or "part.duplicate" or "part.split" or "part.join" or
@@ -992,6 +1075,33 @@ internal sealed partial class EngineHost
         state.BeforeTempo = state.Tempo;
         state.BeforeTimeSig = state.TimeSig;
         state.Action = action;
+    }
+
+    // Validate retained native controller values before committing a tracked
+    // edit; an unhandled change then rolls back with the existing journal.
+    private void ValidateArchiveControllersBeforeCommit(EngineSession session)
+    {
+        if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state) || state.Before is null) return;
+        var tracked = state.Live.Where(pair => pair.Value.Controller is not null).ToDictionary(pair => pair.Key, pair => pair.Value);
+        if (tracked.Count == 0 && !state.Before.Values.Any(entry => entry.Controller is not null)) return;
+        HashSet<ArchiveEntity> seen = [];
+        foreach (WIVSMTrack track in session.Sequence.Tracks)
+            if (track.Type is VSMTrackType.Midi or VSMTrackType.MidiAi)
+                foreach (WIVSMPart part in track.Parts)
+                {
+                    ArchiveEntity key = ArchiveKey(part);
+                    if (!tracked.TryGetValue(key, out ArchiveEntry? entry)) continue;
+                    WIVSMMidiPart midi = part as WIVSMMidiPart ?? new WIVSMMidiPart(part);
+                    foreach ((VSMControllerType type, Dictionary<int, ProjectArchiveArrays.ControllerPoint> points) in entry.Controller!)
+                        ProjectArchiveArrays.ValidateController(points, ArchiveNativeControllers(midi, type));
+                    seen.Add(key);
+                }
+        if (seen.Count != tracked.Count)
+            throw new InvalidDataException("project_preservation: tracked controller part is absent before commit.");
+        if (state.Action is "track.duplicate" or "part.duplicate" or "controller.set" or "controller.remove")
+            foreach ((ArchiveEntity key, ArchiveEntry entry) in state.Before)
+                if (entry.Controller is not null && !state.Live.ContainsKey(key))
+                    throw new InvalidDataException("project_preservation: mutation replaced a controller-bearing part before commit.");
     }
 
     // action is commit, sync, undo, redo or rollback. Only an actual
@@ -1252,6 +1362,7 @@ internal sealed partial class EngineHost
         session.ArchiveBegin = null;
         session.ArchiveEnd = null;
         session.ArchiveCopy = null;
+        session.ArchiveValidate = null;
         if (state.ObserverAttached)
         {
             session.Sequence.RemoveUpdateObserver(state.Observer);

@@ -535,11 +535,16 @@ class ProjectStore:
         with self.prepare_compose(template, title, bpm, notes, track_index, part_index, voice_comp_id) as (archive, data, origins):
             return self._write_archive(archive, data, output_name, origins)
 
-    def edit_notes(self, source: str, output_name: str, notes: list[dict], track_index: int = 0, part_index: int = 0) -> dict:
+    @contextmanager
+    def prepare_note_edit(self, source: str, notes: list[dict], track_index: int = 0, part_index: int = 0):
         with _source_archive(self.workspace, source) as archive:
             data = self._read_note_edit_archive(archive)
             origins = _replace_notes(data, notes, track_index, part_index)
-            return self._write_archive(archive, data, output_name, (track_index, part_index, origins))
+            yield archive, data, (track_index, part_index, origins)
+
+    def edit_notes(self, source: str, output_name: str, notes: list[dict], track_index: int = 0, part_index: int = 0) -> dict:
+        with self.prepare_note_edit(source, notes, track_index, part_index) as (archive, data, origins):
+            return self._write_archive(archive, data, output_name, origins)
 
     def set_curve(self, source: str, output_name: str, controller: str, events: list[dict],
                   track_index: int = 0, part_index: int = 0) -> dict:

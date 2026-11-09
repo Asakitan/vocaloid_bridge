@@ -10,7 +10,7 @@ from typing import Any
 
 from .music import _notes, _output_destination, _reject_links
 from .native_client import NativeClient
-from .projects import ProjectStore, _part
+from .projects import PHONEME_VALIDITY_MEMBER, ProjectStore, _part, _validate_phoneme_validity
 
 
 # First two default lyric/phoneme pairs from the installed editor's
@@ -39,7 +39,7 @@ def _verify_loaded(expected: list[dict], actual: list[dict]) -> None:
     if len(expected) != len(actual) or any(
             any(source.get(a) != loaded.get(b) for a, b in fields)
             for source, loaded in zip(expected, actual)):
-        raise ValueError("Native loading changed or discarded a composed note.")
+        raise ValueError("Native loading changed or discarded an authored note.")
 
 
 def _verify_conversion(before: list[dict], after: list[dict], index: int, lyric: str,
@@ -97,7 +97,21 @@ def compose(store: ProjectStore, client: NativeClient, template: str, output_nam
             title: str, bpm: float, notes: list[dict], track_index: int, part_index: int,
             voice_comp_id: str | None) -> dict:
     """Create the score and return its opened native session, publishing after conversion."""
-    with store.prepare_compose(template, title, bpm, notes, track_index, part_index, voice_comp_id) as (archive, data, origins):
+    preparation = store.prepare_compose(template, title, bpm, notes, track_index, part_index, voice_comp_id)
+    return _write_prepared(store, client, preparation, output_name, notes, retain_session=True)
+
+
+def replace_notes(store: ProjectStore, client: NativeClient, source: str, output_name: str,
+                  notes: list[dict], track_index: int, part_index: int) -> dict:
+    """Create a revised score without retaining a native session in the file-only API."""
+    preparation = store.prepare_note_edit(source, notes, track_index, part_index)
+    return _write_prepared(store, client, preparation, output_name, notes, retain_session=False)
+
+
+def _write_prepared(store: ProjectStore, client: NativeClient, preparation, output_name: str,
+                    notes: list[dict], *, retain_session: bool) -> dict:
+    with preparation as (archive, data, origins):
+        track_index, part_index, _ = origins
         track, part = _part(data, track_index, part_index)
         prepared = _notes(notes, monophonic=True)
         pending = []
@@ -108,7 +122,11 @@ def compose(store: ProjectStore, client: NativeClient, template: str, output_nam
                 pending.append((index, note["lyric"], note["langID"]))
         if not pending:
             result = store._write_archive(archive, data, output_name, origins)
+            if not retain_session:
+                return result
             return {**result, "native_session": client.request("open", {"path": result["path"]})}
+        if PHONEME_VALIDITY_MEMBER in archive.namelist():
+            _validate_phoneme_validity(data, archive.read(PHONEME_VALIDITY_MEMBER), origins)
         if track.get("type") != 2 or not isinstance(part.get("aiVoice"), dict):
             raise ValueError("Automatic phonemes require an AI voice part.")
         if any(language not in _SEEDS for _, _, language in pending):
@@ -156,7 +174,12 @@ def compose(store: ProjectStore, client: NativeClient, template: str, output_nam
                 final_session = final["session_id"]
                 if _notes_in_session(client, final_session, scope) != resolved_notes:
                     raise ValueError("Published score differs from the native conversion session.")
-                return {"path": str(destination), "summary": store._summary(destination, data), "native_session": final}
+                result = {"path": str(destination), "summary": store._summary(destination, data)}
+                if retain_session:
+                    return {**result, "native_session": final}
+                closing, final_session = final_session, None
+                client.request("close", {"session_id": closing, "discard": True})
+                return result
             except BaseException:
                 try:
                     if final_session is not None:

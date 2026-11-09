@@ -20,12 +20,13 @@ recursively before structured fields are applied. For new AI notes, the observed
 editor baseline supplies expressions and velocity 64, while omitted language
 uses the first source note's language if present, otherwise baseline language 0.
 Selected notes with the same lyric and language retain their original phoneme if
-omitted. `score_replace_notes` still writes an empty phoneme for other omissions;
-in a tested AI voice, that empty phoneme caused the native note-count integrity
-check to fail on open. Since 0.20.0, `score_compose` resolves those omissions in
-the native G2PA session before publishing; see [the conversion contract](compose-phonemes-29.md).
+omitted. New or lyric-changed AI notes without phonemes use the native G2PA
+conversion path in `score_compose` (0.20.0) and `score_replace_notes` (0.21.0).
+Explicit empty phonemes are rejected by these MCP tools; the lower-level data
+store remains a file serializer. See [the conversion contract](compose-phonemes-29.md).
 
-The validity sidecar is checked against the original sequence before replacement.
+The validity sidecar is checked against the original sequence before replacement
+and against pending note identities before native conversion seeds are written.
 Every sidecar-referenced note in the edited part must retain its selected source
 index at the same output index, in addition to the original field checks; no
 sidecar migration is claimed. This prevents assigning validity to a new note

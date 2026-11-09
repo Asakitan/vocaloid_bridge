@@ -15,7 +15,7 @@ import numpy as np
 import soundfile as sf
 
 from . import __version__
-from .compose import compose as compose_native
+from .compose import compose as compose_native, replace_notes as replace_notes_native
 from .music import _source, export_midi, import_midi
 from .native_client import NativeClient
 from .projects import ProjectStore
@@ -344,13 +344,23 @@ def score_patch(path: str, output_name: str, operations: list[dict[str, Any]]) -
 
 
 @mcp.tool()
-def score_replace_notes(path: str, output_name: str, notes: list[dict[str, Any]],
-                        track_index: int = 0, part_index: int = 0) -> dict[str, Any]:
+async def score_replace_notes(path: str, output_name: str, notes: list[dict[str, Any]],
+                              track_index: int = 0, part_index: int = 0) -> dict[str, Any]:
     """Create a revised score with explicit beat-based notes and unchanged non-note project data.
     For AI notes, source={index, expected} preserves one inspected source note; omit source for a new note.
     Source snapshots must match exactly and be selected only once; guarded extension projects remain guarded.
+    Omitted AI-note phonemes use native G2PA for one complete syllable per note; no session is retained.
     """
-    return STORE.edit_notes(path, output_name, notes, track_index, part_index)
+    task = asyncio.create_task(asyncio.to_thread(
+        replace_notes_native, STORE, NATIVE, path, output_name, notes, track_index, part_index))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await task
+        except Exception:
+            pass
+        raise
 
 
 @mcp.tool()

@@ -7,9 +7,10 @@ using Yamaha.VOCALOID.VSM;
 
 internal sealed partial class EngineHost
 {
-    private sealed class NativeTransport(string sessionId, string deviceId, bool muted, AudioMixCallbacks callbacks)
+    private sealed class NativeTransport(string sessionId, string deviceId, bool muted, AudioMixCallbacks callbacks, EngineSession? snapshot)
     {
         internal readonly string SessionId = sessionId;
+        internal readonly EngineSession? Snapshot = snapshot;
         internal readonly string DeviceId = deviceId;
         internal readonly bool Muted = muted;
         internal readonly AudioMixCallbacks Callbacks = callbacks;
@@ -135,7 +136,29 @@ internal sealed partial class EngineHost
                      output_peak_db = new[] { left.PeakHold, right.PeakHold }, native = true };
     }
 
-    private object PrepareTransport(EngineSession session, JsonElement options)
+    private object PrepareTransport(EngineSession source, JsonElement options)
+    {
+        if (transport is not null || audioEngineInitialized)
+            throw new InvalidOperationException("Release the existing native transport before preparing another.");
+        if (!HasArchiveEntityExtensions(source))
+            return PrepareTransportCore(source, source.Id, null, options);
+        if (source.Sequence.IsStaged)
+            throw new InvalidOperationException("Commit or roll back pending native edits before preparing a preserved project.");
+        EngineSession snapshot = CloneProject(source.Id, null);
+        sessions.Remove(snapshot.Id);
+        try { return PrepareTransportCore(snapshot, source.Id, snapshot, options); }
+        catch
+        {
+            if (!ReferenceEquals(transport?.Snapshot, snapshot) && ownedSequences.Contains(snapshot.Sequence))
+            {
+                try { audioEffects?.ResetAll(); }
+                finally { CloseTransportSnapshot(snapshot); }
+            }
+            throw;
+        }
+    }
+
+    private object PrepareTransportCore(EngineSession session, string sourceId, EngineSession? snapshot, JsonElement options)
     {
         if (transport is not null || audioEngineInitialized)
             throw new InvalidOperationException("Release the existing native transport before preparing another.");
@@ -174,7 +197,7 @@ internal sealed partial class EngineHost
         effects.SetBypassAll(false);
         effects.ClearProcessMemory();
         var callbacks = new AudioMixCallbacks(tempos);
-        NativeTransport current = new(session.Id, deviceId, muted, callbacks);
+        NativeTransport current = new(sourceId, deviceId, muted, callbacks, snapshot);
         transport = current;
         try
         {
@@ -258,7 +281,7 @@ internal sealed partial class EngineHost
             VEAudioEngine.SetLoopEnabled(sequence.IsLoopOn);
             VEAudioEngine.SetAutoStopAtLoopEnd(!sequence.IsLoopOn);
             VEAudioEngine.SetCurrentTime(begin);
-            return TransportOperation(session, "transport_status", options);
+            return TransportOperation(GetSession(sourceId), "transport_status", options);
         }
         catch
         {
@@ -277,9 +300,26 @@ internal sealed partial class EngineHost
             VEAudioEngine.Terminate();
             audioEngineInitialized = false;
         }
+        // Detach only after native termination succeeds: until then placements,
+        // callbacks and the snapshot may still be referenced by the engine.
         transport = null;
+        List<Exception> errors = [];
         foreach (VEAudioPlacement placement in current.Placements)
-            placement.Dispose();
-        current.Callbacks.Completed.Dispose();
+            try { placement.Dispose(); } catch (Exception error) { errors.Add(error); }
+        try { current.Callbacks.Completed.Dispose(); } catch (Exception error) { errors.Add(error); }
+        if (current.Snapshot is not null)
+        {
+            try { audioEffects?.ResetAll(); } catch (Exception error) { errors.Add(error); }
+            try { CloseTransportSnapshot(current.Snapshot); } catch (Exception error) { errors.Add(error); }
+        }
+        if (errors.Count != 0)
+            throw new AggregateException("Native transport cleanup did not fully succeed.", errors);
+    }
+
+    private void CloseTransportSnapshot(EngineSession snapshot)
+    {
+        sessions.Add(snapshot.Id, snapshot);
+        try { Close(snapshot.Id, true); }
+        finally { sessions.Remove(snapshot.Id); }
     }
 }

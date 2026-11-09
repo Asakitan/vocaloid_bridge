@@ -14,7 +14,7 @@
 - **X**：会操作用户前台、全局设置或授权，不符合当前约束。
 - **E**：需要外部设备、DAW 或其他未提供的环境；不是已验证功能。
 
-V 不由工具数量或能够枚举签名推导。当前为 37 个工具、125 个结构化操作；[历史完整回执](../artifacts/feature-acceptance-012574702338/summary.json) 的 76 通过、5 失败、2 个缺样本项保留。会话 15 增加控制器扩展工程内复制拆合、独立离线音频与私有素材操作的定向证据；其他复杂扩展格式、物理输入和实际宿主仍有缺口。当前证据汇总见 [STATUS](../STATUS.md)，不宣称本轮重跑了完整套件。
+V 不由工具数量或能够枚举签名推导。当前为 37 个工具、125 个结构化操作；[历史完整回执](../artifacts/feature-acceptance-012574702338/summary.json) 的 76 通过、5 失败、2 个缺样本项保留。会话 16 增加受测 AI 素材未知字段、扩展工程静音传输和普通效果器历史的定向证据；其他复杂扩展格式、物理输入和实际宿主仍有缺口。当前证据汇总见 [STATUS](../STATUS.md)，不宣称本轮重跑了完整套件。
 
 ## 工程与文件
 
@@ -63,7 +63,7 @@ V 不由工具数量或能够枚举签名推导。当前为 37 个工具、125 �
 | R-03 | MIDI 片段长度与右边界 | project_edit part.resize；左右音频边界见 A-03 | V | 32-37,44 |
 | R-04 | MIDI 片段删除、复制 | project_edit part.remove / duplicate | V | 17,33 |
 | R-05 | MIDI 片段分割与连接 | project_edit part.split / part.join | V | 18,33 |
-| R-06 | 时间范围插入空白、删除时间 | project_edit time.insert / time.delete；跨 MIDI 片段内部边界须先分割 | V | 18 |
+| R-06 | 时间范围插入空白、删除时间 | project_edit time.insert / time.delete；普通 AI 样本及历史已验，跨 MIDI 片段内部边界须先分割，扩展工程仍受保护 | V | 18 |
 | R-07 | 选区与多选状态 | project_edit selection.get / selection.set | V | 12,17 |
 | R-08 | 事件剪切、复制和跨工程粘贴 | project_clipboard；MIDI 轨道和音符样本，源关闭后仍可粘贴 | V | 12,17 |
 | N-01 | 音符枚举、增加、删除 | project_edit note.list / add / remove | V | 39,45-49 |
@@ -124,7 +124,7 @@ V 不由工具数量或能够枚举签名推导。当前为 37 个工具、125 �
 | X-02 | 选择轨道导出与分轨 | project_audio mixdown / mixdown_stems；分轨旁路主效果与主自动化 | V | 15-16 |
 | X-03 | 采样率、位深、声道 | mixdown；44.1/48/96/192 kHz、16/24-bit、单/双声道受测组合已验 | V | 16 |
 | X-04 | 主、轨道、片段效果链查询 | project_audio effects | V | 52,60 |
-| X-05 | 效果增加、删除、顺序与旁路 | project_audio set_effect | V | 60 |
+| X-05 | 效果增加、删除、顺序与旁路 | project_audio set_effect；普通工程原生撤销重做已验，扩展工程效果写入仍受保护 | V | 60 |
 | X-06 | 效果参数和预设 | project_audio set_effect；受测内置效果的参数及预设 | V | 60 |
 | X-07 | Gain、De-esser、Compressor、EQ | effects/set_effect；全部有效参数量化读回、重开、受测预设和实际混缩 | V | 61-62 |
 | X-08 | Distortion、Chorus、Phaser、Tremolo | effects/set_effect；全部有效参数量化读回、重开、受测预设和实际混缩 | V | 63-64 |
@@ -137,8 +137,8 @@ V 不由工具数量或能够枚举签名推导。当前为 37 个工具、125 �
 | --- | --- | --- | --- | --- |
 | L-01 | 媒体库列表、分类及搜索 | project_library 媒体接口 | V | 68-69 |
 | L-02 | 媒体关键词与标签 | project_library 媒体接口；独立 property.json 持久化 | V | 69 |
-| L-03 | 将 MIDI 媒体粘贴到工程 | project_library media_import | V | 69 |
-| L-04 | 保存 MIDI 片段为媒体、修改属性 | project_library media_capture / media_update；仅工作区自有媒体 | V | 19,71 |
+| L-03 | 将 MIDI 媒体粘贴到工程 | project_library media_import；受测 AI 片段/音符未知字段及历史已验，controller 扩展素材仍受保护 | V | 69 |
+| L-04 | 保存 MIDI 片段为媒体、修改属性 | project_library media_capture / media_update；仅工作区自有媒体，带归档元数据的属性修改受保护 | V | 19,71 |
 | L-05 | 删除工作区自有媒体 | project_library media_delete；禁止删除用户原有素材 | V | 71 |
 | L-06 | 预设目录及音素语言信息 | project_library 目录查询已有原生返回值；具体经典效果的声音边界另见 C-11 | V | 53-58,77-91 |
 | L-07 | 五种语言静态音素符号表 | project_library phoneme_table；手册参考数据，非原生动态枚举 | V | 77-91 |
@@ -161,6 +161,6 @@ V 不由工具数量或能够枚举签名推导。当前为 37 个工具、125 �
 
 所有可在当前约束内独立完成的功能都必须有实际入口和验收证据；M/I 行不能算作 V。E/X 不是成功，也不是静默回退。完整覆盖率以本文件及实际程序集目录共同核对，不以新增工具数量判断。
 
-仍待完成：控制器扩展跨工程迁移、选中内容有未知字段的媒体捕获、扩展工程音频导入/编辑、其他非实体数组、更多音频资源组合、纯元数据合并的历史语义、物理 MIDI 设备采集与驱动错误通知、DAW 宿主同步。用户仅使用 AI 声库，经典功能行保留兼容性信息而非本轮试用安装目标。原生设备传输已作静音验收，会话冻结及受支持的未知字段保留已具备入口和证据。内部合成率与输出率、离线求和与外部路由继续区分；静态音素表不是具体声库能力枚举，任意秒区间和尾长也不是当前原生混缩入口。前台窗口从未加入调用面。
+仍待完成：控制器扩展跨工程迁移及素材往返、扩展工程时间编辑和音频导入/编辑、其他非实体数组、更多音频资源组合、纯元数据合并的历史语义、物理 MIDI 设备采集与驱动错误通知、DAW 宿主同步。用户仅使用 AI 声库，经典功能行保留兼容性信息而非本轮试用安装目标。原生设备传输和扩展工程快照传输已作静音验收，会话冻结及受支持的未知字段保留已具备入口和证据。内部合成率与输出率、离线求和与外部路由继续区分；静态音素表不是具体声库能力枚举，任意秒区间和尾长也不是当前原生混缩入口。前台窗口从未加入调用面。
 
 官方来源：`https://rsc-net.vocaloid.com/assets/pdf_files/bb/VOCALOID6_Reference_Manual_6130_ENG.pdf`。本机原文缓存和抽取文本只保存在被忽略的 `.runtime` 中。

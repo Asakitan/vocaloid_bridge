@@ -46,3 +46,17 @@ release followed by a successful save, and automatic release on session close.
 This is one device and one timing sample, not a general latency guarantee. An available
 physical or virtual device is an external prerequisite. A muted transport test
 does not establish audible playback quality, recording, or DAW host sync.
+
+For extension-tracked projects, preparation uses a private native snapshot and
+keeps the public transport bound to the source session ID. The source remains
+locked against edits and output operations while prepared. After native engine
+termination succeeds, release, failed preparation, and source close dispose the
+private snapshot. If termination fails, the transport retains ownership and
+release can be retried. Pending staged edits must be committed or rolled back
+before creating that snapshot. Audio operations and style capture/apply with
+audio are guarded across sessions while the shared effect manager is in use.
+The muted DirectSound case in
+`artifacts/feature-acceptance-6667cde9784c/summary.json` verifies source ID,
+playback, stop, seek, failed prepare cleanup, cross-session guards, history and
+archive preservation, release, and close. It covers one device, not physical
+device loss or DAW synchronization.

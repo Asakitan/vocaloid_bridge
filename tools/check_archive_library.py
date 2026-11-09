@@ -40,9 +40,10 @@ async def library_independent(check):
                                        name="Archive updated " + check.run_id))["style"]
         v.require(updated["style_id"] == style_id and updated["name"].startswith("Archive updated"),
                   "Private style update failed")
-        await check.rejected("project_library", "archive.*(extension|metadata)", session_id=sid,
-                             operation="media_capture", options={"track_index": 0, "part_index": 0,
-                                                                  "name": "Unsupported unknown media"})
+        extended = (await check.library("media_capture", sid, track_index=0, part_index=0,
+                                        name="Archive extended clip " + check.run_id))["clip"]
+        clip_id = extended["clip_id"]
+        await check.library("media_delete", sid, clip_id=clip_id); clip_id = None
         clip = (await check.library("media_capture", sid, track_index=0, part_index=1,
                                     name="Archive clip " + check.run_id))["clip"]
         clip_id = clip["clip_id"]

@@ -94,7 +94,8 @@ internal sealed class RpcServer(EngineHost host, string desktop)
             string operation = RequiredString(parameters, "operation");
             JsonElement options = Required(parameters, "options");
             host.CheckSessionExternalAccess(id);
-            if (!host.IsIndependentArchiveLibraryOperation(id, operation, options))
+            if (!host.IsIndependentArchiveLibraryOperation(id, operation, options) &&
+                !host.IsPreservedMidiMediaImport(id, operation, options))
                 host.CheckArchiveExternalOperation(id, "library", operation);
             host.CheckFrozenExternalOperation(id, "library", operation);
             return host.LibraryOperation(id, operation, options);

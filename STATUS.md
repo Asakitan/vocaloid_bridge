@@ -1,6 +1,6 @@
 # 当前状态
 
-日期：2026-11-10。版本：0.10.0。完整目标继续进行，不把受测范围扩大为所有输入与环境组合。
+日期：2026-11-10。版本：0.11.0。完整目标继续进行，不把受测范围扩大为所有输入与环境组合。
 
 会话 09：用户明确选择仅使用 VOCALOID:AI 声库；不安装经典声库试用，继续扩展 AI 工程编辑及后台设备能力。
 未指定类型的 `track.create` 默认改为 `MidiAi`；空工程到显式选声、编辑、保存重开和合成的定向验证见 `artifacts/feature-acceptance-32f1c9da5151/summary.json`。显式 `Midi` 类型及旧工程保护保留。
@@ -16,6 +16,8 @@
 会话 14：拍号扩展按原生逐事件时间换算合并；控制器事件扩展支持受测编辑与历史；音频轨及片段扩展迁移覆盖原始和处理后 WAV。带扩展工程的原生合成、MIDI 导出与离线混缩通过独立快照调用。
 
 会话 15：控制器扩展支持受测轨道/片段复制、拆合及边界生成点，提交前校验保留的原生曲线；带扩展工程可执行独立 WAV 处理和受测私有素材操作。普通工程音频导入/编辑接入原生撤销历史。
+
+会话 16：受测 AI 素材可携带片段和音符未知字段，并在候选快照预检后导入；扩展工程可通过独立快照进行静音原生传输；普通工程效果器直接编辑具有撤销重做。扩展时间编辑仍由原守卫保护。
 
 ## 当前入口与实测
 
@@ -33,61 +35,24 @@
 
 | 范围 | 回执 | 结果 |
 | --- | --- | --- |
-| 0.10.0 独立 stdio 状态与工具发现 | `artifacts/stdio-v0100-status-49b6ed9faee4.json` | 版本 0.10.0、37 工具、0 会话 |
-| 控制器边界、私有素材和离线音频 | `artifacts/feature-acceptance-6cc1fd525f8e/summary.json` | 4 个功能用例及清理共 5 通过，无自有前台切换或遗留会话 |
-| 控制器扩展编辑、拆合与歧义回归 | `artifacts/feature-acceptance-6d389ad715a5/summary.json` | 4 个功能用例及清理共 5 通过 |
-| 普通工程音频导入/编辑历史 | `artifacts/feature-acceptance-eb4111329c4f/summary.json` | 定向用例及清理共 2 通过 |
-| 边界生成点首轮失败与原生观察 | `artifacts/feature-acceptance-a4ff744bd605/summary.json`、`artifacts/feature-acceptance-c5699ce5886f/summary.json` | 首轮 10 通过、1 失败；原生生成点观察后修正并通过上述回归 |
-| 控制器跨工程旧版保护基线 | `artifacts/feature-acceptance-abb8ef4a6120/summary.json` | 迁移被现有守卫拦截，清理通过；未当作功能通过 |
-| 0.9.0 独立 stdio 状态与工具发现 | `artifacts/stdio-v090-status-28f3067b0802.json` | 版本 0.9.0、37 工具、0 会话 |
-| 扩展工程输出、拍号合并、控制器及音频迁移 | `artifacts/feature-acceptance-b0b2d367967f/summary.json` | 13 个功能用例及清理共 14 通过；无自有前台切换或遗留会话 |
-| 控制器历史判断加固后的定向回归 | `artifacts/feature-acceptance-982ed9b70fa6/summary.json` | 控制器编辑、歧义及剪贴板旧历史和清理共 4 通过 |
-| 扩展工程输出旧版基线 | `artifacts/feature-acceptance-9ce5897ac9db/summary.json` | 旧版 MIDI 导出被工程扩展守卫拦截；修复前证据 |
-| 0.8.0 独立 stdio 状态与工具发现 | `artifacts/stdio-v080-status-6b5f065e679c.json` | 版本 0.8.0、37 工具、原生后台 |
-| 0.8.0 生命周期烟雾测试 | `artifacts/mcp-smoke-129fd1680c28.json` | 创建、修改、保存、重开、音符往返；前台窗口未改变 |
-| 剪贴板资源、拍号与速度扩展合并 | `artifacts/feature-acceptance-5f7c71ba55ed/summary.json` | 13 通过、1 个旧 guard 预期失败，含清理；旧预期随后修正 |
-| 更新后的速度扩展测试 | `artifacts/feature-acceptance-0f5180183d62/summary.json` | 定向用例与清理通过，含来源和目标扩展、合并及撤销 |
-| 补充剪切粘贴与原生音频成员碰撞检查 | `artifacts/feature-acceptance-9cc33036cca5/summary.json` | 定向用例与清理通过；碰撞前目标状态及原生 WAV 保持 |
-| 自有合成 DLL 的 ANSI 静态槽与绕过边界 | `artifacts/probe-iat-ansi-boundary.txt` | 静态调用命中；动态解析、第二模块和加载初始化不受该补丁覆盖 |
-| 0.7.0 独立 stdio 状态与工具发现 | `artifacts/stdio-v070-status-0dd9be424fba.json` | 版本 0.7.0、37 工具、0 会话 |
-| 剪贴板预检、资源合并、速度扩展及相关回归 | `artifacts/feature-acceptance-a2ec5efb0ad1/summary.json` | 10 通过，含清理；无前台切换 |
-| 导出 ZIP 数量、大小和路径冲突 | `artifacts/archive-export-4717c45e9a45.json` | 缩小阈值的合成验证通过 |
-| 自有 DLL 的合成管道静态导入映射 | `artifacts/probe-appcontainer-iat-controls-acl.txt` | 同 profile 收发及负对照已观察；非实际插件证明 |
-| 0.6.0 独立 stdio 状态与工具发现 | `artifacts/stdio-v060-status-1679c32d6429.json` | 版本 0.6.0、37 工具、0 会话 |
-| root/master 扩展合并、歧义预检及旧历史 | `artifacts/feature-acceptance-5a2c12f87c28/summary.json` | 2 通过，含清理 |
-| 嵌套扩展合并与历史 | `artifacts/feature-acceptance-28ce06be4e32/summary.json` | 2 通过，含清理；先于整合并预检 |
-| 全局合并与既有旧历史、音符拆合回归 | `artifacts/feature-acceptance-818d9fb68a28/summary.json` | 4 通过，含清理；先于嵌套预检改动 |
-| 自有虚拟 MIDI 输入、回调、编辑和清理 | `artifacts/midi-owned-78935c45c6f9.json` | 通过；物理设备未验 |
-| 本对话旧连接的 AI 扩展轨道粘贴 | `artifacts/live-mcp-transfer-1794244477025.json` | 通过；Python 0.4.0、原生宿主为 0.5.0 构建 |
-| 随机合成 AppContainer 管道服务端和对端 | `artifacts/probe-appcontainer-server.txt`、`artifacts/probe-appcontainer-peer-controls.txt` | 同 profile LOCAL 收发及负对照已观察；非实际插件证明 |
-| 源不透明资源剪切/粘贴保护及正常扩展剪切 | `artifacts/feature-acceptance-adac1d5901d0/summary.json` | 3 通过，含清理 |
-| AI 扩展剪切、粘贴、合并、旧历史与普通兼容 | `artifacts/feature-acceptance-e57fec059ac3/summary.json` | 7 通过，含清理 |
-| 轨道、片段、音符扩展剪切 | `artifacts/feature-acceptance-4cb5b47a3915/summary.json` | 2 通过，含清理 |
-| 根/主轨扩展及目标额外资源保留 | `artifacts/feature-acceptance-288f3f9a90b8/summary.json` | 2 通过，含清理 |
-| AI 剪贴板扩展迁移、偏移、旧历史及源保护 | `artifacts/feature-acceptance-b8c01e2d4375/summary.json` | 3 通过，含清理 |
-| 扩展拆合、冲突回滚、剪贴板源保护和 MIDI 事件流 | `artifacts/feature-acceptance-a4a1a5dc7d8d/summary.json` | 5 通过，含清理 |
-| MIDI 错误、积压通知与提交前检查 | `artifacts/midi-callback-b0fae6312bd4.json` | 逻辑测试通过，未打开 MIDI 设备 |
-| 默认 AI 轨道、显式选声、编辑保存重开及合成 | `artifacts/feature-acceptance-32f1c9da5151/summary.json` | 2 通过，含清理 |
-| 扩展字段的轨道/片段/音符复制、历史及歧义保护 | `artifacts/feature-acceptance-647c107fc2bd/preservation.duplicates.json` | 通过；同次 MIDI 枚举旧失败保留 |
-| MIDI 六操作、录制状态与保存重开 | `artifacts/feature-acceptance-878d0c135692/summary.json` | 2 通过，含清理；无硬件输入 |
-| MIDI 事件流、跨速度变化和静音同步 | `artifacts/midi-synthetic-3fa675486b20.json` | 通过；枚举两端口但未打开 |
-| 正式冻结 MCP、设备传输、119 项目录 | `artifacts/feature-acceptance-26a71f9b1dc5/summary.json` | 4 通过，含清理 |
-| 五级未知字段、三类资源与实体历史 | `artifacts/feature-acceptance-d58315058dcd/summary.json` | 3 通过，含清理 |
-| 固定嵌套对象、转义键、已知值修改 | `artifacts/feature-acceptance-1fc72536a94a/summary.json` | 2 通过，含清理 |
-| 带扩展的速度、调音、循环、批量音符及表现修改 | `artifacts/feature-acceptance-f0e3121b86c8/summary.json` | 2 通过，含清理 |
-| 原有音频资源、克隆恢复、特殊音素 | `artifacts/feature-acceptance-e45608aa7004/summary.json` | 4 通过，含清理 |
-| 非零起点、多片段、效果和自动化冻结音频 | `artifacts/freeze-chain-6ad650a432ef.json` | 18 秒混音；差异 RMS 约 0.00001272，作者 JSON 不变 |
-| 冻结正式入口、失败清理和源保护 | `artifacts/freeze-mcp-59c5a9b898b7.json` | 通过 |
-| 内部采样率的版本限定静态证据 | `artifacts/internal-rate-static-aa7e6f0f7992.json` | 找到 44100 比较与对应错误码；不等于 96 kHz 动态验证 |
+| AI 素材未知字段、身份与旧历史 | `artifacts/feature-acceptance-39ed0d000904/summary.json` | 定向用例及清理通过；覆盖源/目标、伪造字段、冲突、controller/audio 守卫和历史 |
+| 扩展工程静音传输 | `artifacts/feature-acceptance-6667cde9784c/preservation.archive_transport.json` | 通过；同批素材测试失败，后来单独修复并复验 |
+| 普通工程效果器历史及关联回归 | `artifacts/feature-acceptance-f97d35cd5451/summary.json` | 7 通过、2 失败，含清理；效果器历史、普通传输、样式和普通音频通过；两项失败分别在后续回执修正 |
+| 普通时间编辑及扩展时间守卫 | `artifacts/feature-acceptance-a59c6e1025a7/summary.json`、`artifacts/feature-acceptance-46720e1ebe0a/summary.json` | 各定向用例及清理通过；扩展时间编辑仍未开放 |
+| 素材导入诊断 | `artifacts/feature-acceptance-654debaa0a3d/summary.json`、`artifacts/feature-acceptance-f40c1dde7fe1/probe.part_create.json` | 普通/克隆对照与原生片段创建探针；素材旧失败保留 |
+| 上轮控制器边界与独立素材、离线音频 | `artifacts/feature-acceptance-6cc1fd525f8e/summary.json` | 4 个功能用例及清理通过 |
+| 上轮普通音频导入/编辑历史 | `artifacts/feature-acceptance-eb4111329c4f/summary.json` | 定向用例及清理通过 |
+| 上轮控制器跨工程守卫基线 | `artifacts/feature-acceptance-abb8ef4a6120/summary.json` | 现有守卫拦截；不是功能通过 |
 
+更早的逐批回执和失败记录见 [会话索引](docs/session-log/README.md)，不把不同批次相加为完整套件结果。
 0.2.1 的真实 PPSF3（190 音符、80 BPM、4/4）及显式选声后的 99.5 秒非零 WAV、Robot 和其他表现证据见 [会话 07](docs/session-log/session-07.md)。其长音频旧 case 的 30 秒读取上限失败记录仍保留，独立流式检查通过，不重写历史结果。
 
 ## 保留边界
 
 1. **声库选择**：用户明确仅用 AI 声库，不安装经典试用。此前本机 Dse=0、Dnn=21；旧经典文件继续受到源文件与身份完整性保护，经典发声和往返不作为本轮 AI 声库的验收结论。
-2. **未知数据**：控制器扩展的跨工程迁移、其他非实体数组、缺失父对象及纯元数据合并、部分原始写调用仍受保护性限制；已测音频资源迁移仅覆盖有限组合，工程级不透明资源不等于原生音频归属。选中内容含未知字段的媒体捕获以及扩展工程音频导入/编辑仍受保护。集中解除控制器迁移及音频写入保护的补丁被自动审查拦截，原因是对应事务尚缺原生验收，可能丢失扩展字段或损坏历史；现有守卫保留。扩展剪贴板和工程合并使用独立候选预检；其他编辑路径仍可能在保存时发现同形歧义，详见 [工程保留说明](docs/project-preservation.md)。没有把此范围称作任意 VPR 无损编辑。
+2. **未知数据**：控制器扩展的跨工程迁移、扩展时间编辑、其他非实体数组、缺失父对象及纯元数据合并、部分原始写调用仍受保护性限制；已测音频资源迁移仅覆盖有限组合，工程级不透明资源不等于原生音频归属。受测 MIDI 片段/音符字段已可通过自有素材往返，控制器事件扩展素材和扩展工程音频导入/编辑仍受保护。集中解除控制器迁移及音频写入保护的补丁被自动审查拦截，原因是对应事务尚缺原生验收，可能丢失扩展字段或损坏历史；现有守卫保留。扩展剪贴板、工程合并及 MIDI 素材导入使用独立候选预检；其他编辑路径仍可能在保存时发现同形歧义，详见 [工程保留说明](docs/project-preservation.md)。没有把此范围称作任意 VPR 无损编辑。
 3. **设备与宿主**：传输验证使用一台 DirectSound 设备并静音；虚拟 MIDI 驱动的独立输入已验，物理 MIDI 采集、真实设备丢失及驱动错误通知、实际听音质量和 DAW 同步仍未完成验收。插件已观察到固定命名管道路径，[IPC 隔离调查](docs/daw-ipc.md) 尚未证明独立宿主隔离；编辑器不具备波形录音功能，见 [音频录制与宿主边界](docs/audio-recording.md)。
 4. **采样率**：声乐内部合成明确要求 44100 Hz；输出混缩率独立。静态分支与 48 kHz 失败一致，但其他原生内部路径与 96 kHz 动态合成未证实。
-5. **客户端**：新 stdio 连接已验证本轮原生改动；本对话连接此前发现 37 个工具，但 `vocaloid_status` 的 Python MCP 版本为 0.4.0，运行中的原生宿主此前与 0.5.0 构建一致；0.10.0 原生改动需新连接载入。未重启客户端或用户编辑器。
+5. **客户端**：新 stdio 连接已验证 0.11.0 原生改动；本对话连接发现 37 个工具，但本轮 `vocaloid_status` 的 Python MCP 版本仍为 0.4.0，运行中的原生宿主此前与 0.5.0 构建一致；0.11.0 原生改动需新连接载入。未重启客户端或用户编辑器。
 
-当前模块状态见 [功能矩阵](docs/feature-matrix.md)、[会话 15](docs/session-log/session-15.md) 和 [TODO](TODO.md)。
+当前模块状态见 [功能矩阵](docs/feature-matrix.md)、[会话 16](docs/session-log/session-16.md) 和 [TODO](TODO.md)。

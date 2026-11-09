@@ -154,13 +154,23 @@ available for native clip loading. Native clip-file existence is checked after s
 
 On an extension-tracked project, `style_capture`, `style_update`, `style_delete`,
 `media_update` and `media_delete` remain available because they read the source
-or update only bridge-owned library files. `media_capture` is available when the
-selected part and its notes carry no unknown archive fields; if that selected
-content contains unknown part, note or controller-event fields, capture stops
-before creating a clip because native VMM does not retain those fields. Other
-project or track extensions do not by themselves prevent capturing an unextended
-part. The synthetic AI case in `artifacts/feature-acceptance-6cc1fd525f8e/summary.json`
-checks both branches, private style/media changes and source history and save.
+or update only bridge-owned library files. For MIDI parts, capture can embed
+unknown part and note fields in private, versioned bridge metadata, bound to the
+clip ID and unique native note signatures. Controller-event extensions remain
+guarded. Import validates the metadata and stages the corresponding target
+identities in one native history transaction. Before changing the target, the
+bridge repeats the import on an isolated native clone when the clip carries
+archive metadata or the target tracks entity extensions, and validates its saved
+snapshot and extension overlay. During the candidate and target import the
+clip file is held read-only, and native wrappers are reacquired after the
+candidate closes. Metadata pointers must end at unknown native-schema fields;
+native fields and paths through arrays are rejected. Clip property edits with
+this metadata are rejected rather than risking its loss. The AI fixture in
+`artifacts/feature-acceptance-39ed0d000904/summary.json` verifies source and
+target extensions, ordinary-target upgrade and prior undo history, redo,
+clone, reopen, conflicts and malformed metadata. Controller extensions and
+extension-tracked audio import remain guarded; only the tested combinations
+are established.
 
 MIDI capture writes both primary and secondary voice IDs through native VMM.
 The installed VMM reader returns an empty secondary ID even when its native
@@ -295,3 +305,7 @@ that classic project currently produces an AI part; the stricter operation
 then reports the type mismatch. See
 `artifacts/feature-acceptance-6d7fb89e808b/remaining.singing_skill.json`.
 This classic-format failure is not an accepted full roundtrip.
+
+Style capture or apply with `include_audio=true` requires releasing any active
+native transport first, including one owned by another session. The guard runs
+before creating a style draft or mutating the target part.

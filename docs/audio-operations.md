@@ -32,9 +32,11 @@ windows, or `App`, and never sends UI input.
 - The installed writer can omit the padding byte after a final odd-sized DATA
   chunk. The inspector accepts only a complete payload ending exactly at the
   RIFF boundary in that case; partial payloads and truncated interior chunks fail.
-- Mutations mark the session dirty and commit native state. A failed native
-  mutation is reported as an error, not a successful empty result. It may leave
-  dirty native changes; no automatic project reload or silent retry occurs.
+- Mutations mark the session dirty and commit native state. Ordinary-project
+  `import_audio`, `edit_audio`, and direct `set_effect` use a staged native
+  transaction with undo/redo and rollback on failure. Other mutation paths may
+  leave dirty native changes after an error; no automatic project reload or
+  silent retry occurs.
 
 ## Operation Schema
 
@@ -58,6 +60,16 @@ Indices are zero-based. Fields marked optional have the defaults shown.
 | `transport_stop` | None | Stops playback, retaining the prepared transport. |
 | `transport_seek` | `seconds` within prepared duration | Requests a native asynchronous position change; returns `requested_seconds` and `position_update_async=true` separately from current `seconds`. Poll `transport_status` to observe application. |
 | `transport_release` | None | Stops and releases the private device, placements and callbacks. |
+
+Direct `set_effect` add, set, move, and remove operations use the native score
+transaction; a staged change commits to native history and can be undone or
+redone.
+Applying a style retains its existing internal effect-commit behavior rather
+than wrapping each constituent effect as an independent history operation.
+The preservation guard for effect edits in extension-bearing projects remains
+in force. The actual master-effect transaction and rollback case passed in
+`artifacts/feature-acceptance-f97d35cd5451/audio.effect_history.json`; that
+batch also records two later-corrected test failures in other cases.
 
 Audio import initializes the region before attaching the source file, matching
 the installed editor's import path. A previous run produced a saved track and

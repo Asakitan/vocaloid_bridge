@@ -707,6 +707,8 @@ internal sealed partial class EngineHost
 
     private object LibraryCaptureStyle(EngineSession session, JsonElement options)
     {
+        bool includeAudio = LibraryBool(options, "include_audio", true);
+        LibraryRequireStyleTransportReleased(includeAudio);
         WIVSMMidiPart part = LibraryMidiPart(session, options);
         string name = LibraryText(options, "name");
         string overwriteId = LibraryText(options, "overwrite_style_id", "");
@@ -726,7 +728,7 @@ internal sealed partial class EngineHost
                 WIVSMMidiEffect effect = effects.GetMidiEffectByIndex(index)!;
                 if (effect.Id != "DefaultLyric") LibraryCaptureStyleEffect(effect, draft.InsertMidiEffect(destination++, effect.Id));
             }
-            if (LibraryBool(options, "include_audio", true))
+            if (includeAudio)
                 LibraryCaptureStyleAudio(effects, draft);
             VSStyleError error = VSStyleError.None;
             UserStyle? saved = overwriteId.Length == 0 ? draft.Save(true, ref error) : draft.Overwrite(overwriteId, true, ref error);
@@ -740,6 +742,12 @@ internal sealed partial class EngineHost
             return new { session_id = session.Id, style = LibraryStyleView(verified, true) };
         }
         finally { draft.Destroy(); }
+    }
+
+    private void LibraryRequireStyleTransportReleased(bool includeAudio)
+    {
+        if (includeAudio && transport is not null)
+            throw new InvalidOperationException("Release the native transport before using style audio effects.");
     }
 
     private void LibraryCaptureStyleAudio(WIVSMEffectManager effects, MutableStyle draft)
@@ -809,6 +817,7 @@ internal sealed partial class EngineHost
     {
         NativeStyle style = LibraryStyle(LibraryText(options, "style_id"));
         bool includeAudio = LibraryBool(options, "include_audio", true);
+        LibraryRequireStyleTransportReleased(includeAudio);
         WIVSMMidiPart part = LibraryMidiPart(session, options);
         WIVSMEffectManager effects = part.EffectManager
             ?? throw new InvalidOperationException("Native part has no effect manager.");
@@ -846,9 +855,9 @@ internal sealed partial class EngineHost
                     scope = "part", action = "remove", slot = 0,
                     track_index = LibraryIndex(options, "track_index"),
                     part_index = LibraryIndex(options, "part_index")
-                }));
+                }), recordHistory: false);
             foreach (JsonElement plan in audioPlans)
-                SetAudioEffect(session, plan);
+                SetAudioEffect(session, plan, recordHistory: false);
         }
         LibraryRequire(part.SetStyleName(style.Name) && part.SetStylePresetID(style.Id), "style identity");
         PrepareSingingSkill(part);
@@ -1126,6 +1135,8 @@ internal sealed partial class EngineHost
     {
         UserClip userClip = LibraryOwnedClip(LibraryText(options, "clip_id"));
         Clip clip = userClip;
+        if (LibraryArchiveHasMetadata(clip))
+            throw new InvalidOperationException("project_preservation: property editing a media clip with archive metadata is not supported.");
         string[] genres = clip.Filter.GenreEnumerator().Concat(LibraryStrings(options, "add_genres"))
             .Distinct(StringComparer.Ordinal).ToArray();
         string[] types = clip.Filter.TypeEnumerator().Concat(LibraryStrings(options, "add_types"))
@@ -1182,6 +1193,7 @@ internal sealed partial class EngineHost
             ?? throw new ArgumentException("track_index was not found.");
         WIVSMPart part = track.GetPart(LibraryIndex(options, "part_index"))
             ?? throw new ArgumentException("part_index was not found.");
+        LibraryArchiveClip? archiveClip = LibraryArchiveCapture(session, track, part);
         string name = LibraryText(options, "name", part.Name);
         string[] genres = LibraryStrings(options, "genres");
         string[] types = LibraryStrings(options, "types");
@@ -1291,6 +1303,8 @@ internal sealed partial class EngineHost
                     };
                     LibraryWriteValidity(saved, validity);
                 }
+                if (archiveClip is not null)
+                    LibraryArchiveWrite(saved, archiveClip);
                 return new { session_id = session.Id, clip = LibraryClipView(saved, true), preview_audio_created = false };
             }
             catch (Exception captureError)
@@ -1528,7 +1542,7 @@ internal sealed partial class EngineHost
             LibraryRequire(target.SetDirectPitch(point.Tick, point.Value), "capture direct pitch");
     }
 
-    private object LibraryImportMedia(EngineSession session, JsonElement options)
+    private object LibraryImportMedia(EngineSession session, JsonElement options, bool preflight = true)
     {
         Clip clip = LibraryClip(LibraryText(options, "clip_id"));
         LibraryRequire(clip.ReadPart(), "read media before import");
@@ -1541,6 +1555,8 @@ internal sealed partial class EngineHost
         EnsureVoiceServices();
         if (clip.PartType == VMMPartType.Audio)
         {
+            if (LibraryArchiveHasMetadata(clip))
+                throw new InvalidDataException("project_preservation: archive entity metadata is not valid on audio media.");
             if (track.Type != VSMTrackType.Audio)
                 throw new ArgumentException("An audio clip requires an audio target track.");
             Yamaha.VOCALOID.VMM.AudioPart source = clip.AudioPart
@@ -1573,57 +1589,87 @@ internal sealed partial class EngineHost
                 foreach ((bool isAttack, LibraryDvqmMetadata? selection) in new[] { (true, note.AiAttack), (false, note.AiRelease) })
                     if (selection is not null)
                         LibraryValidateMediaDvqm(selection, isAttack);
-        session.Dirty = true;
-        session.InvalidateChildren();
-        WIVSMMidiPart targetMidi = new WIVSMMidiTrack(track).InsertPart(new VSMAbsTick(position),
-            new VSMRelTick(sourceMidi.Duration), LibraryText(options, "name", clip.Name))
-            ?? throw new InvalidOperationException("Native media part insertion failed.");
-        if (sourceMidi.VoiceBankID.Length != 0)
-            LibraryRequire(targetMidi.SetVoiceBankID(sourceMidi.VoiceBankID), "import voice");
-        if (sourceMidi.AiVoiceBankID.Length != 0)
-            LibraryRequire(targetMidi.SetAiVoiceBankID(sourceMidi.AiVoiceBankID), "import AI voice");
-        (string secondaryVoice, string secondaryAiVoice, _) = LibrarySecondaryVoices(clip, sourceMidi);
-        if (secondaryVoice.Length != 0)
-            LibraryRequire(targetMidi.SetSecondaryVoiceBankID(secondaryVoice), "import secondary voice");
-        if (secondaryAiVoice.Length != 0)
-            LibraryRequire(targetMidi.SetSecondaryAiVoiceBankID(secondaryAiVoice), "import secondary AI voice");
-        LibraryRequire(targetMidi.SetStyleName(sourceMidi.StyleName) && targetMidi.SetStylePresetID(sourceMidi.StylePresetID), "import style");
-        WIVSMEffectManager targetEffects = targetMidi.EffectManager
-            ?? throw new InvalidOperationException("Native imported part effect manager is absent.");
-        for (ulong index = 0; index < sourceMidi.NumAudioEffects; index++)
+        LibraryArchiveClip? archiveClip = LibraryArchiveRead(clip, sourceMidi, validity);
+        if (preflight && (archiveClip is not null || HasArchiveEntityExtensions(session)))
         {
-            Yamaha.VOCALOID.VMM.AudioEffect effect = sourceMidi.GetAudioEffect(index)!;
-            LibraryImportEffect(effect, targetEffects.InsertAudioEffect(index, effect.ID)!);
-        }
-        for (ulong index = 0; index < sourceMidi.NumMidiEffects; index++)
-        {
-            Yamaha.VOCALOID.VMM.MidiEffect effect = sourceMidi.GetMidiEffect(index)!;
-            if (effect.ID == "DefaultLyric")
-                continue;
-            LibraryImportEffect(effect, targetEffects.GetMidiEffectById(effect.ID)!);
-        }
-        for (ulong index = 0; index < sourceMidi.NumNotes; index++)
-            LibraryImportNote(sourceMidi.GetNote(index)!, targetMidi, validity?.Notes[checked((int)index)]);
-        foreach (VMMMidiControllerType type in Enum.GetValues<VMMMidiControllerType>())
-        {
-            MidiController? controller = sourceMidi.GetMidiController(type);
-            if (controller is null || controller.NumEvents == 0)
-                continue;
-            VSMControllerType destination = LibraryMapEnum<VSMControllerType>(type);
-            for (ulong index = 0; index < controller.NumEvents; index++)
+            // The candidate reloads the same native VMM clip. Keep its file
+            // stable and reacquire all wrappers after the candidate is closed.
+            PathGuard.NoLinks(clip.ClipPath);
+            using FileStream clipGuard = new(clip.ClipPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            try { LibraryArchivePreflight(session, options); }
+            catch (Exception error)
             {
-                MidiEvent point = controller.GetEvent(index)!;
-                if (targetMidi.InsertController(new VSMRelTick(point.Position), destination, point.Value) is null)
-                    throw new InvalidOperationException("Native media controller import failed.");
+                throw new InvalidOperationException("project_preservation: media preflight failed: " + error.Message, error);
             }
+            return LibraryImportMedia(session, options, false);
         }
-        LibraryCommit(session, "import MIDI media");
-        return new
+        bool upgraded = archiveClip is not null && EnsureArchiveEntityTracking(session);
+        try
         {
-            session_id = session.Id, clip_id = clip.ID, track_index = trackIndex,
-            position_tick = targetMidi.AbsPosTick.Value, duration = targetMidi.DurationTick.Value,
-            notes = targetMidi.Notes.Select(LibraryNoteView).ToArray()
-        };
+            return ScoreMutate(session, "media_import", () =>
+            {
+                WIVSMMidiPart targetMidi = new WIVSMMidiTrack(track).InsertPart(new VSMAbsTick(position),
+                    new VSMRelTick(sourceMidi.Duration), LibraryText(options, "name", clip.Name))
+                    ?? throw new InvalidOperationException("Native media part insertion failed.");
+                if (sourceMidi.VoiceBankID.Length != 0)
+                    LibraryRequire(targetMidi.SetVoiceBankID(sourceMidi.VoiceBankID), "import voice");
+                if (sourceMidi.AiVoiceBankID.Length != 0)
+                    LibraryRequire(targetMidi.SetAiVoiceBankID(sourceMidi.AiVoiceBankID), "import AI voice");
+                (string secondaryVoice, string secondaryAiVoice, _) = LibrarySecondaryVoices(clip, sourceMidi);
+                if (secondaryVoice.Length != 0)
+                    LibraryRequire(targetMidi.SetSecondaryVoiceBankID(secondaryVoice), "import secondary voice");
+                if (secondaryAiVoice.Length != 0)
+                    LibraryRequire(targetMidi.SetSecondaryAiVoiceBankID(secondaryAiVoice), "import secondary AI voice");
+                LibraryRequire(targetMidi.SetStyleName(sourceMidi.StyleName) && targetMidi.SetStylePresetID(sourceMidi.StylePresetID), "import style");
+                WIVSMEffectManager targetEffects = targetMidi.EffectManager
+                    ?? throw new InvalidOperationException("Native imported part effect manager is absent.");
+                for (ulong index = 0; index < sourceMidi.NumAudioEffects; index++)
+                {
+                    Yamaha.VOCALOID.VMM.AudioEffect effect = sourceMidi.GetAudioEffect(index)!;
+                    LibraryImportEffect(effect, targetEffects.InsertAudioEffect(index, effect.ID)!);
+                }
+                for (ulong index = 0; index < sourceMidi.NumMidiEffects; index++)
+                {
+                    Yamaha.VOCALOID.VMM.MidiEffect effect = sourceMidi.GetMidiEffect(index)!;
+                    if (effect.ID == "DefaultLyric")
+                        continue;
+                    LibraryImportEffect(effect, targetEffects.GetMidiEffectById(effect.ID)!);
+                }
+                List<WIVSMNote> importedNotes = [];
+                for (ulong index = 0; index < sourceMidi.NumNotes; index++)
+                    importedNotes.Add(LibraryImportNote(sourceMidi.GetNote(index)!, targetMidi, validity?.Notes[checked((int)index)]));
+                foreach (VMMMidiControllerType type in Enum.GetValues<VMMMidiControllerType>())
+                {
+                    MidiController? controller = sourceMidi.GetMidiController(type);
+                    if (controller is null || controller.NumEvents == 0)
+                        continue;
+                    VSMControllerType destination = LibraryMapEnum<VSMControllerType>(type);
+                    for (ulong index = 0; index < controller.NumEvents; index++)
+                    {
+                        MidiEvent point = controller.GetEvent(index)!;
+                        if (targetMidi.InsertController(new VSMRelTick(point.Position), destination, point.Value) is null)
+                            throw new InvalidOperationException("Native media controller import failed.");
+                    }
+                }
+                if (archiveClip is not null)
+                    LibraryArchiveAttach(session, track, targetMidi, importedNotes, archiveClip);
+                return new
+                {
+                    session_id = session.Id, clip_id = clip.ID, track_index = trackIndex,
+                    position_tick = targetMidi.AbsPosTick.Value, duration = targetMidi.DurationTick.Value,
+                    notes = targetMidi.Notes.Select(LibraryNoteView).ToArray()
+                };
+            });
+        }
+        catch (Exception error)
+        {
+            if (upgraded)
+            {
+                try { DropArchiveEntityTracking(session); }
+                catch (Exception cleanup) { throw new AggregateException("Media preservation failed and tracking cleanup was incomplete.", error, cleanup); }
+            }
+            throw;
+        }
     }
 
     private static void LibraryImportEffect(Yamaha.VOCALOID.VMM.Effect source, WIVSMEffect target)
@@ -1657,7 +1703,7 @@ internal sealed partial class EngineHost
             throw new InvalidOperationException("The media Attack/Release level names are not installed.");
     }
 
-    private static void LibraryImportNote(Yamaha.VOCALOID.VMM.Note source, WIVSMMidiPart part, LibraryNoteValidity? metadata)
+    private static WIVSMNote LibraryImportNote(Yamaha.VOCALOID.VMM.Note source, WIVSMMidiPart part, LibraryNoteValidity? metadata)
     {
         VSMNoteEvent noteEvent = new() { Duration = source.Duration, Number = source.Number, Velocity = source.Velocity };
         VSMNoteExpression expression = new()
@@ -1711,6 +1757,7 @@ internal sealed partial class EngineHost
         }
         foreach (VMMDirectPitchData point in source.DirectPitches)
             LibraryRequire(target.SetDirectPitch(new VSMRelTick(point.Tick), point.Value), "import direct pitch");
+        return target;
     }
 
     private G2PAManager LibraryLyrics(G2PAManagerLangID language)

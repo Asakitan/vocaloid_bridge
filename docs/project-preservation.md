@@ -238,3 +238,41 @@ Native split may also create a boundary event carrying the preceding value; the
 new event starts without unknown fields rather than inheriting the earlier
 event's payload. Unextended lanes retain native split/join behavior. Tracked
 controller maps are checked before a native mutation commits.
+
+### Timeline edit investigation (guard retained)
+
+`preservation.timeline_native_probe` exercises private AI projects with notes,
+controller points, nonzero tempo events and a meter change, both values of
+`include_tempo`, crossing-boundary rejection and insert/delete undo/redo. In
+`artifacts/feature-acceptance-a59c6e1025a7/summary.json`, inserting 1920 ticks
+at tick 1920 moved a part from 3840 to 5760 and the meter change from bar 2 to
+3; deleting the range restored those positions. With `include_tempo=false`,
+tempo ticks 0/1920/3840 stayed fixed; with it true they became 0/1920/5760
+and then returned on deletion. The tempo event exactly at the insertion point
+stayed there. This is one native fixture, not a general identity rule. The
+crossing MIDI/AI boundaries were rejected before mutation; the probe checks
+project snapshots and history. Both history directions passed in this fixture.
+
+`preservation.timeline_extension_guard` is a red baseline, not evidence of
+extension-aware timeline support. The passing
+`artifacts/feature-acceptance-46720e1ebe0a/summary.json` checks both edits and
+both tempo options on a project with track, part, note, tempo and meter unknown
+fields: the current guard rejects them, history remains unchanged, and the
+source, save, clone and reopen retain the fields. Controller-extension and
+extended-audio write guards remain unchanged. Identifying deleted/recreated or
+collision-prone tempo and meter identities and controller lanes needs further
+native evidence before these timeline edits can be enabled for tracked data.
+
+### MIDI media entity metadata
+
+Owned AI MIDI clips can carry captured part and note unknown fields in a
+versioned clip extension. The bridge verifies unique native note identities,
+rejects metadata paths that target native fields or traverse arrays, locks the
+clip while testing and importing, and tests the native import plus saved
+archive overlay on an independent candidate before changing the target.
+`artifacts/feature-acceptance-39ed0d000904/summary.json` covers source and
+target preservation, imported and pre-existing history, clone and reopen,
+conflicting or malformed metadata, and retained controller and audio guards.
+Controller-event extension capture/import and extension-tracked audio writes
+are not part of this result. Clip property updates with this metadata remain
+guarded.

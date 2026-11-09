@@ -388,6 +388,8 @@ internal sealed partial class EngineHost
     private WEffectManager EnsureAudioEffects()
     {
         CheckThread();
+        if (transport is not null)
+            throw new InvalidOperationException("Release the prepared transport before using the shared native effect manager.");
         if (audioEffects is not null)
             return audioEffects;
         if (audioEffectsFailure is not null)
@@ -555,7 +557,16 @@ internal sealed partial class EngineHost
         return new { effect_id = controller.EffectGUID, name = controller.EffectName, parameters, presets };
     }
 
-    private object SetAudioEffect(EngineSession session, JsonElement options)
+    private object SetAudioEffect(EngineSession session, JsonElement options, bool recordHistory = true)
+    {
+        if (recordHistory)
+            return ScoreMutate(session, "audio.set_effect", () => SetAudioEffectCore(session, options));
+        object result = SetAudioEffectCore(session, options);
+        CommitAudio(session);
+        return result;
+    }
+
+    private object SetAudioEffectCore(EngineSession session, JsonElement options)
     {
         var scope = AudioEffectScope(session, options);
         string action = AudioText(options, "action", "set");
@@ -568,7 +579,6 @@ internal sealed partial class EngineHost
             WIVSMAudioEffect effect = scope.Manager.GetAudioEffect(slot)
                 ?? throw new ArgumentOutOfRangeException("slot");
             ulong target = action == "move" ? checked((ulong)AudioInteger(options, "target_slot", 0, 0, (long)scope.Manager.NumAudioEffect - 1)) : 0;
-            session.Dirty = true;
             bool changed = action == "remove" ? scope.Manager.RemoveAudioEffect(effect) : scope.Manager.MoveAudioEffect(target, effect);
             if (!changed)
                 throw new InvalidOperationException("Native effect " + action + " failed: " + scope.Manager.LastError);
@@ -590,7 +600,6 @@ internal sealed partial class EngineHost
                 controller = block.InsertLoadEffect(installed, slot)
                     ?? throw new InvalidOperationException("Native effect loading failed: " + installed);
                 ValidateEffectParameters(controller, options);
-                session.Dirty = true;
                 effect = scope.Manager.InsertAudioEffect(slot, installed)
                     ?? throw new InvalidOperationException("Native effect insertion failed: " + scope.Manager.LastError);
             }
@@ -608,7 +617,6 @@ internal sealed partial class EngineHost
                     if (existing != float.MinValue && float.IsFinite(existing) && !controller.SetParamNormalized(index, existing))
                         throw new InvalidOperationException("Native effect parameter state could not be restored.");
                 }
-                session.Dirty = true;
             }
             if (options.TryGetProperty("preset", out JsonElement preset) && !controller.ChangePreset(preset.GetString() ?? ""))
                 throw new InvalidOperationException("Native effect preset was not found.");
@@ -633,7 +641,6 @@ internal sealed partial class EngineHost
         }
         else
             throw new ArgumentException("Effect action must be add, set, remove, or move.");
-        CommitAudio(session);
         return new { session_id = session.Id, native = true, action, scope = AudioText(options, "scope", "master"), slot };
     }
 

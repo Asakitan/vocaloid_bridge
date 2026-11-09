@@ -21,6 +21,9 @@ import check_archive_audio_transfer
 import check_archive_library
 import check_controller_splitting
 import check_archive_audio_mutations
+import check_audio_effect_history
+import check_archive_media_extensions
+import check_archive_transport
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining

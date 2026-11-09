@@ -828,5 +828,86 @@ async def native_duplicate_order(check):
     await check.close(identifier)
 
 
+
+@v.feature("preservation.timeline_native_probe", "preservation", "score_compose", "project_edit", "project_save")
+async def timeline_native_probe(check):
+    """Capture private native timeline and history behavior, without claiming extension mapping."""
+    for include_tempo in (False, True):
+        seed = await check.call("score_compose", output_name=check.output("timeline-seed"), title="Timeline probe", bpm=120,
+            notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0},
+                   {"start": 1, "duration": .5, "pitch": 64, "lyric": "い", "phoneme": "i", "lang_id": 0}])
+        sid = seed["native_session"]["session_id"]
+        scope = {"track_index": 0, "part_index": 0}
+        await check.edit(sid, "controller.set", **scope, type="Dynamics", replace=True,
+                         points=[{"tick": 60, "value": 30}, {"tick": 480, "value": 60}])
+        await check.edit(sid, "part.move", **scope, start_tick=3840)
+        await check.edit(sid, "tempo.set", start_tick=1920, bpm=130)
+        await check.edit(sid, "tempo.set", start_tick=3840, bpm=140)
+        await check.edit(sid, "time_signature.set", bar=2, numerator=3, denominator=4)
+        async def snapshot(label):
+            sequence, _ = await check.save(sid, "timeline-%s-%s" % (include_tempo, label))
+            return {"tracks": sequence["tracks"], "master": sequence["masterTrack"]}
+        before = await snapshot("before")
+        history = await check.edit(sid, "history.status")
+        for operation, start, duration in (("time.insert", 4000, 120), ("time.delete", 3700, 400)):
+            await check.rejected("project_edit", "crossing|phoneme|split", session_id=sid, operation=operation,
+                options={"start_tick": start, "duration_tick": duration, "include_tempo": include_tempo})
+            v.require(await snapshot(operation + "-rejected") == before, "Crossing rejection changed project")
+            v.require(await check.edit(sid, "history.status") == history, "Crossing rejection changed history")
+        await check.edit(sid, "time.insert", start_tick=1920, duration_tick=1920, include_tempo=include_tempo)
+        inserted = await snapshot("inserted")
+        await check.edit(sid, "undo")
+        v.require(await snapshot("insert-undo") == before, "Insert undo mismatch")
+        await check.edit(sid, "redo")
+        v.require(await snapshot("insert-redo") == inserted, "Insert redo mismatch")
+        await check.edit(sid, "time.delete", start_tick=1920, duration_tick=1920, include_tempo=include_tempo)
+        deleted = await snapshot("deleted")
+        await check.edit(sid, "undo")
+        v.require(await snapshot("delete-undo") == inserted, "Delete undo mismatch")
+        await check.edit(sid, "redo")
+        v.require(await snapshot("delete-redo") == deleted, "Delete redo mismatch")
+        check.evidence("timeline_native_" + str(include_tempo), {"before": before, "inserted": inserted, "deleted": deleted})
+        await check.close(sid)
+
+@v.feature("preservation.timeline_extension_guard", "preservation", "score_compose", "project_open", "project_edit", "project_save")
+async def timeline_extension_guard(check):
+    """Red baseline: extension-bearing timeline edits stop before native mutation."""
+    seed = await check.call("score_compose", output_name=check.output("timeline-extension-seed"), title="Timeline extension guard", bpm=120,
+        notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    sid = seed["native_session"]["session_id"]
+    await check.edit(sid, "part.move", track_index=0, part_index=0, start_tick=3840)
+    await check.edit(sid, "tempo.set", start_tick=1920, bpm=130)
+    await check.edit(sid, "time_signature.set", bar=2, numerator=3, denominator=4)
+    seq, path = await check.save(sid, "timeline-extension-native")
+    await check.close(sid)
+    _, members = v.read_vpr(path)
+    seq["tracks"][0][KEY] = "track"
+    seq["tracks"][0]["parts"][0][KEY] = "part"
+    seq["tracks"][0]["parts"][0]["notes"][0][KEY] = "note"
+    seq["masterTrack"]["tempo"]["events"][1][KEY] = "tempo"
+    seq["masterTrack"]["timeSig"]["events"][1][KEY] = "signature"
+    members["Project/sequence.json"] = json.dumps(seq, ensure_ascii=False).encode("utf-8")
+    source = v.ROOT / "output" / check.output("timeline-extension-input")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    original = source.read_bytes()
+    sid = (await check.call("project_open", path=str(source)))["session_id"]
+    history = await check.edit(sid, "history.status")
+    for operation in ("time.insert", "time.delete"):
+        for include_tempo in (False, True):
+            await check.rejected("project_edit", "identity transaction", session_id=sid, operation=operation,
+                options={"start_tick": 1920, "duration_tick": 1920, "include_tempo": include_tempo})
+            v.require(await check.edit(sid, "history.status") == history, "Guard changed native history")
+    saved, out = await check.save(sid, "timeline-extension-guarded")
+    v.require(saved == seq, "Guard changed project content")
+    v.require(source.read_bytes() == original, "Guard changed source file")
+    clone = (await check.call("project_clone", session_id=sid))["session_id"]
+    cloned, _ = await check.save(clone, "timeline-extension-clone")
+    v.require(cloned == seq, "Clone changed guarded project")
+    reopened = (await check.call("project_open", path=str(out)))["session_id"]
+    reopened_seq, _ = await check.save(reopened, "timeline-extension-reopened")
+    v.require(reopened_seq == seq, "Reopen changed guarded project")
+    await check.close(reopened); await check.close(clone); await check.close(sid)
+
 if __name__ == "__main__":
     raise SystemExit(v.main())

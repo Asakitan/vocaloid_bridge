@@ -95,6 +95,9 @@ not add a missing voice model or promise classic synthesis.
 Native standalone transport is exposed through `audio_op` with an explicit
 enumerated device ID. Its device and callback lifetime is owned by one session;
 prepared-session mutations are blocked until release, and close releases it.
+For extension-tracked projects it uses a private native snapshot while returning
+and locking the source session ID. Shared-effect operations in other sessions
+are guarded while the native transport is prepared.
 Seek requests are asynchronous: `requested_seconds` is distinct from observed
 `seconds`. Frozen track caches are likewise session-owned; saved/cloned VPRs
 retain the pre-freeze authoring effect state. Raw writes to `IsFrozen` are
@@ -127,6 +130,11 @@ history; controller-extension track/part duplication and part split/join are
 mapped, while cross-project controller transfer and metadata-only merges without
 a native history entry are explicit errors. Independent private-library operations
 and external-WAV processing are available with their selected-content guards.
+Owned AI MIDI media may retain tested part/note unknown fields in versioned
+clip metadata; an isolated native candidate validates the import and archive
+overlay before the target transaction, and schema validation excludes native
+fields and array traversal. Controller-extension media and extension-tracked
+audio writes remain guarded.
 Render, MIDI export and offline mix operations
 on tracked extension projects use an independent native project snapshot and
 return the original session ID. Plain projects retain their existing operation

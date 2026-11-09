@@ -1018,7 +1018,8 @@ internal sealed partial class EngineHost
             string operation = parameters.GetProperty("operation").GetString() ?? "";
             // Offline processing reads an explicit WAV and writes a separate
             // output; it does not mutate the project sequence or its history.
-            if (operation is "devices" or "inspect_audio" or "export_audio" or "effects" or "transport_status" or "transport_release" or "process_audio") return;
+            if (operation is "devices" or "inspect_audio" or "export_audio" or "effects" or "process_audio" or
+                "transport_prepare" or "transport_status" or "transport_play" or "transport_stop" or "transport_seek" or "transport_release") return;
         }
         throw new InvalidOperationException("project_preservation: this operation requires a verified entity-identity transaction: " + method);
     }
@@ -1055,7 +1056,7 @@ internal sealed partial class EngineHost
             "controller.set" or "controller.remove" or "automation.set" or "automation.remove" or "loop.set" or
             "tuning.set" or "vibrato.set" or "phoneme_timing.set" or "phoneme_timing.reset" or
             "pitch.set" or "pitch.clear" or "performance.set" or "selection.set" or "sequence.update" or
-            "undo" or "redo" or "history.rollback" or "clipboard.paste" or "clipboard.cut" or "project.merge"))
+            "undo" or "redo" or "history.rollback" or "clipboard.paste" or "clipboard.cut" or "project.merge" or "media_import"))
             throw new InvalidOperationException("project_preservation: this mutation has no verified identity transaction: " + operation);
     }
 
@@ -1159,7 +1160,7 @@ internal sealed partial class EngineHost
             "voice.set" or "tempo.set" or "tempo.remove" or "time_signature.set" or "time_signature.remove" or
             "controller.set" or "controller.remove" or "automation.set" or "automation.remove" or "loop.set" or
             "tuning.set" or "vibrato.set" or "phoneme_timing.set" or "phoneme_timing.reset" or
-            "pitch.set" or "pitch.clear" or "performance.set" or "selection.set" or "sequence.update";
+            "pitch.set" or "pitch.clear" or "performance.set" or "selection.set" or "sequence.update" or "media_import";
         if (rebindEmpty)
         {
             try { ArchiveRebindEmpty(state); }

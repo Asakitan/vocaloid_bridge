@@ -35,7 +35,7 @@ output. No interactive editor is controlled.
 | --- | --- | --- |
 | `devices` | none; session ID may be omitted | WinMM input indices, names and capabilities; no input opened |
 | `start` | `mode`, `track_index`, `part_index`, `lyric`, `phonemes`, `lang_id`; independent mode also needs `start_tick`; device mode needs `device_id`, `device_name` | Active source, target, event count, origin and synchronization flag |
-| `status` | none | Active/source-closed state, target, event count, overflow and ignored-message count |
+| `status` | none | Active/source-closed state, target, event count, overflow, callback error, invalid-input and backlog counts |
 | `synthetic_events` | `events` array | Updated synthetic recording status; no hardware used |
 | `stop` | `end_ms` in synthetic mode; no `end_ms` in device mode | Inserted notes, held notes closed on stop, unmatched note-offs and ignored non-note messages |
 | `cancel` | none | Close owned input and discard queued events |
@@ -57,8 +57,18 @@ keys; note-on velocity is retained. Missing note-offs close at the actual
 device stop time and are counted as `closed_on_stop`; unmatched note-offs are
 counted. CC, pitch bend and other non-note short messages are ignored and
 counted; SysEx buffers are not registered or counted.
-The device callback currently does not report WinMM `MIM_ERROR` notifications;
-hardware input and driver-error handling remain unverified.
+The device callback records `MIM_ERROR` and `MIM_LONGERROR` even if the source
+is stopping. A reported invalid message, callback fault or queue overflow blocks
+the score commit and requires cancellation. `MIDI_IO_STATUS` requests
+`MIM_MOREDATA`: it is processed as the same complete MIDI message and counted as
+a backlog notification, not treated as evidence of loss. These semantics are
+documented by [Microsoft](https://learn.microsoft.com/en-us/windows/win32/multimedia/managing-midi-thru)
+and its [MIM_MOREDATA reference](https://learn.microsoft.com/en-us/windows/win32/multimedia/mim-moredata).
+`artifacts/midi-callback-b0fae6312bd4.json` exercises the built callback
+classifier and pre-commit check through reflection: normal data and backlog
+messages are queued, while invalid messages, callback fault and overflow are
+rejected. This isolated logic test opens no MIDI device and does not verify a
+hardware driver's delivery, timing, callback concurrency or cleanup.
 Notes outside the part, zero-tick lengths, native note-range errors, and event
 overflow fail rather than producing a partial batch. An attempted write whose
 result is uncertain requires cancel rather than replaying a batch.

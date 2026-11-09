@@ -63,6 +63,8 @@ could load the installed plugin, instantiate its component, negotiate buses,
 set explicit state, supply real process contexts and record callback outcomes;
 plugin lifecycle and buffers would stay inside that child. A validator-only
 pass would establish neither a VOCALOID editor connection nor DAW sync.
+The static pipe-name analysis and synthetic AppContainer experiment are
+documented separately in [DAW IPC isolation](daw-ipc.md).
 
 Both installed plugin binaries contain named-pipe creation references; the
 VSTi also contains a bridge connection message. Private desktop isolation alone

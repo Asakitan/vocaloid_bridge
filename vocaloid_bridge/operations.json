@@ -735,7 +735,7 @@
         {
           "operation": "status",
           "contract_rows": [
-            "| `status` | none | Active/source-closed state, target, event count, overflow and ignored-message count |"
+            "| `status` | none | Active/source-closed state, target, event count, overflow, callback error, invalid-input and backlog counts |"
           ]
         },
         {

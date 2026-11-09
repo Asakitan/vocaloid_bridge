@@ -265,10 +265,12 @@ internal sealed partial class EngineHost
             int[] indices = ScoreIndices(options, "part_indices", ScoreCount(track.NumParts), 2);
             WIVSMMidiPart[] selected = indices.Select(index => track.GetPart((ulong)index)
                 ?? throw new InvalidOperationException("Native part lookup failed.")).OrderBy(part => part.AbsPosTick.Value).ToArray();
+            ArchivePartSnapshot[] snapshots = HasArchiveEntityExtensions(session) ? selected.Select(ArchiveSnapshotPart).ToArray() : [];
             return ScoreMutate(session, operation, () =>
             {
                 WIVSMMidiPart joined = track.JoinParts(selected)
                     ?? throw new InvalidOperationException("Native part.join failed: " + track.LastError);
+                ArchiveMigrateParts(session, snapshots, [joined], false);
                 return ScorePartSummary(track, joined, trackIndex);
             });
         }
@@ -276,10 +278,12 @@ internal sealed partial class EngineHost
         if (operation == "part.split")
         {
             int tick = ScoreInt(options, "split_tick", 1, checked((int)part.DurationTick.Value) - 1);
+            ArchivePartSnapshot[] snapshots = HasArchiveEntityExtensions(session) ? [ArchiveSnapshotPart(part)] : [];
             return ScoreMutate(session, operation, () =>
             {
                 WIVSMMidiPart created = track.DividePart(new VSMRelTick(tick), part)
                     ?? throw new InvalidOperationException("Native part.split failed: " + track.LastError);
+                ArchiveMigrateParts(session, snapshots, [part, created], true);
                 return new { parts = new[] { ScorePartSummary(track, part, trackIndex), ScorePartSummary(track, created, trackIndex) } };
             });
         }
@@ -382,9 +386,11 @@ internal sealed partial class EngineHost
             int[] indices = ScoreIndices(options, "note_indices", ScoreCount(part.NumNotes), 2);
             List<WIVSMNote> selected = indices.Select(index => part.GetNote((ulong)index)
                 ?? throw new InvalidOperationException("Native note lookup failed.")).OrderBy(note => note.RelPosTick.Value).ToList();
+            ArchiveEntity[] identities = selected.Select(ArchiveKey).ToArray();
             return ScoreMutate(session, operation, () =>
             {
                 ScoreRequire(part.JoinNotes(selected), operation, session.Sequence);
+                ArchiveJoinNotes(session, part, identities);
                 return ScoreNoteList(session, options);
             });
         }
@@ -403,6 +409,7 @@ internal sealed partial class EngineHost
             {
                 WIVSMNote created = part.DivideNote(note, new VSMRelTick(tick))
                     ?? throw new InvalidOperationException("Native note.split failed: " + part.LastError);
+                ArchiveCopySplitNote(session, note, created);
                 return new { notes = new[] { ScoreNoteSummary(note, ScoreNoteIndex(part, note)), ScoreNoteSummary(created, ScoreNoteIndex(part, created)) } };
             });
         }

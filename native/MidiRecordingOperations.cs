@@ -34,15 +34,9 @@ internal sealed partial class EngineHost
         internal bool CommitAttempted;
         internal double StopMs;
         internal int IgnoredNonNote;
-        internal void Add(MidiInputEvent value)
-        {
-            lock (Gate)
-            {
-                if (!Active) return;
-                if (Events.Count >= 8192) { Overflow = true; return; }
-                Events.Add(value);
-            }
-        }
+        internal int InvalidInputMessages;
+        internal int BacklogNotifications;
+        internal bool CallbackFault;
     }
 
     private readonly Dictionary<string, MidiRecording> midiRecordings = new(StringComparer.Ordinal);
@@ -83,6 +77,46 @@ internal sealed partial class EngineHost
         uint result = MidiInGetDevCaps((nuint)index, ref caps, (uint)Marshal.SizeOf<MIDIINCAPS>());
         if (result != 0) throw new InvalidOperationException("MIDI input device lookup failed: " + result);
         return caps;
+    }
+
+    private static void MidiInputMessage(MidiRecording recording, uint message, uint packed)
+    {
+        lock (recording.Gate)
+        {
+            // Errors that arrive while the source is stopping still invalidate
+            // the recording; the handle has not finished closing at that point.
+            if (message is 0x3c5 or 0x3c6) // MIM_ERROR / MIM_LONGERROR
+            {
+                if (recording.InvalidInputMessages < int.MaxValue) recording.InvalidInputMessages++;
+                return;
+            }
+            if (!recording.Active) return;
+            if (message == 0x3cc && recording.BacklogNotifications < int.MaxValue) // MIM_MOREDATA
+                recording.BacklogNotifications++;
+            if (message is not (0x3c3 or 0x3cc)) return;
+            int status = (int)(packed & 0xf0), channel = (int)(packed & 0x0f);
+            if (status is not (0x80 or 0x90))
+            {
+                if (recording.IgnoredNonNote < int.MaxValue) recording.IgnoredNonNote++;
+                return;
+            }
+            if (recording.Events.Count >= 8192) { recording.Overflow = true; return; }
+            int number = (int)((packed >> 8) & 0x7f), velocity = (int)((packed >> 16) & 0x7f);
+            recording.Events.Add(new MidiInputEvent(recording.Clock.Elapsed.TotalMilliseconds, channel,
+                number, velocity, status == 0x90 && velocity != 0));
+        }
+    }
+
+    private static MidiInputEvent[] MidiInputEventsForCommit(MidiRecording recording)
+    {
+        lock (recording.Gate)
+        {
+            if (recording.CallbackFault) throw new InvalidOperationException("MIDI input callback failed; cancel this recording.");
+            if (recording.InvalidInputMessages != 0)
+                throw new InvalidOperationException($"MIDI input reported {recording.InvalidInputMessages} invalid message(s); cancel this recording.");
+            if (recording.Overflow) throw new InvalidOperationException("MIDI event capacity exceeded; cancel this recording.");
+            return recording.Events.ToArray();
+        }
     }
 
     internal bool HasMidiRecording(EngineSession session) => midiRecordings.ContainsKey(session.Id);
@@ -204,18 +238,10 @@ internal sealed partial class EngineHost
                     throw new InvalidOperationException("The MIDI input is already owned by another bridge session.");
                 recording.DeviceId = device; recording.DeviceName = name;
                 recording.Callback = (handle, message, instance, data, timestamp) => {
-                    if (message != 0x3c3) return; // MIM_DATA
-                    uint packed = unchecked((uint)data);
-                    int status = (int)(packed & 0xf0), channel = (int)(packed & 0x0f);
-                    if (status is not (0x80 or 0x90))
-                    {
-                        lock (recording.Gate) if (recording.Active) recording.IgnoredNonNote++;
-                        return;
-                    }
-                    int number = (int)((packed >> 8) & 0x7f), velocity = (int)((packed >> 16) & 0x7f);
-                    recording.Add(new MidiInputEvent(recording.Clock.Elapsed.TotalMilliseconds, channel, number, velocity, status == 0x90 && velocity != 0));
+                    try { MidiInputMessage(recording, message, unchecked((uint)data)); }
+                    catch (Exception) { lock (recording.Gate) recording.CallbackFault = true; }
                 };
-                uint result = MidiInOpen(out recording.Handle, (uint)device, recording.Callback, 0, 0x30000);
+                uint result = MidiInOpen(out recording.Handle, (uint)device, recording.Callback, 0, 0x30020); // CALLBACK_FUNCTION | MIDI_IO_STATUS
                 if (result != 0) { recording.Active = false; throw new InvalidOperationException("MIDI input open failed: " + result); }
                 result = MidiInStart(recording.Handle);
                 if (result != 0)
@@ -319,17 +345,14 @@ internal sealed partial class EngineHost
             device_id = recording.DeviceId, device_name = recording.DeviceName, track_index = recording.TrackIndex,
             part_index = recording.PartIndex, start_tick = recording.StartTick, event_count = recording.Events.Count,
             overflow = recording.Overflow, commit_attempted = recording.CommitAttempted, ignored_non_note = recording.IgnoredNonNote,
+            invalid_input_messages = recording.InvalidInputMessages, backlog_notifications = recording.BacklogNotifications,
+            callback_fault = recording.CallbackFault,
             sync_to_transport = recording.SyncToTransport, start_seconds = recording.StartSeconds };
     }
 
     private object CommitMidiRecording(EngineSession session, MidiRecording recording)
     {
-        MidiInputEvent[] events;
-        lock (recording.Gate)
-        {
-            if (recording.Overflow) throw new InvalidOperationException("MIDI event capacity exceeded; cancel this recording.");
-            events = recording.Events.ToArray();
-        }
+        MidiInputEvent[] events = MidiInputEventsForCommit(recording);
         Dictionary<(int, int), Queue<MidiInputEvent>> pending = [];
         List<MidiCapturedNote> notes = [];
         int unmatchedOff = 0;

@@ -78,12 +78,22 @@ internal sealed partial class EngineHost
             throw new InvalidOperationException("Commit or roll back pending native edits before merging.");
         EngineSession source = ImportProject(path, codePage, true);
         bool touched = false;
+        bool trackedMutation = false;
         try
         {
-            if (HasArchiveEntityExtensions(source))
-                throw new InvalidOperationException("project_preservation: merging source entity extensions requires an identity transfer contract.");
+            ArchiveMergeValidateSource(source);
             if (includeTracks && target.Sequence.NumTrack + source.Sequence.NumTrack > 32)
                 throw new InvalidOperationException("The merged project exceeds the native 32-track limit.");
+            if ((includeTracks && HasArchiveEntityExtensions(source)) || HasArchiveEntityExtensions(target))
+            {
+                if (includeTracks && source.Sequence.Tracks.Any(track => track.Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi)))
+                    throw new InvalidOperationException("project_preservation: extended project merge requires MIDI or AI tracks.");
+                // The source directory must remain alive if native duplication
+                // references imported assets, including after a staged failure.
+                touched = true;
+                trackedMutation = true;
+                return MergePreservedProject(target, source, offsetTick, includeTracks, includeTempo, replaceTempo);
+            }
             if (includeTracks)
             {
                 foreach (WIVSMTrack sourceTrack in source.Sequence.Tracks.ToArray())
@@ -137,7 +147,7 @@ internal sealed partial class EngineHost
         }
         catch
         {
-            if (touched)
+            if (touched && !trackedMutation)
             {
                 target.Sequence.Rollback();
                 target.Dirty = true;
@@ -161,6 +171,73 @@ internal sealed partial class EngineHost
             }
             else
                 Close(source.Id, true);
+        }
+    }
+
+    private object MergePreservedProject(EngineSession target, EngineSession source, long offsetTick,
+        bool includeTracks, bool includeTempo, bool replaceTempo)
+    {
+        bool upgraded = EnsureArchiveEntityTracking(target);
+        try
+        {
+            return ScoreMutate(target, "project.merge", () =>
+            {
+                if (includeTracks)
+                {
+                    foreach (WIVSMTrack original in source.Sequence.Tracks.ToArray())
+                    {
+                        WIVSMTrack track = target.Sequence.DuplicateTrack(target.Sequence.NumTrack, original, out string error)
+                            ?? throw new InvalidOperationException("Native track import failed: " + error);
+                        if (offsetTick != 0)
+                        {
+                            VSMRelTick offset = new(offsetTick);
+                            foreach (WIVSMPart part in track.Parts.ToArray())
+                                if (!track.MovePart(part.AbsBeginTick + offset, track, part))
+                                    throw new InvalidOperationException("Native imported-part offset failed: " + track.LastError);
+                            foreach (WIVSMTrackVolume volume in track.Volumes.Where(item => item.RelPosTick.Value > 0).ToArray())
+                                if (!track.MoveVolume(volume.RelPosTick + offset, volume))
+                                    throw new InvalidOperationException("Native imported-volume offset failed: " + track.LastError);
+                            foreach (WIVSMPanpot panpot in track.Panpots.Where(item => item.RelPosTick.Value > 0).ToArray())
+                                if (!track.MovePanpot(panpot.RelPosTick + offset, panpot))
+                                    throw new InvalidOperationException("Native imported-pan offset failed: " + track.LastError);
+                        }
+                        ArchiveTransferCopy(source, target, original, track, partOffset: offsetTick);
+                    }
+                }
+                if (includeTempo)
+                {
+                    WIVSMClipboard clipboard = manager.CreateClipboard(target.Sequence)
+                        ?? throw new InvalidOperationException("Native import clipboard creation failed: " + manager.LastError);
+                    try
+                    {
+                        if (!clipboard.PushTempos(source.Sequence.Tempos) || !clipboard.PushTimeSigs(source.Sequence.TimeSigs))
+                            throw new InvalidOperationException("Native tempo import snapshot failed: " + clipboard.LastError);
+                        if (replaceTempo && (!target.Sequence.RemoveTempos(target.Sequence.Tempos) ||
+                                             !target.Sequence.RemoveTimeSigsEx(target.Sequence.TimeSigs)))
+                            throw new InvalidOperationException("Native tempo-map replacement failed: " + target.Sequence.LastError);
+                        if (!target.Sequence.PasteTempo(clipboard, new VSMRelTick(offsetTick)) ||
+                            !target.Sequence.PasteTimeSig(clipboard, new VSMRelTick(offsetTick)))
+                            throw new InvalidOperationException("Native tempo-map import failed: " + target.Sequence.LastError);
+                    }
+                    finally
+                    {
+                        if (!clipboard.Destroy())
+                            throw new InvalidOperationException("Native import clipboard cleanup failed.");
+                        clipboard.Dispose();
+                    }
+                }
+                return new { session_id = target.Id, native = true, imported_tracks = includeTracks ? source.Sequence.NumTrack : 0,
+                             include_tempo = includeTempo, offset_tick = offsetTick, track_count = target.Sequence.NumTrack };
+            });
+        }
+        catch (Exception error)
+        {
+            if (upgraded)
+            {
+                try { DropArchiveEntityTracking(target); }
+                catch (Exception cleanup) { throw new AggregateException("Merge preservation failed and tracking cleanup was incomplete.", error, cleanup); }
+            }
+            throw;
         }
     }
 

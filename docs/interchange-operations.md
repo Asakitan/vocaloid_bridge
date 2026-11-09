@@ -12,6 +12,14 @@ MIDI/SMF/VSQ legacy loader. The VPR, VSQX and PPSF loaders do not receive that
 parameter, so it neither converts their tracks nor selects an AI voicebank.
 Voice identities are never silently substituted by this bridge.
 
+When `project_merge` imports tracked MIDI/AI entities with supported unknown
+fields, it maps them to the returned native duplicates inside the target
+history transaction. Source root/master unknown fields and opaque archive
+resources have no merge conflict contract and are rejected before target
+mutation. `artifacts/feature-acceptance-e57fec059ac3/summary.json` verifies
+synthetic AI merges, offset, tempo-only merge and history on two target types;
+it does not establish every format or resource combination.
+
 ## Known data-loss limitation
 
 On 2026-11-10, the existing `interchange.ppsf2` acceptance case was rerun against

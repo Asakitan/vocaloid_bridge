@@ -39,9 +39,23 @@ In a second native probe, the right half of a part contained two notes
 old note objects and put new note objects in the new part without individual
 insert events for those children. Joining then created a third set of note
 objects in the retained left part. Therefore tracking parent notifications or
-addresses alone is insufficient for part split/join; these operations remain
-guarded pending a tested pre/post identity-migration rule. Conflicting unknown
-values on join must not be silently discarded.
+addresses alone is insufficient for part split/join; these operations require
+a pre/post identity-migration rule. Conflicting unknown values
+on join must not be silently discarded.
+
+The current note-split implementation copies the original note's unknown
+payload to the new right note inside the staged transaction. Note join merges
+distinct unknown keys and equal values, while conflicting values at the same
+pointer cause rollback. Its focused `preservation.note_split` case exercises
+split and join with save, undo, redo and reopen. The case also
+checks conflicting note-join values and rollback. Part split/join now match
+children using unique absolute-position and note-semantic signatures, copy part
+unknown data on split, and merge equal or disjoint fields on join. Conflicts or
+ambiguous/changed child signatures roll back. The `preservation.part_split_join`
+case covers a crossing note, a nonempty right part, history, conflict and reopen.
+Both cases passed through a freshly built private MCP host in
+`artifacts/feature-acceptance-a4a1a5dc7d8d/summary.json`. These cases do not
+establish behavior for every possible note shape or extension combination.
 
 `artifacts/feature-acceptance-ab2b02a98d56/` independently verified live versus
 saved order for one AI project after same-name track duplication, reorder, part
@@ -109,8 +123,10 @@ complete serialized data differs; identical tracks with identical extension
 data may coexist. Duplicate part name/position/duration signatures and duplicate
 note identity signatures remain rejected. Unsupported unknown fields
 inside array elements are also rejected. With entity extensions present,
-unverified raw/native mutations, clipboard paste, merge, library/audio writes,
-and score operations outside the explicitly tracked subset are rejected; they
-are not silently treated as safe. Split/join, clipboard paste and merge extension
-semantics, larger history/rollback permutations, and other archive formats have
-not been verified.
+unverified raw/native mutations, library/audio writes, and score operations
+outside the explicitly tracked subset are rejected. MIDI/AI clipboard cut/paste
+and track merge now use identity transactions; source root/master fields and
+opaque-resource transfer have separate restrictions. The focused cases in
+`artifacts/feature-acceptance-e57fec059ac3/summary.json` and
+`artifacts/feature-acceptance-4cb5b47a3915/summary.json` verify those bounded
+paths, not every source format, larger history permutation or resource case.

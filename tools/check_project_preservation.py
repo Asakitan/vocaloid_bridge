@@ -253,6 +253,151 @@ async def duplicates(check):
     await check.close(clone)
 
 
+@v.feature("preservation.note_split", "preservation", "score_compose", "project_edit", "project_open", "project_save")
+async def note_split(check):
+    seed = await check.call("score_compose", output_name=check.output("split-seed"), title="Split metadata", bpm=120,
+                            notes=[{"start": 0, "duration": 1, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    await check.close(seed["native_session"]["session_id"])
+    sequence, members = v.read_vpr(seed["path"])
+    note = sequence["tracks"][0]["parts"][0]["notes"][0]
+    note[KEY] = "split-note"
+    note["exp"][NESTED_KEY] = {"split": [1, 2]}
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    source = v.ROOT / "output" / check.output("split-input")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    identifier = (await check.call("project_open", path=str(source)))["session_id"]
+    scope = {"track_index": 0, "part_index": 0}
+    await check.edit(identifier, "note.split", **scope, note_index=0, split_tick=240)
+    def verify(saved, count):
+        notes = saved["tracks"][0]["parts"][0]["notes"]
+        v.require(len(notes) == count and all(n.get(KEY) == "split-note" and
+                  n["exp"].get(NESTED_KEY) == {"split": [1, 2]} for n in notes), "Split note metadata changed")
+    saved, _ = await check.save(identifier, "split-result"); verify(saved, 2)
+    await check.edit(identifier, "undo")
+    saved, _ = await check.save(identifier, "split-undo"); verify(saved, 1)
+    await check.edit(identifier, "redo")
+    saved, path = await check.save(identifier, "split-redo"); verify(saved, 2)
+    conflict, conflict_members = v.read_vpr(path)
+    conflict["tracks"][0]["parts"][0]["notes"][1][KEY] = "different"
+    conflict_members["Project/sequence.json"] = json.dumps(conflict, ensure_ascii=False).encode("utf-8")
+    conflict_path = v.ROOT / "output" / check.output("join-conflict")
+    with zipfile.ZipFile(conflict_path, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in conflict_members.items(): archive.writestr(name, payload)
+    conflict_id = (await check.call("project_open", path=str(conflict_path)))["session_id"]
+    await check.rejected("project_edit", "conflicting note join metadata", session_id=conflict_id,
+                         operation="note.join", options={**scope, "note_indices": [0, 1]})
+    conflict_saved, _ = await check.save(conflict_id, "join-conflict-rollback")
+    v.require([n[KEY] for n in conflict_saved["tracks"][0]["parts"][0]["notes"]] == ["split-note", "different"],
+              "Join conflict did not roll back both notes and metadata")
+    await check.close(conflict_id)
+    reopened = (await check.call("project_open", path=str(path)))["session_id"]
+    saved, _ = await check.save(reopened, "split-reopen"); verify(saved, 2)
+    await check.edit(reopened, "note.join", **scope, note_indices=[0, 1])
+    saved, _ = await check.save(reopened, "join-result"); verify(saved, 1)
+    await check.edit(reopened, "undo")
+    saved, _ = await check.save(reopened, "join-undo"); verify(saved, 2)
+    await check.edit(reopened, "redo")
+    saved, path = await check.save(reopened, "join-redo"); verify(saved, 1)
+    joined = (await check.call("project_open", path=str(path)))["session_id"]
+    saved, _ = await check.save(joined, "join-reopen"); verify(saved, 1)
+    await check.close(joined)
+    await check.close(reopened); await check.close(identifier)
+
+
+@v.feature("preservation.part_split_join", "preservation", "score_compose", "project_edit", "project_open", "project_save")
+async def part_split_join(check):
+    seed = await check.call("score_compose", output_name=check.output("part-split-seed"), title="Part split", bpm=120,
+                            notes=[{"start": i, "duration": 1, "pitch": 60 + i, "lyric": "あ", "phoneme": "a", "lang_id": 0}
+                                   for i in (0, 1, 3)])
+    await check.close(seed["native_session"]["session_id"])
+    sequence, members = v.read_vpr(seed["path"])
+    part = sequence["tracks"][0]["parts"][0]; part[KEY] = "part"
+    for i, note in enumerate(part["notes"]): note[KEY] = "note-" + str(i)
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    source = v.ROOT / "output" / check.output("part-split-input")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    sid = (await check.call("project_open", path=str(source)))["session_id"]
+    await check.edit(sid, "part.split", track_index=0, part_index=0, split_tick=720)
+    def verify(saved, counts):
+        parts = saved["tracks"][0]["parts"]
+        v.require([len(p["notes"]) for p in parts] == counts and all(p[KEY] == "part" for p in parts), "Part split/join changed metadata")
+        v.require([n[KEY] for p in parts for n in p["notes"]] == ["note-0", "note-1", "note-2"], "Part split/join changed note metadata")
+    saved, _ = await check.save(sid, "part-split"); verify(saved, [2, 1])
+    await check.edit(sid, "undo"); saved, _ = await check.save(sid, "part-split-undo"); verify(saved, [3])
+    await check.edit(sid, "redo"); saved, path = await check.save(sid, "part-split-redo"); verify(saved, [2, 1])
+    conflict, cm = v.read_vpr(path); conflict["tracks"][0]["parts"][1][KEY] = "different"
+    cm["Project/sequence.json"] = json.dumps(conflict, ensure_ascii=False).encode("utf-8")
+    cp = v.ROOT / "output" / check.output("part-join-conflict")
+    with zipfile.ZipFile(cp, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in cm.items(): archive.writestr(name, payload)
+    cid = (await check.call("project_open", path=str(cp)))["session_id"]
+    await check.rejected("project_edit", "conflicting part join metadata", session_id=cid,
+                         operation="part.join", options={"track_index": 0, "part_indices": [0, 1]})
+    saved, _ = await check.save(cid, "part-conflict-rollback")
+    v.require([p[KEY] for p in saved["tracks"][0]["parts"]] == ["part", "different"], "Part conflict rollback changed metadata")
+    await check.close(cid)
+    await check.edit(sid, "part.join", track_index=0, part_indices=[0, 1])
+    saved, _ = await check.save(sid, "part-join"); verify(saved, [3])
+    await check.edit(sid, "undo"); saved, _ = await check.save(sid, "part-join-undo"); verify(saved, [2, 1])
+    await check.edit(sid, "redo"); saved, path = await check.save(sid, "part-join-redo"); verify(saved, [3])
+    reopened = (await check.call("project_open", path=str(path)))["session_id"]
+    saved, _ = await check.save(reopened, "part-join-reopen"); verify(saved, [3])
+    await check.close(reopened); await check.close(sid)
+
+
+@v.feature("preservation.clipboard_old_history", "preservation", "score_compose", "project_open", "project_create",
+           "project_clipboard", "project_edit", "project_save")
+async def clipboard_old_history(check):
+    seed = await check.call("score_compose", output_name=check.output("history-source-seed"), title="History source", bpm=120,
+                            notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    await check.close(seed["native_session"]["session_id"])
+    sequence, members = v.read_vpr(seed["path"])
+    sequence["tracks"][0][KEY] = "transferred-track"
+    sequence["tracks"][0]["parts"][0]["notes"][0][KEY] = "transferred-note"
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    source = v.ROOT / "output" / check.output("history-source")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    sid = (await check.call("project_open", path=str(source)))["session_id"]
+    clip = (await check.call("project_clipboard", session_id=sid, operation="copy",
+                             options={"kind": "tracks", "indices": [0]}))["clipboard_id"]
+    await check.close(sid)
+    try:
+        async with check.project() as target:
+            await check.edit(target, "track.create", name="old")
+            await check.edit(target, "track.update", track_index=0, name="old-edited")
+            await check.call("project_clipboard", session_id=target, operation="paste",
+                             options={"clipboard_id": clip, "offset_tick": 960})
+            saved, _ = await check.save(target, "history-paste")
+            v.require(len(saved["tracks"]) == 2 and saved["tracks"][1][KEY] == "transferred-track", "Paste lost extension")
+            await check.edit(target, "undo")
+            saved, _ = await check.save(target, "history-unpaste")
+            v.require(len(saved["tracks"]) == 1 and saved["tracks"][0]["name"] == "old-edited", "Undo paste changed old track")
+            await check.edit(target, "undo")
+            saved, _ = await check.save(target, "history-old-undo")
+            v.require(len(saved["tracks"]) == 1 and saved["tracks"][0]["name"] == "old", "Old edit undo failed")
+            await check.edit(target, "undo")
+            saved, _ = await check.save(target, "history-old-empty")
+            v.require(not saved.get("tracks", []), "Old create undo failed")
+            await check.edit(target, "redo"); await check.edit(target, "redo"); await check.edit(target, "redo")
+            saved, path = await check.save(target, "history-redo-paste")
+            v.require(len(saved["tracks"]) == 2 and saved["tracks"][0]["name"] == "old-edited" and
+                      saved["tracks"][1][KEY] == "transferred-track" and
+                      saved["tracks"][1]["parts"][0]["notes"][0][KEY] == "transferred-note", "History redo lost data")
+            reopened = (await check.call("project_open", path=str(path)))["session_id"]
+            await check.close(reopened)
+            await check.edit(target, "undo"); await check.edit(target, "undo")
+            await check.edit(target, "track.update", track_index=0, name="branch")
+            status = await check.edit(target, "history.status")
+            v.require(not status["can_redo"], "New branch retained redo")
+            saved, _ = await check.save(target, "history-branch")
+            v.require(len(saved["tracks"]) == 1 and saved["tracks"][0]["name"] == "branch", "Branch changed old state")
+    finally:
+        await check.call("project_clipboard", operation="clear", options={"clipboard_id": clip})
+
+
 @v.feature("preservation.native_duplicate_order", "preservation", "score_compose", "project_edit", "project_save", "project_open")
 async def native_duplicate_order(check):
     seed = await check.call("score_compose", output_name=check.output("duplicate-order-seed"), title="Native order", bpm=120,

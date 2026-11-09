@@ -110,10 +110,12 @@ and muted-transport tests passed; hardware MIDI capture remains unverified.
 
 For VPR extensions, the host binds supported unknown properties to observed
 native entity lifetimes and transaction history, then overlays only those
-unknown properties onto native snapshots. Unsupported identity transformations
-are explicit errors for affected extended projects; plain projects retain their
-existing operation paths. Extra archive members are preserved without reviving
-deleted native-managed audio.
+unknown properties onto native snapshots. MIDI/AI clipboard cut and paste and
+project merge use tracked native transactions and identity mapping. A failed
+cut retains its independent clipboard snapshot and reports its ID. Merge of
+source root/master extensions and transfer of opaque resources are explicit errors; plain
+projects retain their existing operation paths. Extra archive members are
+preserved on save without reviving deleted native-managed audio.
 
 Summaries contain `session_id`, native `title`, native `track_count`, host `dirty`,
 `root_ref`, and nullable `last_saved_path`. Creation uses the real VSM manager,

@@ -3,12 +3,16 @@ using Yamaha.VOCALOID.VSM;
 
 internal sealed partial class EngineHost
 {
-    private sealed class ProjectClipboardData(string id, string kind, EngineSession snapshot, WIVSMClipboard value)
+    private sealed class ProjectClipboardData(string id, string kind, EngineSession snapshot, WIVSMClipboard value,
+        ulong sourceTrackIndex, ulong sourcePartIndex, ulong[] sourceIndices)
     {
         internal string Id { get; } = id;
         internal string Kind { get; } = kind;
         internal EngineSession Snapshot { get; } = snapshot;
         internal WIVSMClipboard Value { get; } = value;
+        internal ulong SourceTrackIndex { get; } = sourceTrackIndex;
+        internal ulong SourcePartIndex { get; } = sourcePartIndex;
+        internal ulong[] SourceIndices { get; } = sourceIndices;
         internal bool Pasted { get; set; }
     }
 
@@ -67,6 +71,7 @@ internal sealed partial class EngineHost
         EngineSession snapshot = CloneProject(source.Id, null);
         WIVSMClipboard? clipboard = null;
         string clipboardId = Guid.NewGuid().ToString("N");
+        bool retained = false;
         try
         {
             clipboard = manager.CreateClipboard(snapshot.Sequence)
@@ -83,39 +88,49 @@ internal sealed partial class EngineHost
                 if (!copied)
                     throw new InvalidOperationException("Native clipboard copy failed: " + clipboard.LastError);
             }
-            if (operation == "cut")
-            {
-                source.Dirty = true;
-                try
-                {
-                    foreach (ulong index in indices.OrderDescending())
-                    {
-                        bool removed = kind switch
-                        {
-                            "tracks" => source.Sequence.RemoveTrack(ClipboardTrack(source, index)),
-                            "parts" => ClipboardTrack(source, trackIndex).RemovePart(ClipboardTrack(source, trackIndex).GetPart(index)!),
-                            "notes" => ClipboardMidiPart(source, trackIndex, partIndex).RemoveNote(ClipboardMidiPart(source, trackIndex, partIndex).GetNote(index)!),
-                            _ => false
-                        };
-                        if (!removed)
-                            throw new InvalidOperationException("Native clipboard cut failed: " + source.Sequence.LastError);
-                    }
-                    if (source.Sequence.IsStaged && !source.Sequence.Commit(true))
-                        throw new InvalidOperationException("Native clipboard cut commit failed: " + source.Sequence.LastError);
-                }
-                catch { source.Sequence.Rollback(); throw; }
-                finally { source.InvalidateChildren(); }
-            }
-            ProjectClipboardData stored = new(clipboardId, kind, snapshot, clipboard);
+            if (operation == "cut" && HasArchiveEntityExtensions(snapshot))
+                ArchiveTransferValidateSource(snapshot);
+            ProjectClipboardData stored = new(clipboardId, kind, snapshot, clipboard, trackIndex, partIndex, indices);
+            object summary = ClipboardSummary(stored);
             projectClipboards.Add(clipboardId, stored);
             sessions.Remove(snapshot.Id);
-            return ClipboardSummary(stored);
+            retained = true;
+            if (operation == "cut")
+            {
+                try
+                {
+                    ScoreMutate(source, "clipboard.cut", () =>
+                    {
+                        foreach (ulong index in indices.OrderDescending())
+                        {
+                            bool removed = kind switch
+                            {
+                                "tracks" => source.Sequence.RemoveTrack(ClipboardTrack(source, index)),
+                                "parts" => ClipboardTrack(source, trackIndex).RemovePart(ClipboardTrack(source, trackIndex).GetPart(index)!),
+                                "notes" => ClipboardMidiPart(source, trackIndex, partIndex).RemoveNote(ClipboardMidiPart(source, trackIndex, partIndex).GetNote(index)!),
+                                _ => false
+                            };
+                            if (!removed)
+                                throw new InvalidOperationException("Native clipboard cut failed: " + source.Sequence.LastError);
+                        }
+                        return true;
+                    });
+                }
+                catch (Exception error)
+                {
+                    throw new InvalidOperationException("Clipboard cut failed; the independent snapshot remains available as clipboard_id=" + clipboardId + ".", error);
+                }
+            }
+            return summary;
         }
         catch
         {
-            clipboard?.Destroy();
-            clipboard?.Dispose();
-            Close(snapshot.Id, true);
+            if (!retained)
+            {
+                clipboard?.Destroy();
+                clipboard?.Dispose();
+                Close(snapshot.Id, true);
+            }
             throw;
         }
     }
@@ -126,6 +141,8 @@ internal sealed partial class EngineHost
         long offset = checked((long)ClipboardIndex(options, "offset_tick", 0));
         if (offset > int.MaxValue)
             throw new ArgumentOutOfRangeException("offset_tick");
+        if (HasArchiveEntityExtensions(stored.Snapshot) || HasArchiveEntityExtensions(target))
+            return PastePreservedClipboard(target, stored, options, offset);
         ulong inserted = 0;
         target.Dirty = true;
         try
@@ -189,6 +206,99 @@ internal sealed partial class EngineHost
         finally { target.InvalidateChildren(); }
     }
 
+    private object PastePreservedClipboard(EngineSession target, ProjectClipboardData stored, JsonElement options, long offset)
+    {
+        ArchiveTransferValidateSource(stored.Snapshot);
+        WIVSMTrack? targetTrack = null;
+        WIVSMMidiPart? targetPart = null;
+        ulong insertion = 0;
+        if (stored.Kind == "tracks")
+        {
+            insertion = ClipboardIndex(options, "index", target.Sequence.NumTrack);
+            if (insertion > target.Sequence.NumTrack || target.Sequence.NumTrack + (ulong)stored.SourceIndices.Length > 32)
+                throw new ArgumentOutOfRangeException("index", "Clipboard paste exceeds native track bounds.");
+            foreach (ulong index in stored.SourceIndices)
+                if (ClipboardTrack(stored.Snapshot, index).Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi))
+                    throw new InvalidOperationException("project_preservation: extended clipboard track transfer currently requires MIDI or AI tracks.");
+        }
+        else if (stored.Kind == "parts")
+        {
+            targetTrack = ClipboardTrack(target, ClipboardIndex(options, "track_index", 0));
+            if (targetTrack.Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi) ||
+                ClipboardTrack(stored.Snapshot, stored.SourceTrackIndex).Type != targetTrack.Type)
+                throw new ArgumentException("Clipboard MIDI/AI part type must match the target track.");
+        }
+        else
+        {
+            targetPart = ClipboardMidiPart(target, ClipboardIndex(options, "track_index", 0), ClipboardIndex(options, "part_index", 0));
+            WIVSMMidiPart sourcePart = ClipboardMidiPart(stored.Snapshot, stored.SourceTrackIndex, stored.SourcePartIndex);
+            if (sourcePart.IsAi != targetPart.IsAi)
+                throw new ArgumentException("Clipboard note and target part must use the same native voice type.");
+        }
+
+        bool upgraded = EnsureArchiveEntityTracking(target);
+        try
+        {
+            object result = ScoreMutate(target, "clipboard.paste", () =>
+            {
+                ulong inserted = 0;
+                foreach (ulong index in stored.SourceIndices)
+                {
+                    if (stored.Kind == "tracks")
+                    {
+                        WIVSMTrack source = ClipboardTrack(stored.Snapshot, index);
+                        WIVSMTrack track = target.Sequence.DuplicateTrack(insertion++, source, out string error)
+                            ?? throw new InvalidOperationException("Native clipboard track paste failed: " + error);
+                        if (offset != 0)
+                        {
+                            foreach (WIVSMPart part in track.Parts.ToArray())
+                                if (!track.MovePart(part.AbsBeginTick + new VSMRelTick(offset), track, part))
+                                    throw new InvalidOperationException("Native clipboard part offset failed.");
+                            foreach (WIVSMTrackVolume volume in track.Volumes.Where(item => item.RelPosTick.Value > 0).ToArray())
+                                if (!track.MoveVolume(volume.RelPosTick + new VSMRelTick(offset), volume))
+                                    throw new InvalidOperationException("Native clipboard volume offset failed.");
+                            foreach (WIVSMPanpot panpot in track.Panpots.Where(item => item.RelPosTick.Value > 0).ToArray())
+                                if (!track.MovePanpot(panpot.RelPosTick + new VSMRelTick(offset), panpot))
+                                    throw new InvalidOperationException("Native clipboard pan offset failed.");
+                        }
+                        ArchiveTransferCopy(stored.Snapshot, target, source, track, partOffset: offset);
+                    }
+                    else if (stored.Kind == "parts")
+                    {
+                        WIVSMPart source = ClipboardTrack(stored.Snapshot, stored.SourceTrackIndex).GetPart(index)
+                            ?? throw new InvalidOperationException("Clipboard snapshot part is missing.");
+                        WIVSMTrack track = targetTrack ?? throw new InvalidOperationException("Clipboard target track is missing.");
+                        WIVSMPart part = track.DuplicatePart(source.AbsBeginTick + new VSMRelTick(offset), source)
+                            ?? throw new InvalidOperationException("Native clipboard part paste failed: " + track.LastError);
+                        ArchiveTransferCopy(stored.Snapshot, target, source, part, partOffset: offset);
+                    }
+                    else
+                    {
+                        WIVSMMidiPart sourcePart = ClipboardMidiPart(stored.Snapshot, stored.SourceTrackIndex, stored.SourcePartIndex);
+                        WIVSMNote source = sourcePart.GetNote(index) ?? throw new InvalidOperationException("Clipboard snapshot note is missing.");
+                        WIVSMMidiPart part = targetPart ?? throw new InvalidOperationException("Clipboard target part is missing.");
+                        WIVSMNote note = part.DuplicateNote(source.RelPosTick + new VSMRelTick(offset), source)
+                            ?? throw new InvalidOperationException("Native clipboard note paste failed: " + part.LastError);
+                        ArchiveTransferCopy(stored.Snapshot, target, source, note, noteOffset: offset);
+                    }
+                    inserted++;
+                }
+                return new { session_id = target.Id, clipboard_id = stored.Id, native = true, pasted = inserted };
+            });
+            stored.Pasted = true;
+            return result;
+        }
+        catch (Exception error)
+        {
+            if (upgraded)
+            {
+                try { DropArchiveEntityTracking(target); }
+                catch (Exception cleanup) { throw new AggregateException("Clipboard preservation failed and tracking cleanup was incomplete.", error, cleanup); }
+            }
+            throw;
+        }
+    }
+
     private static WIVSMTrack ClipboardTrack(EngineSession session, ulong index) => session.Sequence.GetTrack(index)
         ?? throw new ArgumentOutOfRangeException("track_index");
 
@@ -224,6 +334,7 @@ internal sealed partial class EngineHost
         stored.Value.Dispose();
         if (!stored.Snapshot.Sequence.Close())
             throw new InvalidOperationException("Native clipboard snapshot close failed.");
+        ReleaseArchivePreservation(stored.Snapshot);
         ownedSequences.Remove(stored.Snapshot.Sequence);
         stored.Snapshot.InvalidateAll();
         projectClipboards.Remove(stored.Id);

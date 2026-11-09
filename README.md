@@ -33,7 +33,7 @@ powershell -NoProfile -File .\tools\setup.ps1
 
 这些条目均使用 `E:/VC/vocaloid_bridge/.venv/Scripts/python.exe -m vocaloid_bridge`，并显式设置 `VOCALOID_WORKSPACE`、`PYTHONPATH` 为 `E:/VC/vocaloid_bridge`，`PYTHONUTF8` 为 `1`。从其他目录启动时，输出仍写到本项目的 `output`。Codex 的 `tool_timeout_sec` 为 180。
 
-Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前 0.4.0 提供 37 个工具和 125 个结构化操作；既有客户端需要重新连接 MCP 服务才能发现新版目录。本会话原有连接曾返回 `Transport closed`；新建的独立 stdio 客户端测试已通过。没有强制重启客户端或改变登录、模型与其他 MCP 服务。
+Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.5.0 提供 37 个工具和 125 个结构化操作，独立 stdio 客户端的定向测试已通过。本对话连接曾返回 `Transport closed`，后续恢复并发现 37 个工具，但状态仍报告 MCP 版本 0.4.0；重新连接后应核对版本。没有强制重启客户端或改变登录、模型与其他 MCP 服务。
 
 ## 工具
 
@@ -106,7 +106,9 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 
 0.3.0 的 [整合定向回执](artifacts/feature-acceptance-26a71f9b1dc5/summary.json) 验证正式冻结、119 项目录和静音设备传输。未知字段、固定嵌套对象和额外资源的保留，以及删除/重建、撤销/重做的实体关联，另有独立回执。详见 [工程保留](docs/project-preservation.md)、[设备传输](docs/transport.md) 和 [轨道冻结](docs/track-freeze.md)；这些范围不等于任意扩展格式、声库、设备与效果组合都已验证。
 
-0.4.0 的 [MIDI 事件流回执](artifacts/feature-acceptance-878d0c135692/summary.json) 覆盖六个 MIDI 操作；[独立回执](artifacts/midi-synthetic-3fa675486b20.json) 验证速度变化和静音 transport 同步。轨道、片段、音符复制保留扩展数据及历史的定向回执为 `artifacts/feature-acceptance-647c107fc2bd/preservation.duplicates.json`。硬件输入、扩展数据的分割／连接和 DAW 宿主仍有待验证的边界。
+0.4.0 的 [MIDI 事件流回执](artifacts/feature-acceptance-878d0c135692/summary.json) 覆盖六个 MIDI 操作；[独立回执](artifacts/midi-synthetic-3fa675486b20.json) 验证速度变化和静音 transport 同步。轨道、片段、音符复制保留扩展数据及历史的定向回执为 `artifacts/feature-acceptance-647c107fc2bd/preservation.duplicates.json`；其后扩展拆合的进展见 0.5.0 回执。
+
+0.5.0 的 [定向回执](artifacts/feature-acceptance-e57fec059ac3/summary.json) 覆盖 AI 扩展字段的剪切、跨工程粘贴、合并、目标旧历史和普通工程兼容；音符及片段拆合另有 [定向回执](artifacts/feature-acceptance-a4a1a5dc7d8d/summary.json)。不透明额外资源的跨工程迁移、真实 MIDI 设备和 DAW 宿主仍有待验证的边界，详见 [扩展迁移](docs/archive-transfer.md) 和 [DAW IPC 调查](docs/daw-ipc.md)。
 
 原生混缩输出整工程或所选整轨，各分轨保留自己的时长；分轨不使用主效果和主音量自动化。`start_seconds`、`end_seconds` 和 `tail_seconds` 不受此原生入口支持，传入会明确报错。素材属性写入独立的 `property.json`；新建自有素材可在 `.vsclip` 中附加桥接元数据。
 

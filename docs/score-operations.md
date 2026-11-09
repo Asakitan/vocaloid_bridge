@@ -83,6 +83,11 @@ Unchanged fields are skipped rather than treating native no-op setter results
 as failures. Changed color writes must succeed, and all requested fields must
 match freshly acquired native getters after commit.
 
+For VPRs with supported entity extensions, note and part split/join also journal
+the opaque fields by native identity. Conflicting join fields or ambiguous
+child correspondence cause the native transaction to roll back; see
+[project preservation](project-preservation.md) for tested scope and limits.
+
 ## MIDI and AI Parts
 
 | Operation | Options | `result` |

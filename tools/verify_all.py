@@ -8,6 +8,7 @@ import check_voicecolor_audio
 import check_transport
 import check_project_preservation
 import check_track_freeze
+import check_midi_recording_case
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining

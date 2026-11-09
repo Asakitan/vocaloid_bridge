@@ -1241,7 +1241,9 @@ async def synthesis_blank_authoring(check: Acceptance) -> None:
                   and entry["synthesizable_version"] and 0 in entry["lang_ids"]), None)
         if voice is None:
             raise Blocked("The installed native asa voice is required for the blank-authoring regression")
-        track = (await check.edit(identifier, "track.create", type="MidiAi", name="Blank native vocal"))["track_index"]
+        created_track = await check.edit(identifier, "track.create", name="Blank native vocal")
+        require(created_track["type"] == "MidiAi", "The default vocal track must use the AI engine", created_track)
+        track = created_track["track_index"]
         created = await check.edit(identifier, "part.create", track_index=track, start_tick=0,
                        duration_tick=1920, name="New native notes")
         require(created["note_count"] == 0, "New native part already contains prototype notes", created)

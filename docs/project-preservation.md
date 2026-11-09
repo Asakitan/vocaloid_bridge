@@ -23,6 +23,39 @@ as a transcription rather than a machine-written native receipt. It does not
 establish notification behavior for all edits, deletion cascades, generic native
 calls, concurrent callbacks or every history path.
 
+A subsequent private AI-only observer probe
+`artifacts/preservation-copy-observer-1ef325a59a30.json` exercised native
+track, part and note duplicate followed by undo/redo. Track duplication
+reported only the new track insertion, although its parts and notes had new
+native identities; part duplication similarly reported only its new part.
+Note duplication reported its new note. In this one run undo removed and redo
+reinserted the same new object addresses. The probe also observed note split
+preserving the left identity and inserting the right, and note join removing the
+right; part split/join showed the analogous parent notifications, but its right
+side was empty and this is not proof for all part contents.
+
+In a second native probe, the right half of a part contained two notes
+(`artifacts/preservation-part-split-15fd889b4936.json`). Split removed their
+old note objects and put new note objects in the new part without individual
+insert events for those children. Joining then created a third set of note
+objects in the retained left part. Therefore tracking parent notifications or
+addresses alone is insufficient for part split/join; these operations remain
+guarded pending a tested pre/post identity-migration rule. Conflicting unknown
+values on join must not be silently discarded.
+
+`artifacts/feature-acceptance-ab2b02a98d56/` independently verified live versus
+saved order for one AI project after same-name track duplication, reorder, part
+duplicate and note duplicate, with reopened track order also matching. That
+single example does not prove ordering for every indistinguishable object.
+
+The integrated duplicate-extension implementation copies unknown data to each
+new native track/part/note, associates descendants by unique semantic keys
+rather than array indices, and uses transaction history for undo/redo. Same
+signature tracks with different unknown data must be rejected when identity is
+ambiguous. `artifacts/feature-acceptance-647c107fc2bd/preservation.duplicates.json`
+records same-name track, part and note copies, child undo/redo, source-independent
+clone and rejection of divergent unknown fields on indistinguishable tracks.
+
 ## Implemented scope and validation
 
 `native/ProjectArchivePreservation.cs` is integrated into open, save and clone.
@@ -70,12 +103,14 @@ reorder/rename, note move/pitch edit, same-value delete/recreate without stale
 metadata, and double undo/redo. These are bounded examples, not proof for every
 VPR or mutation.
 
-To prevent ambiguous attachment, files with extended entities and duplicate
-track type/name signatures, duplicate part name/position/duration signatures,
-or duplicate note identity signatures are rejected. Unsupported unknown fields
+To prevent ambiguous attachment, the duplicate-aware implementation rejects
+tracks with the same type/name/color, mixer flags and part/note shape when their
+complete serialized data differs; identical tracks with identical extension
+data may coexist. Duplicate part name/position/duration signatures and duplicate
+note identity signatures remain rejected. Unsupported unknown fields
 inside array elements are also rejected. With entity extensions present,
 unverified raw/native mutations, clipboard paste, merge, library/audio writes,
 and score operations outside the explicitly tracked subset are rejected; they
-are not silently treated as safe. Split/join, duplicate/paste extension
+are not silently treated as safe. Split/join, clipboard paste and merge extension
 semantics, larger history/rollback permutations, and other archive formats have
 not been verified.

@@ -7,6 +7,11 @@ Its `OpenSequence` second parameter is named `vsqxSchemaDirPath` in the installe
 managed wrapper; its behavior for VPR resources has not been independently
 established. Clone audio independence requires the focused runtime test below.
 
+`project_import(prefer_ai=...)` forwards that preference only to the native
+MIDI/SMF/VSQ legacy loader. The VPR, VSQX and PPSF loaders do not receive that
+parameter, so it neither converts their tracks nor selects an AI voicebank.
+Voice identities are never silently substituted by this bridge.
+
 ## Known data-loss limitation
 
 On 2026-11-10, the existing `interchange.ppsf2` acceptance case was rerun against

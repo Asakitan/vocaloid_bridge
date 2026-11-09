@@ -40,6 +40,7 @@ internal sealed class EngineSession
     internal string? LastSavedPath { get; set; }
     internal Action<string>? ArchiveBegin { get; set; }
     internal Action<string>? ArchiveEnd { get; set; }
+    internal Action<object, object>? ArchiveCopy { get; set; }
 
     internal object Summary() => new
     {
@@ -537,8 +538,9 @@ internal sealed partial class EngineHost : IDisposable
     internal object Close(string id, bool discard)
     {
         EngineSession session = GetSession(id);
-        if (session.Dirty && !discard)
-            throw new InvalidOperationException("Unsaved changes; save or set discard=true.");
+        if ((session.Dirty || HasMidiRecording(session)) && !discard)
+            throw new InvalidOperationException("Unsaved changes or a pending MIDI recording; save/stop it or set discard=true.");
+        CancelMidiRecording(session);
         if (transport?.SessionId == id)
             ReleaseTransport();
         if (!session.Sequence.Close() || session.Sequence.IsOpen)
@@ -743,6 +745,8 @@ internal sealed partial class EngineHost : IDisposable
             return;
         CheckThread();
         List<Exception> errors = [];
+        foreach (EngineSession session in sessions.Values)
+            try { CancelMidiRecording(session); } catch (Exception error) { errors.Add(error); }
         try { ReleaseTransport(); } catch (Exception error) { errors.Add(error); }
         foreach (EngineSession session in sessions.Values)
             try { ReleaseArchivePreservation(session); } catch (Exception error) { errors.Add(error); }

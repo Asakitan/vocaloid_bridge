@@ -66,6 +66,8 @@ async def project_open(path: str) -> dict[str, Any]:
 async def project_import(path: str, code_page: int = 65001, prefer_ai: bool = True) -> dict[str, Any]:
     """Import MIDI, VSQX, PPSF or VPR through the native loader as an owned session.
     Legacy input is staged privately. Save the imported session as a new VPR before closing.
+    prefer_ai is passed to the native MIDI/SMF/VSQ loader only; it does not convert
+    VPR, VSQX or PPSF tracks or assign a voicebank.
     """
     return await _rpc("import_project", path=str(_source(WORKSPACE, path)), code_page=code_page, prefer_ai=prefer_ai)
 
@@ -147,14 +149,14 @@ def vocaloid_features() -> dict[str, Any]:
 @mcp.tool()
 def vocaloid_operations(domain: str | None = None, operation: str | None = None,
                         include_documentation: bool = False) -> dict[str, Any]:
-    """Discover every structured score/audio/library/clipboard operation and its documented options.
+    """Discover structured score/audio/library/clipboard/MIDI operations and their documented options.
     Use the returned tool with operation and options. This index is not functional-test evidence;
     vocaloid_features reports verification. Select a domain and include_documentation for full rules.
     """
     index = json.loads((Path(__file__).with_name("operations.json")).read_text(encoding="utf-8"))
     domains = index["domains"]
     if domain is not None and domain not in domains:
-        raise ValueError("domain must be score, audio, library, or clipboard.")
+        raise ValueError("domain must be score, audio, library, clipboard, or midi.")
     selected = {key: value for key, value in domains.items() if domain is None or key == domain}
     if operation is not None:
         selected = {key: {**value, "operations": [entry for entry in value["operations"] if entry["operation"] == operation]}
@@ -181,6 +183,16 @@ async def project_edit(session_id: str, operation: str,
     Operations cover tracks, parts, notes, voices, tempo, meter, automation and history.
     """
     return await _rpc("score_edit", session_id=session_id, operation=operation, options=options or {})
+
+
+@mcp.tool()
+async def project_midi(operation: str, options: dict[str, Any] | None = None,
+                       session_id: str | None = None) -> dict[str, Any]:
+    """Enumerate MIDI inputs or record note events into an armed native AI part.
+    A device is opened only with an explicit device ID and matching name. Synthetic
+    events are an explicit event stream, not evidence of hardware input.
+    """
+    return await _rpc("midi_recording", session_id=session_id, operation=operation, options=options or {})
 
 
 @mcp.tool()

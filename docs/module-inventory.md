@@ -9,13 +9,14 @@
 | `native/AudioOperations.cs` | 原生离线音频、效果与整轨混缩 | 16 个音频操作含传输；冻结回放避免重复应用音量/声像 |
 | `native/TransportOperations.cs` | 原生设备枚举与私有会话播放、停止、定位、释放 | DirectSound 静音闭环通过；定位区分异步请求与观测 |
 | `native/TrackFreezeOperations.cs` | 会话自有冻结缓存、时基物化和作者态保存 | 多片段/非零起点/效果/自动化与正式 MCP 通过；不持久化冻结标志 |
-| `native/ProjectArchivePreservation.cs` | 未知字段、实体身份和额外归档资源保留 | 五级及固定嵌套对象、历史与资源通过；复杂数组/复制语义有限制 |
+| `native/ProjectArchivePreservation.cs` | 未知字段、实体身份和额外归档资源保留 | 五级及固定嵌套对象、复制、历史与资源通过；复杂数组/拆合/跨工程语义有限制 |
+| `native/MidiRecordingOperations.cs`、`native/MidiRecordingGuards.cs` | 设备枚举、MIDI 事件队列、事务录制及会话保护 | 六操作、速度变化、静音同步及保存重开通过；硬件与驱动错误路径未验 |
 | `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 30 个操作有成功调用；样式及 HMM 通过，经典 Singing Skill 重开受身份问题影响 |
 | `native/ProjectInterchange.cs` | 原生格式交换、复制、恢复与合并 | 真实 PPSF3/音频克隆通过；PPSF2/VSQX 经典完整往返需 DSE 声库 |
 | `native/ProjectClipboard.cs` | 私有原生快照剪贴板 | 5 个操作及源关闭后的 MIDI 跨工程粘贴通过 |
 | `native/RpcServer.cs` | 单线程 JSON 行协议、原生对象发现与精确签名调用 | 已编译 |
 | `vocaloid_bridge/native_client.py` | 私有 desktop、Job Object、管道客户端与 DLL 快照 | 独立构建副本启动、关闭清理通过 |
-| `vocaloid_bridge/server.py` | 36 个 MCP 工具、资源、写歌提示 | 36 工具均有真实 stdio 成功调用 |
+| `vocaloid_bridge/server.py` | 37 个 MCP 工具、资源、写歌提示 | 新 MIDI 工具在独立 stdio 连接实测；历史工具覆盖见历史回执 |
 | `vocaloid_bridge/operations.json` | 原生 dispatch 对照的随包操作索引 | 由生成器维护，区分入口发现与实测 |
 | `tools/generate_operation_catalog.py` | 操作目录生成及漂移检查 | 按源码和文档生成 |
 | `vocaloid_bridge/projects.py` | VPR 结构化编排 | 音素扩展冲突写入被拒绝，无关修改及重开通过 |
@@ -32,6 +33,8 @@
 | `tools/check_voicecolor_audio.py`、`tools/check_score_parameters.py` | VoiceColor 和 Take 定向音频测量 | 三个 AI VoiceColor 及 Take 差异通过；六个经典 VoiceColor 待 DSE |
 | `tools/check_transport.py`、`tools/check_track_freeze.py` | 设备传输和冻结的真实 MCP/原生回归 | 正式入口、失败清理、作者态及静音传输通过 |
 | `tools/check_project_preservation.py` | 扩展数据和原生对象历史回归 | 未知字段、嵌套、额外资源、替换及参数编辑通过 |
+| `tools/check_midi_recording.py`、`tools/check_midi_recording_case.py` | MIDI 显式事件流、静音同步及操作目录回归 | 已验无硬件事件流及静音输出；真实 MIDI 输入未验 |
+| `tools/check_audio_recording.py` | 录音与宿主接口静态证据 | 仅读取安装文件；未加载 VST 或打开音频输入 |
 | `tools/check_internal_rate_static.py` | 安装版本的采样率分支取证 | 只读静态证据；不当作 96 kHz 动态验收 |
 | `tools/fetch_public_ppsf_fixture.py` | 公开样本获取及来源记录 | 作者原始 PPSF3 与最小格式夹具分开标识；歌曲不入 Git |
 | `docs/feature-matrix.md` | 官方手册与原生接口逐项覆盖 | 证据已回填，未验、缺失和受限项保留 |
@@ -64,3 +67,4 @@
 | 2026-11-10 | 升级 0.2.0：36 工具、108 操作有成功调用；新增样式、HMM、细化编辑、操作目录和独立缓存。整合仍有经典格式、Robot 及缺样本项。 |
 | 2026-11-10 | 升级 0.2.1：109 操作，Robot 零缓存修复、PPSF3 真实样本、项目完整性保护、全部表现参数及 Take/AI VoiceColor 定向验证；经典与外部环境边界保留。 |
 | 2026-11-10 | 升级 0.3.0：119 操作，原生设备传输、会话冻结、未知字段/资源与历史保留；定向回归通过，扩展格式及经典资源边界继续保留。 |
+| 2026-11-10 | 升级 0.4.0：125 操作，默认 AI 轨、扩展数据复制、MIDI 事件流和静音同步定向通过；硬件输入、拆合与 DAW 边界保留。 |

@@ -300,7 +300,7 @@
         {
           "operation": "track.create",
           "contract_rows": [
-            "| `track.create` | Optional `type` (`Midi`, `MidiAi`, `Audio`; default `Midi`), `name` (default `Track`), insertion `index` (default append) | Created track summary |"
+            "| `track.create` | Optional `type` (`Midi`, `MidiAi`, `Audio`; default `MidiAi`), `name` (default `Track`), insertion `index` (default append) | Created track summary |"
           ]
         },
         {
@@ -706,6 +706,49 @@
         {
           "operation": "paste",
           "contract_rows": []
+        }
+      ]
+    },
+    "midi": {
+      "tool": "project_midi",
+      "rpc": "midi_recording",
+      "documentation": "docs/midi-recording.md",
+      "operations": [
+        {
+          "operation": "cancel",
+          "contract_rows": [
+            "| `cancel` | none | Close owned input and discard queued events |"
+          ]
+        },
+        {
+          "operation": "devices",
+          "contract_rows": [
+            "| `devices` | none; session ID may be omitted | WinMM input indices, names and capabilities; no input opened |"
+          ]
+        },
+        {
+          "operation": "start",
+          "contract_rows": [
+            "| `start` | `mode`, `track_index`, `part_index`, `lyric`, `phonemes`, `lang_id`; independent mode also needs `start_tick`; device mode needs `device_id`, `device_name` | Active source, target, event count, origin and synchronization flag |"
+          ]
+        },
+        {
+          "operation": "status",
+          "contract_rows": [
+            "| `status` | none | Active/source-closed state, target, event count, overflow and ignored-message count |"
+          ]
+        },
+        {
+          "operation": "stop",
+          "contract_rows": [
+            "| `stop` | `end_ms` in synthetic mode; no `end_ms` in device mode | Inserted notes, held notes closed on stop, unmatched note-offs and ignored non-note messages |"
+          ]
+        },
+        {
+          "operation": "synthetic_events",
+          "contract_rows": [
+            "| `synthetic_events` | `events` array | Updated synthetic recording status; no hardware used |"
+          ]
         }
       ]
     }

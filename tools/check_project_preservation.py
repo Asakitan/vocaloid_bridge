@@ -186,5 +186,108 @@ async def parameter_edits(check):
     await check.close(sid)
 
 
+@v.feature("preservation.duplicates", "preservation", "score_compose", "project_edit", "project_open", "project_save", "project_clone")
+async def duplicates(check):
+    seed = await check.call("score_compose", output_name=check.output("duplicates-seed"), title="Duplicate metadata", bpm=120,
+                            notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+    await check.close(seed["native_session"]["session_id"])
+    sequence, members = v.read_vpr(seed["path"])
+    track = sequence["tracks"][0]; part = track["parts"][0]; note = part["notes"][0]
+    track[KEY] = "track-copy"; part[KEY] = "part-copy"; note[KEY] = "note-copy"
+    note["exp"][NESTED_KEY] = {"copy": [1, 2]}
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    source = v.ROOT / "output" / check.output("duplicates-input")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items(): archive.writestr(name, payload)
+    original = source.read_bytes()
+    identifier = (await check.call("project_open", path=str(source)))["session_id"]
+    await check.edit(identifier, "track.duplicate", track_index=0, name=track["name"])
+    saved, same_path = await check.save(identifier, "duplicates-same-name")
+    def check_track(track):
+        v.require(track[KEY] == "track-copy", "Copied track metadata lost")
+        v.require(track["parts"][0][KEY] == "part-copy", "Copied part metadata lost")
+        v.require(track["parts"][0]["notes"][0][KEY] == "note-copy" and
+                  track["parts"][0]["notes"][0]["exp"][NESTED_KEY] == {"copy": [1, 2]}, "Copied note metadata lost")
+    v.require(len(saved["tracks"]) == 2 and saved["tracks"][0]["name"] == saved["tracks"][1]["name"],
+              "Test requires same-name duplicate tracks")
+    for track in saved["tracks"]: check_track(track)
+    divergent = json.loads(json.dumps(saved)); divergent["tracks"][1][KEY] = "different-unknown-value"
+    _, same_members = v.read_vpr(same_path)
+    same_members["Project/sequence.json"] = json.dumps(divergent, ensure_ascii=False).encode("utf-8")
+    ambiguous_path = v.ROOT / "output" / check.output("duplicates-ambiguous")
+    with zipfile.ZipFile(ambiguous_path, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in same_members.items(): archive.writestr(name, payload)
+    ambiguous_bytes = ambiguous_path.read_bytes()
+    await check.rejected("project_open", "indistinguishable|ambiguous", path=str(ambiguous_path))
+    v.require(ambiguous_path.read_bytes() == ambiguous_bytes, "Ambiguous open changed the source")
+    await check.edit(identifier, "undo")
+    undone, _ = await check.save(identifier, "duplicates-undo")
+    v.require(len(undone["tracks"]) == 1, "Undo did not remove duplicate")
+    check_track(undone["tracks"][0])
+    await check.edit(identifier, "redo")
+    await check.edit(identifier, "note.duplicate", track_index=0, part_index=0, note_index=0, start_tick=1920)
+    await check.edit(identifier, "part.duplicate", track_index=0, part_index=0, start_tick=9600)
+    expanded, path = await check.save(identifier, "duplicates-expanded")
+    v.require(len(expanded["tracks"]) == 2, "Redo did not restore duplicated track")
+    for track in expanded["tracks"]: check_track(track)
+    parts = expanded["tracks"][0]["parts"]
+    v.require(len(parts) == 2 and all(p[KEY] == "part-copy" for p in parts), "Part duplicate lost metadata")
+    v.require(all(len(p["notes"]) == 2 and all(n[KEY] == "note-copy" and n["exp"][NESTED_KEY] == {"copy": [1, 2]}
+                                               for n in p["notes"]) for p in parts), "Duplicated notes lost metadata")
+    await check.edit(identifier, "undo"); await check.edit(identifier, "undo")
+    reverted, _ = await check.save(identifier, "duplicates-children-undo")
+    v.require(len(reverted["tracks"][0]["parts"]) == 1 and len(reverted["tracks"][0]["parts"][0]["notes"]) == 1,
+              "Child duplicate undo did not restore the source tree")
+    await check.edit(identifier, "redo"); await check.edit(identifier, "redo")
+    expanded, path = await check.save(identifier, "duplicates-children-redo")
+    v.require(len(expanded["tracks"][0]["parts"]) == 2 and
+              all(n[KEY] == "note-copy" for p in expanded["tracks"][0]["parts"] for n in p["notes"]),
+              "Child duplicate redo lost note metadata")
+    reopened = (await check.call("project_open", path=str(path)))["session_id"]
+    clone = (await check.call("project_clone", session_id=reopened))["session_id"]
+    await check.close(reopened); await check.close(identifier)
+    cloned, _ = await check.save(clone, "duplicates-clone")
+    v.require(len(cloned["tracks"]) == 2 and all(t[KEY] == "track-copy" for t in cloned["tracks"]),
+              "Duplicate metadata did not survive source-independent clone")
+    v.require(source.read_bytes() == original, "Duplicate operations changed the original VPR")
+    await check.close(clone)
+
+
+@v.feature("preservation.native_duplicate_order", "preservation", "score_compose", "project_edit", "project_save", "project_open")
+async def native_duplicate_order(check):
+    seed = await check.call("score_compose", output_name=check.output("duplicate-order-seed"), title="Native order", bpm=120,
+                            notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0},
+                                   {"start": 1, "duration": .5, "pitch": 64, "lyric": "い", "phoneme": "i", "lang_id": 0}])
+    identifier = seed["native_session"]["session_id"]
+    original = (await check.edit(identifier, "track.list"))["tracks"][0]
+    await check.edit(identifier, "track.update", track_index=0, color=3)
+    await check.edit(identifier, "track.duplicate", track_index=0, name=original["name"])
+    await check.edit(identifier, "track.update", track_index=1, color=7)
+    await check.edit(identifier, "track.reorder", track_index=0, to_index=1)
+    await check.edit(identifier, "part.duplicate", track_index=0, part_index=0, start_tick=9600)
+    await check.edit(identifier, "note.duplicate", track_index=0, part_index=0, note_index=0, start_tick=1920)
+    tracks = (await check.edit(identifier, "track.list"))["tracks"]
+    parts = (await check.edit(identifier, "part.list", track_index=0))["parts"]
+    notes = (await check.edit(identifier, "note.list", track_index=0, part_index=0))["notes"]
+    saved, path = await check.save(identifier, "duplicate-order")
+    v.require([(t["name"], t["color"], t["type"]) for t in tracks] ==
+              [(t["name"], t["color"], {0: "Midi", 1: "Audio", 2: "MidiAi"}[t["type"]]) for t in saved["tracks"]],
+              "Native VPR track order differs from live enumeration")
+    v.require([(p["start_tick"], p["duration_tick"]) for p in parts] ==
+              [(p["pos"], p["duration"]) for p in saved["tracks"][0]["parts"]],
+              "Native VPR part order differs from live enumeration")
+    v.require([(n["start_tick"], n["number"]) for n in notes] ==
+              [(n["pos"], n["number"]) for n in saved["tracks"][0]["parts"][0]["notes"]],
+              "Native VPR note order differs from live enumeration")
+    reopened = (await check.call("project_open", path=str(path)))["session_id"]
+    reopened_tracks = (await check.edit(reopened, "track.list"))["tracks"]
+    v.require([(t["name"], t["color"], t["type"]) for t in reopened_tracks] ==
+              [(t["name"], t["color"], t["type"]) for t in tracks], "Native reopen changed track order")
+    check.evidence("native_duplicate_order", {"vpr": str(path), "tracks": tracks, "parts": parts,
+                                              "notes": [(n["start_tick"], n["number"]) for n in notes]})
+    await check.close(reopened)
+    await check.close(identifier)
+
+
 if __name__ == "__main__":
     raise SystemExit(v.main())

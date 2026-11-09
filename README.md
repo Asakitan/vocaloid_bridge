@@ -33,7 +33,7 @@ powershell -NoProfile -File .\tools\setup.ps1
 
 这些条目均使用 `E:/VC/vocaloid_bridge/.venv/Scripts/python.exe -m vocaloid_bridge`，并显式设置 `VOCALOID_WORKSPACE`、`PYTHONPATH` 为 `E:/VC/vocaloid_bridge`，`PYTHONUTF8` 为 `1`。从其他目录启动时，输出仍写到本项目的 `output`。Codex 的 `tool_timeout_sec` 为 180。
 
-Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前 0.3.0 提供 36 个工具和 119 个结构化操作；既有客户端需要重新加载 MCP 服务才能发现新版目录。没有强制重启客户端或改变登录、模型与其他 MCP 服务。
+Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前 0.4.0 提供 37 个工具和 125 个结构化操作；既有客户端需要重新连接 MCP 服务才能发现新版目录。本会话原有连接曾返回 `Transport closed`；新建的独立 stdio 客户端测试已通过。没有强制重启客户端或改变登录、模型与其他 MCP 服务。
 
 ## 工具
 
@@ -48,6 +48,7 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 | 精确签名调用、原生数据结构、集合 | `project_call`, `project_value_create`, `project_items` |
 | 结构化轨道、音符、曲线和历史 | `project_edit` |
 | 原生离线音频、效果、混缩和独立设备传输 | `project_audio` |
+| MIDI 输入设备枚举和音符录制 | `project_midi` |
 | 原生歌词、音素、样式与媒体库 | `project_library` |
 | 私有剪切、复制与粘贴 | `project_clipboard` |
 | 本机声库 | `voicebanks` |
@@ -57,9 +58,11 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 
 原生对象以会话内 `$ref` 标识。先调用 `project_members` 获取真实属性、参数类型和 `member_id`，再调用其他对象工具；不猜测重载签名。关闭会话后对象引用失效。
 
-完整清单见 [功能矩阵](docs/feature-matrix.md)，运行时也可读取 `vocaloid://features`。`vocaloid_operations` 返回全部结构化操作名及对应文档；用 `domain`、`operation` 定位接口，`include_documentation=true` 读取完整约定。参数见 [乐谱操作](docs/score-operations.md)、[音频操作](docs/audio-operations.md)、[媒体与音素操作](docs/library-operations.md) 和 [原生协议](docs/native-protocol.md)。`native_api_catalog` 可以显示未开放成员及原因；接口可发现不等于功能已经通过验收。
+完整清单见 [功能矩阵](docs/feature-matrix.md)，运行时也可读取 `vocaloid://features`。`vocaloid_operations` 返回全部结构化操作名及对应文档；用 `domain`、`operation` 定位接口，`include_documentation=true` 读取完整约定。参数见 [乐谱操作](docs/score-operations.md)、[音频操作](docs/audio-operations.md)、[MIDI 录制](docs/midi-recording.md)、[媒体与音素操作](docs/library-operations.md) 和 [原生协议](docs/native-protocol.md)。`native_api_catalog` 可以显示未开放成员及原因；接口可发现不等于功能已经通过验收。
 
 `score_compose` 使用编辑器生成的模板写入音符后，再让原生引擎打开生成的工程。音符时间单位是四分音符拍；`pitch` 可用 MIDI 数字或 `C4`。`lang_id` 为模板声明支持的语言编号。缺省模板引用本机 `asa` 声库，其他声库使用相应模板或原生声库设置接口。
+
+按当前 AI 工作流，`track.create` 未指定 `type` 时创建 `MidiAi` 轨道；它不会代替调用者挑选声库，新建片段合成前用 `voicebanks` 和 `voice.set` 显式选择已安装的 AI 声库。旧调用若需要传统轨，需显式传入 `type=Midi`；此默认值与 0.3.0 不同。
 
 可以直接向已连接 MCP 的模型提出：
 
@@ -74,6 +77,7 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 - 不启动 `VOCALOID6.exe`，不向用户窗口发送输入，不改变用户交互编辑器的播放状态。
 - 原生对象全部由宿主的同一 STA 线程使用；子进程归属 kill-on-close Job Object。
 - 设备传输明确选择枚举到的设备 ID，只管理 MCP 自己的音频引擎；准备期间先释放传输再修改所属工程。
+- MIDI 硬件录制需要显式设备 ID 与名称；测试用事件流是独立指定的输入，不代表硬件录制已验。同步模式仅使用本会话的播放时钟。
 - `track.freeze` 使用会话自有缓存；保存和克隆输出未冻结的作者状态，关闭清理缓存。
 - 工程输入可以是显式指定的本机 VPR；输出限定在工作区 `output`，默认不覆盖现有文件。
 - 未保存工程需要显式 `discard_changes=true` 才能关闭。原始输入工程不能被覆盖。
@@ -102,9 +106,11 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 
 0.3.0 的 [整合定向回执](artifacts/feature-acceptance-26a71f9b1dc5/summary.json) 验证正式冻结、119 项目录和静音设备传输。未知字段、固定嵌套对象和额外资源的保留，以及删除/重建、撤销/重做的实体关联，另有独立回执。详见 [工程保留](docs/project-preservation.md)、[设备传输](docs/transport.md) 和 [轨道冻结](docs/track-freeze.md)；这些范围不等于任意扩展格式、声库、设备与效果组合都已验证。
 
+0.4.0 的 [MIDI 事件流回执](artifacts/feature-acceptance-878d0c135692/summary.json) 覆盖六个 MIDI 操作；[独立回执](artifacts/midi-synthetic-3fa675486b20.json) 验证速度变化和静音 transport 同步。轨道、片段、音符复制保留扩展数据及历史的定向回执为 `artifacts/feature-acceptance-647c107fc2bd/preservation.duplicates.json`。硬件输入、扩展数据的分割／连接和 DAW 宿主仍有待验证的边界。
+
 原生混缩输出整工程或所选整轨，各分轨保留自己的时长；分轨不使用主效果和主音量自动化。`start_seconds`、`end_seconds` 和 `tail_seconds` 不受此原生入口支持，传入会明确报错。素材属性写入独立的 `property.json`；新建自有素材可在 `.vsclip` 中附加桥接元数据。
 
-当前本机 Dse=0、Dnn=21；经典 VPR 打开前检查已知类型转换条件，原生保存若丢失身份则在发布前报错，已有输出保持。用户选择暂不安装经典试用声库，相关经典声音与往返仍待具备资源后验收。静态音素表不是逐声库能力清单，设备/DAW 需要对应环境；VPR 保存成功不等于 WAV 合成成功。
+此前本机 Dse=0、Dnn=21；经典 VPR 打开前检查已知类型转换条件，原生保存若丢失身份则在发布前报错，已有输出保持。用户选择仅使用 AI 声库，未安装经典试用。静态音素表不是逐声库能力清单，设备/DAW 需要对应环境；VPR 保存成功不等于 WAV 合成成功。
 
 验收生成的工程、原生人声和混音保存在 `output/feature-012574702338-*` 等独立批次，路径及音频测量见逐项回执。每次运行使用独立名称，不覆盖已有工程或音频。无样本参数的 `VOCALOID6: full feature acceptance` 任务会将依赖样本的用例标为阻塞。
 

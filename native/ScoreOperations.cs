@@ -103,7 +103,7 @@ internal sealed partial class EngineHost
         {
             int index = ScoreInt(options, "index", 0, ScoreCount(sequence.NumTrack), ScoreCount(sequence.NumTrack));
             string name = ScoreString(options, "name", "Track");
-            string typeName = ScoreString(options, "type", "Midi");
+            string typeName = ScoreString(options, "type", "MidiAi");
             if (!Enum.TryParse(typeName, true, out VSMTrackType type) ||
                 type is not (VSMTrackType.Midi or VSMTrackType.MidiAi or VSMTrackType.Audio))
                 throw new ArgumentException("type must be Midi, MidiAi, or Audio.");
@@ -143,6 +143,7 @@ internal sealed partial class EngineHost
                     created.Name = name;
                     ScoreRequire(created.Name == name, operation, sequence);
                 }
+                session.ArchiveCopy?.Invoke(track, created);
                 return ScoreTrackSummary(created, destination);
             });
         }
@@ -307,8 +308,11 @@ internal sealed partial class EngineHost
                 if (operation == "part.move")
                     ScoreRequire(track.MovePart(new VSMAbsTick(start), target, part), operation, session.Sequence);
                 else
+                {
                     result = target.DuplicatePart(new VSMAbsTick(start), part)
                         ?? throw new InvalidOperationException("Native part.duplicate failed: " + target.LastError);
+                    session.ArchiveCopy?.Invoke(part, result);
+                }
                 return ScorePartSummary(target, result, destination);
             });
         }
@@ -426,6 +430,7 @@ internal sealed partial class EngineHost
             {
                 WIVSMNote created = part.DuplicateNote(new VSMRelTick(start), note!)
                     ?? throw new InvalidOperationException("Native note.duplicate failed: " + part.LastError);
+                session.ArchiveCopy?.Invoke(note!, created);
                 return ScoreNoteSummary(created, ScoreNoteIndex(part, created));
             });
 

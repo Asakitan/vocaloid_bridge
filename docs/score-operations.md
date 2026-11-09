@@ -60,7 +60,7 @@ made undoable by this wrapper. History is not a transaction journal for files.
 | Operation | Options | `result` |
 | --- | --- | --- |
 | `track.list` | None | `tracks`: track summaries |
-| `track.create` | Optional `type` (`Midi`, `MidiAi`, `Audio`; default `Midi`), `name` (default `Track`), insertion `index` (default append) | Created track summary |
+| `track.create` | Optional `type` (`Midi`, `MidiAi`, `Audio`; default `MidiAi`), `name` (default `Track`), insertion `index` (default append) | Created track summary |
 | `track.update` | `track_index`; one or more of `name`, native palette `color` (0..15), `mute`, `solo`, `bus_no`, MIDI-only `midi_recording` | Updated track summary |
 | `track.remove` | `track_index` | `removed`, old `track_index` |
 | `track.reorder` | `track_index`, `to_index` in the existing list | Moved track summary |
@@ -73,6 +73,10 @@ Track summaries contain `track_index`, native `type`, `name`, `color`, `mute`,
 `solo`, and `part_count`. Track duplication uses the installed public
 `DuplicateTrack(ulong, WIVSMTrack, out string)` overload, not manual reconstruction.
 Native track-count limits are checked before insertion and duplication.
+The omitted-type default is `MidiAi` for the requested VOCALOID:AI workflow;
+clients requiring the previous classic-track behavior must pass `type=Midi`
+explicitly. This selects a track type, not a replacement voicebank; assign an
+installed AI voice explicitly with `voice.set` before synthesizing a new part.
 The installed `TrackColorTable` has 16 entries; `color` is an index, not packed
 RGB or ARGB. Invalid colors fail validation before any supplied field is changed.
 Unchanged fields are skipped rather than treating native no-op setter results

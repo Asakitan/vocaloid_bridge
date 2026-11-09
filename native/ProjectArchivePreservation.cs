@@ -254,7 +254,14 @@ internal sealed partial class EngineHost
                     }
                 }
             }
-            if (state.HasEntityExtensions) ArchiveValidateUnambiguous(tracks);
+            if (state.HasEntityExtensions)
+            {
+                ArchiveValidateUnambiguous(tracks);
+                for (int index = 0; index < tracks.Count; index++)
+                    ArchiveValidateTrackDetails(session.Sequence.GetTrack((ulong)index)
+                        ?? throw new InvalidDataException("project_preservation: missing track."),
+                        ArchiveObject(tracks[index], "/tracks[]"));
+            }
             // Referenced audio remains native-managed; opaque members that were
             // already unreferenced are retained as independent archive content.
             HashSet<string> audioNames = new(StringComparer.OrdinalIgnoreCase);
@@ -298,6 +305,7 @@ internal sealed partial class EngineHost
                 BeginArchiveMutation(session, operation);
             };
             if (state.HasEntityExtensions) session.ArchiveEnd = action => EndArchiveMutation(session, action);
+            if (state.HasEntityExtensions) session.ArchiveCopy = (source, target) => ArchiveCopyDuplicate(session, source, target);
         }
         catch
         {
@@ -324,6 +332,15 @@ internal sealed partial class EngineHost
             throw new InvalidDataException("project_preservation: native track order or identity differs from serialized data.");
     }
 
+    private static void ArchiveValidateTrackDetails(WIVSMTrack track, JsonObject json)
+    {
+        if ((json["color"] is not null && json["color"]!.GetValue<int>() != track.Color) ||
+            (json["isMuted"] is not null && json["isMuted"]!.GetValue<bool>() != track.IsMute) ||
+            (json["isSoloMode"] is not null && json["isSoloMode"]!.GetValue<bool>() != track.IsSolo) ||
+            (json["busNo"] is not null && json["busNo"]!.GetValue<uint>() != track.GetBusNo()))
+            throw new InvalidDataException("project_preservation: native track order or identity differs from serialized data.");
+    }
+
     private static void ArchiveValidatePart(WIVSMPart part, JsonObject json)
     {
         if ((json["name"] is not null && ArchiveString(json, "name") != part.Name) ||
@@ -335,31 +352,135 @@ internal sealed partial class EngineHost
     private static void ArchiveValidateUnambiguous(JsonArray tracks)
     {
         static string Key(JsonObject value, params string[] names) => string.Join("|", names.Select(name => value[name]?.ToJsonString() ?? "null"));
-        HashSet<string> trackKeys = new(StringComparer.Ordinal);
+        Dictionary<string, JsonObject> trackKeys = new(StringComparer.Ordinal);
         foreach (JsonNode? trackNode in tracks)
         {
             JsonObject track = ArchiveObject(trackNode, "tracks[]");
-            if (!trackKeys.Add(Key(track, "type", "name")))
-                throw new InvalidDataException("project_preservation: ambiguous track identities in snapshot.");
             HashSet<string> partKeys = new(StringComparer.Ordinal);
+            List<string> trackShape = [Key(track, "type", "name", "color", "isMuted", "isSoloMode", "busNo")];
             foreach (JsonNode? partNode in ArchiveArray(track["parts"], "parts"))
             {
                 JsonObject part = ArchiveObject(partNode, "parts[]");
                 if (!partKeys.Add(Key(part, "name", "pos", "duration")))
                     throw new InvalidDataException("project_preservation: ambiguous part identities in snapshot.");
+                trackShape.Add(Key(part, "name", "pos", "duration"));
+                if (part["wav"] is JsonObject wav) trackShape.Add(Key(wav, "name", "originalName", "processedName"));
+                if (part["region"] is JsonObject region) trackShape.Add(Key(region, "begin", "end"));
                 HashSet<string> noteKeys = new(StringComparer.Ordinal);
                 foreach (JsonNode? noteNode in ArchiveArray(part["notes"], "notes"))
                 {
                     JsonObject note = ArchiveObject(noteNode, "notes[]");
-                    if (!noteKeys.Add(Key(note, "pos", "duration", "number", "lyric", "phoneme")))
+                    string noteKey = Key(note, "pos", "duration", "number", "lyric", "phoneme");
+                    if (!noteKeys.Add(noteKey))
                         throw new InvalidDataException("project_preservation: ambiguous note identities in snapshot.");
+                    trackShape.Add(noteKey);
                 }
             }
+            string signature = JsonSerializer.Serialize(trackShape);
+            if (trackKeys.TryGetValue(signature, out JsonObject? previous))
+            {
+                if (!JsonNode.DeepEquals(previous, track))
+                    throw new InvalidDataException("project_preservation: indistinguishable track identities carry different data.");
+            }
+            else trackKeys.Add(signature, track);
         }
     }
 
     private bool HasArchiveEntityExtensions(EngineSession session) =>
         archiveStates.TryGetValue(session.Id, out ArchiveState? state) && state.HasEntityExtensions;
+
+    private readonly record struct ArchiveNoteSignature(long Position, long Duration, int Number, int Velocity,
+        string Lyric, string Phonemes, int Language, bool Valid);
+    private readonly record struct ArchivePartSignature(long Position, long Duration, string Name);
+
+    private static ArchiveNoteSignature ArchiveNoteKey(WIVSMNote note) => new(note.RelPosTick.Value,
+        note.DurationTick.Value, note.NoteNumber, note.NoteVelocity, note.Lyric, note.Phonemes,
+        note.LangID, note.IsValidPhonemes);
+
+    private static ArchivePartSignature ArchivePartKey(WIVSMPart part) =>
+        new(part.AbsPosTick.Value, part.DurationTick.Value, part.Name);
+
+    // Called inside the corresponding ScoreMutate action, after the native
+    // duplicate returned its new object and before Commit(true). Children are
+    // paired by unique native semantic signatures, not by collection indices.
+    private void ArchiveCopyDuplicate(EngineSession session, object source, object target)
+    {
+        if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state) || !state.HasEntityExtensions) return;
+        if (state.Before is null || state.Action is not ("track.duplicate" or "part.duplicate" or "note.duplicate"))
+            throw new InvalidOperationException("project_preservation: duplicate outside its tracked transaction.");
+        List<(ArchiveEntity Source, ArchiveEntity Target, ArchiveEntity? Parent)> pending = [];
+        void Add(object original, object copy, ArchiveEntity? parent)
+        {
+            ArchiveEntity from = ArchiveKey(original), to = ArchiveKey(copy);
+            if (from.Pointer == nint.Zero || to.Pointer == nint.Zero || from == to || state.Live.ContainsKey(to) ||
+                pending.Any(pair => pair.Target == to))
+                throw new InvalidDataException("project_preservation: duplicate native identity is invalid or already tracked.");
+            if (state.Live.ContainsKey(from)) pending.Add((from, to, parent));
+        }
+        void CopyNotes(WIVSMMidiPart original, WIVSMMidiPart copy)
+        {
+            WIVSMNote[] sourceNotes = original.Notes.ToArray(), targetNotes = copy.Notes.ToArray();
+            if (sourceNotes.Length != targetNotes.Length)
+                throw new InvalidDataException("project_preservation: duplicated part changed note count.");
+            Dictionary<ArchiveNoteSignature, WIVSMNote> targets = [];
+            foreach (WIVSMNote note in targetNotes)
+                if (!targets.TryAdd(ArchiveNoteKey(note), note))
+                    throw new InvalidDataException("project_preservation: duplicate has ambiguous note identities.");
+            HashSet<ArchiveNoteSignature> used = [];
+            foreach (WIVSMNote note in sourceNotes)
+            {
+                ArchiveNoteSignature key = ArchiveNoteKey(note);
+                if (!used.Add(key) || !targets.TryGetValue(key, out WIVSMNote? copyNote))
+                    throw new InvalidDataException("project_preservation: duplicated note correspondence is ambiguous or changed.");
+                Add(note, copyNote ?? throw new InvalidDataException("project_preservation: duplicated note is missing."), ArchiveKey(copy));
+            }
+        }
+        void CopyPart(WIVSMPart original, WIVSMPart copy, ArchiveEntity targetTrack)
+        {
+            if (original.Name != copy.Name || original.DurationTick.Value != copy.DurationTick.Value)
+                throw new InvalidDataException("project_preservation: duplicated part identity fields changed.");
+            Add(original, copy, targetTrack);
+            if (original is WIVSMMidiPart midi && copy is WIVSMMidiPart targetMidi) CopyNotes(midi, targetMidi);
+            else if ((original is WIVSMMidiPart) != (copy is WIVSMMidiPart))
+                throw new InvalidDataException("project_preservation: duplicated part kind changed.");
+        }
+        if (source is WIVSMTrack track && target is WIVSMTrack copiedTrack && state.Action == "track.duplicate")
+        {
+            if (track.Type != copiedTrack.Type || track.NumParts != copiedTrack.NumParts)
+                throw new InvalidDataException("project_preservation: duplicated track type or part count changed.");
+            Add(track, copiedTrack, null);
+            Dictionary<ArchivePartSignature, WIVSMPart> targets = [];
+            foreach (WIVSMPart part in copiedTrack.Parts)
+                if (!targets.TryAdd(ArchivePartKey(part), part))
+                    throw new InvalidDataException("project_preservation: duplicate has ambiguous part identities.");
+            HashSet<ArchivePartSignature> used = [];
+            foreach (WIVSMPart part in track.Parts)
+            {
+                ArchivePartSignature key = ArchivePartKey(part);
+                if (!used.Add(key) || !targets.TryGetValue(key, out WIVSMPart? copiedPart))
+                    throw new InvalidDataException("project_preservation: duplicated part correspondence is ambiguous or changed.");
+                CopyPart(part, copiedPart ?? throw new InvalidDataException("project_preservation: duplicated part is missing."), ArchiveKey(copiedTrack));
+            }
+        }
+        else if (source is WIVSMMidiPart part && target is WIVSMMidiPart copiedPart && state.Action == "part.duplicate")
+        {
+            WIVSMMidiTrack parent = copiedPart.Parent
+                ?? throw new InvalidDataException("project_preservation: duplicated part has no parent.");
+            CopyPart(part, copiedPart, ArchiveKey(parent));
+        }
+        else if (source is WIVSMNote note && target is WIVSMNote copiedNote && state.Action == "note.duplicate")
+        {
+            ArchiveNoteSignature original = ArchiveNoteKey(note), copy = ArchiveNoteKey(copiedNote);
+            if (original with { Position = copy.Position } != copy)
+                throw new InvalidDataException("project_preservation: duplicated note identity fields changed.");
+            WIVSMMidiPart parent = copiedNote.Parent
+                ?? throw new InvalidDataException("project_preservation: duplicated note has no parent.");
+            Add(note, copiedNote, ArchiveKey(parent));
+        }
+        else throw new InvalidOperationException("project_preservation: duplicate kind does not match the native operation.");
+        foreach ((ArchiveEntity from, ArchiveEntity to, ArchiveEntity? parent) in pending)
+            state.Live.Add(to, new ArchiveEntry((JsonObject)state.Live[from].Extra.DeepClone(), parent));
+    }
 
     internal void CheckArchiveRequest(EngineSession session, string method, JsonElement parameters)
     {
@@ -403,9 +524,9 @@ internal sealed partial class EngineHost
     private void RequireArchiveMutationSupported(EngineSession session, string operation)
     {
         if (!HasArchiveEntityExtensions(session)) return;
-        if (operation is not ("track.create" or "track.update" or "track.reorder" or "track.remove" or
-            "part.create" or "part.update" or "part.move" or "part.resize" or "part.remove" or
-            "note.update" or "note.remove" or "note.add" or "note.clear" or "note.batch_update" or
+        if (operation is not ("track.create" or "track.update" or "track.reorder" or "track.remove" or "track.duplicate" or
+            "part.create" or "part.update" or "part.move" or "part.resize" or "part.remove" or "part.duplicate" or
+            "note.update" or "note.remove" or "note.add" or "note.clear" or "note.batch_update" or "note.duplicate" or
             "voice.set" or "tempo.set" or "tempo.remove" or "time_signature.set" or "time_signature.remove" or
             "controller.set" or "controller.remove" or "automation.set" or "automation.remove" or "loop.set" or
             "tuning.set" or "vibrato.set" or "phoneme_timing.set" or "phoneme_timing.reset" or
@@ -523,7 +644,6 @@ internal sealed partial class EngineHost
         ArchiveOverlay(root, state.Root); ArchiveOverlay(master, state.Master);
         JsonArray tracks = ArchiveArray(root["tracks"], "/tracks");
         if ((ulong)tracks.Count != session.Sequence.NumTrack) throw new InvalidDataException("project_preservation: snapshot track count changed.");
-        if (state.HasEntityExtensions) ArchiveValidateUnambiguous(tracks);
         if (state.HasEntityExtensions)
         {
         HashSet<ArchiveEntity> seen = [];
@@ -537,6 +657,7 @@ internal sealed partial class EngineHost
             JsonObject trackJson = ArchiveObject(tracks[ti], "/tracks[]");
             WIVSMTrack track = session.Sequence.GetTrack((ulong)ti) ?? throw new InvalidDataException("project_preservation: missing snapshot track.");
             ArchiveValidateTrack(track, trackJson);
+            ArchiveValidateTrackDetails(track, trackJson);
             Overlay(track, trackJson);
             JsonArray parts = ArchiveArray(trackJson["parts"], "parts");
             if ((ulong)parts.Count != track.NumParts) throw new InvalidDataException("project_preservation: snapshot part count changed.");
@@ -559,6 +680,7 @@ internal sealed partial class EngineHost
         }
         if (seen.Count != state.Live.Count)
             throw new InvalidDataException("project_preservation: tracked object is no longer present; refusing ambiguous attachment.");
+        ArchiveValidateUnambiguous(tracks);
         }
         File.WriteAllText(path, root.ToJsonString());
         foreach (string relative in state.ExtraFiles)
@@ -609,6 +731,7 @@ internal sealed partial class EngineHost
         if (!archiveStates.Remove(session.Id, out ArchiveState? state)) return;
         session.ArchiveBegin = null;
         session.ArchiveEnd = null;
+        session.ArchiveCopy = null;
         if (state.ObserverAttached)
         {
             session.Sequence.RemoveUpdateObserver(state.Observer);

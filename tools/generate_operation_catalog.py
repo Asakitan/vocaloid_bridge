@@ -12,6 +12,7 @@ DOMAINS = {
     "audio": ("AudioOperations.cs", "project_audio", "audio-operations.md", "audio_op"),
     "library": ("LibraryOperations.cs", "project_library", "library-operations.md", "library_op"),
     "clipboard": ("ProjectClipboard.cs", "project_clipboard", "native-protocol.md", "clipboard"),
+    "midi": ("MidiRecordingOperations.cs", "project_midi", "midi-recording.md", "midi_recording"),
 }
 DESTINATION = ROOT / "vocaloid_bridge" / "operations.json"
 
@@ -20,11 +21,14 @@ def generate() -> dict:
     result = {"schema_version": 1, "verification": "Discovery only; use vocaloid_features for acceptance evidence.", "domains": {}}
     for domain, (source_name, tool, doc_name, rpc) in DOMAINS.items():
         source = (ROOT / "native" / source_name).read_text(encoding="utf-8-sig")
-        start = source.index("operation switch")
-        switch = source[start:source.index("};", start)]
-        names = set(re.findall(r'"([a-z][a-z0-9_.]*)"\s*(?:or|=>)', switch))
-        if domain == "clipboard":
-            names.update(re.findall(r'if \(operation == "([a-z]+)"\)', source[:start]))
+        if domain == "midi":
+            names = set(re.findall(r'if \(operation (?:==|!=) "([a-z][a-z0-9_]*)"\)', source))
+        else:
+            start = source.index("operation switch")
+            switch = source[start:source.index("};", start)]
+            names = set(re.findall(r'"([a-z][a-z0-9_.]*)"\s*(?:or|=>)', switch))
+            if domain == "clipboard":
+                names.update(re.findall(r'if \(operation == "([a-z]+)"\)', source[:start]))
         document = (ROOT / "docs" / doc_name).read_text(encoding="utf-8-sig")
         rows = [line for line in document.splitlines() if line.startswith("|")]
         result["domains"][domain] = {

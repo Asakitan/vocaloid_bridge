@@ -66,7 +66,7 @@ automatic retry are implemented. Startup failures go to stderr and exit nonzero.
 | `close` | session_id; discard=false | session_id, closed=true |
 | `voices` | `{}` | voices array from the real DatabaseManager |
 | `api_catalog` | optional exact type/namespace; include_excluded=true; offset=0; limit=25 | installed type/member metadata and exclusion reasons |
-| `import_project` | absolute path; code_page=65001; prefer_ai=true | imported session summary |
+| `import_project` | absolute path; code_page=65001; prefer_ai=true for MIDI/SMF/VSQ loader only | imported session summary |
 | `export_midi` | session_id; output_name; encoding=Utf8; overwrite=false | native Standard MIDI File metadata |
 | `clone_project` | session_id; optional title | independent native session summary |
 | `revert_project` | session_id; discard=false | replacement session summary; old session closed |
@@ -75,6 +75,7 @@ automatic retry are implemented. Startup failures go to stderr and exit nonzero.
 | `audio_op` | session_id; operation; options object | native audio/effect result |
 | `library_op` | optional session_id; operation; options object | native language/style/media result |
 | `clipboard` | optional session_id; operation; options object | private native clipboard result |
+| `midi_recording` | optional session_id for `devices`; operation; options object | native-session MIDI recording result |
 
 The MCP `vocaloid_status` wrapper also returns `server_pid` for the Python process,
 separate from the native host's `pid`. Verification attributes foreground windows
@@ -84,7 +85,7 @@ The historical real-MCP acceptance receipt is
 `artifacts/feature-acceptance-19d5e92a5f26/summary.json`: 44 feature cases plus
 cleanup pass, covering all 35 advertised tools and the 81 structured operations.
 This does not certify every raw native member, voice, effect, or file format.
-The current 36-tool, 119-operation surface and subsequent focused receipts are
+The current 37-tool, 125-operation surface and subsequent focused receipts are
 listed in `STATUS.md`. Open/load and save/clone now check native track and voice
 identity. The known no-classic-bank condition reports `missing_classic_bank`
 before loading a classic VPR; a lossy native snapshot reports
@@ -98,6 +99,14 @@ Seek requests are asynchronous: `requested_seconds` is distinct from observed
 `seconds`. Frozen track caches are likewise session-owned; saved/cloned VPRs
 retain the pre-freeze authoring effect state. Raw writes to `IsFrozen` are
 excluded in favor of the complete structured operation.
+
+`midi_recording` allows session-free `devices`; other operations require the
+session. Input callbacks enqueue MIDI notes only, while tempo conversion and
+VSM writes occur on the owning STA. Synchronized recording uses an already
+playing transport from that same session and releases it before score commit.
+Recording blocks session mutations and session-scoped clipboard/library calls;
+session close with pending recording requires explicit discard. Event-stream
+and muted-transport tests passed; hardware MIDI capture remains unverified.
 
 For VPR extensions, the host binds supported unknown properties to observed
 native entity lifetimes and transaction history, then overlays only those

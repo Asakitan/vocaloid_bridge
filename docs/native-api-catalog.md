@@ -175,6 +175,8 @@ Their dedicated routes do not remove generic file/path or lifecycle exclusions.
 checked UInt32, and `prefer_ai=true`; `export_midi` is session-scoped with required
 `output_name`, `encoding="Utf8"`, and `overwrite=false`. The host implementations
 remain responsible for paths, formats, and ownership.
+The `prefer_ai` flag is forwarded only to the MIDI/SMF/VSQ loader; it does not
+convert VPR, VSQX or PPSF tracks or assign a voicebank.
 
 ## Validation Boundary
 

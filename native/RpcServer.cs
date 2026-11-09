@@ -78,19 +78,32 @@ internal sealed class RpcServer(EngineHost host, string desktop)
             return host.ImportProject(RequiredString(parameters, "path"), checked((uint)Integer(parameters, "code_page", 65001)), Boolean(parameters, "prefer_ai", true)).Summary();
         if (method == "voices")
             return host.Voices();
+        if (method == "midi_recording")
+        {
+            string? id = OptionalString(parameters, "session_id");
+            string operation = RequiredString(parameters, "operation");
+            JsonElement options = Required(parameters, "options");
+            if (operation != "devices")
+                host.CheckMidiStart(host.GetSession(id ?? throw new ArgumentException("session_id is required.")), operation);
+            object result = host.MidiRecordingOperation(id, operation, options);
+            return new { session_id = id, operation, native = true, result };
+        }
         if (method == "library_op")
         {
+            host.CheckSessionExternalAccess(OptionalString(parameters, "session_id"));
             host.CheckArchiveExternalOperation(OptionalString(parameters, "session_id"), "library", RequiredString(parameters, "operation"));
             host.CheckFrozenExternalOperation(OptionalString(parameters, "session_id"), "library", RequiredString(parameters, "operation"));
             return host.LibraryOperation(OptionalString(parameters, "session_id"), RequiredString(parameters, "operation"), Required(parameters, "options"));
         }
         if (method == "clipboard")
         {
+            host.CheckSessionExternalAccess(OptionalString(parameters, "session_id"));
             host.CheckArchiveExternalOperation(OptionalString(parameters, "session_id"), "clipboard", RequiredString(parameters, "operation"));
             host.CheckFrozenExternalOperation(OptionalString(parameters, "session_id"), "clipboard", RequiredString(parameters, "operation"));
             return host.ClipboardOperation(OptionalString(parameters, "session_id"), RequiredString(parameters, "operation"), Required(parameters, "options"));
         }
         EngineSession session = host.GetSession(RequiredString(parameters, "session_id"));
+        host.CheckMidiRecordingAccess(session, method, parameters);
         host.CheckTransportAccess(session, method, parameters);
         host.CheckArchiveRequest(session, method, parameters);
         host.CheckFrozenRequest(session, method, parameters);

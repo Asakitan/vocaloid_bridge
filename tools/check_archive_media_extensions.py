@@ -37,8 +37,9 @@ async def media_entities(check):
     try:
         captured = (await check.library('media_capture', sid, track_index=0, part_index=0, name='Entity ' + check.run_id))['clip']
         clip_id = captured['clip_id']
-        await check.rejected('project_library', 'archive metadata', session_id=sid, operation='media_update',
-                             options={'clip_id': clip_id, 'name': 'unsupported update'})
+        before_clip = Path(captured['path']).read_bytes()
+        await check.library('media_update', sid, clip_id=clip_id, name='Updated ' + check.run_id)
+        v.require(Path(captured['path']).read_bytes() == before_clip, 'Property edit changed archived clip bytes')
         controller_target = (await check.call('project_open', path=str(controller_path)))['session_id']
         try:
             controller_history = await check.edit(controller_target, 'history.status')
@@ -67,9 +68,8 @@ async def media_entities(check):
             wave_path = Path(temp) / 'fixture.wav'
             make_wave(wave_path, .03)
             source_history = await check.edit(sid, 'history.status')
-            await check.rejected('project_audio', 'identity transaction|preservation', session_id=sid,
-                                 operation='import_audio', options={'path': str(wave_path)})
-            await check.rejected('project_audio', 'identity transaction|preservation', session_id=sid,
+            # Extended import/edit success is covered by agent_mutations_33.
+            await check.rejected('project_audio', 'audio|track', session_id=sid,
                                  operation='edit_audio', options={'track_index': 0, 'part_index': 0, 'name': 'guarded'})
             v.require(await check.edit(sid, 'history.status') == source_history,
                       'Audio guard changed target history')

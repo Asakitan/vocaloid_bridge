@@ -30,6 +30,8 @@ internal sealed class MediaPropertyJournal : IDisposable
     private const string Format = "vocaloid-media-property-journal";
     private sealed record Record(string Format, int Version, string Token, string ClipId, string ClipIdentity,
         string ClipHash, string OriginalIdentity, string OriginalHash, string CandidateIdentity, string CandidateHash);
+    private sealed record Decision(int Version, string Choice, string JournalHash, string AcceptedIdentity, string AcceptedHash);
+    private sealed record Observed(string Identity, string Hash);
 
     private readonly string workspace, id, stage, target;
     private readonly MediaLibraryLease lease;
@@ -126,6 +128,92 @@ internal sealed class MediaPropertyJournal : IDisposable
         return recovered;
     }
 
+    internal static object ListPending(string workspace)
+    {
+        using MediaLibraryLease lease = new(workspace);
+        string root = JournalRoot(workspace);
+        if (!Directory.Exists(root)) return new { journals = Array.Empty<object>() };
+        PathGuard.NoLinks(root);
+        List<object> journals = [];
+        foreach (string stage in Directory.EnumerateDirectories(root).OrderBy(path => path, StringComparer.Ordinal))
+        {
+            string token = Path.GetFileName(stage);
+            if (!Guid.TryParseExact(token, "N", out _) || !File.Exists(Path.Combine(stage, "journal.json"))) continue;
+            try
+            {
+                PathGuard.TreeNoLinks(stage);
+                Record record = ReadRecord(Path.Combine(stage, "journal.json"), stage);
+                Observed current = ObserveFile(Target(workspace, record.ClipId));
+                Observed clip = ObserveFile(ClipPath(workspace, record.ClipId));
+                string state = File.Exists(Path.Combine(stage, "committed.json")) ? "committed"
+                    : current.Hash == record.OriginalHash ? "original"
+                    : current.Identity == record.CandidateIdentity && current.Hash == record.CandidateHash ? "candidate"
+                    : current.Identity.Length == 0 ? "missing" : "conflict";
+                journals.Add(new { token, clip_id = record.ClipId, state,
+                    source_matches = clip.Identity == record.ClipIdentity && clip.Hash == record.ClipHash,
+                    revision = Revision(stage, current, clip), current_hash = current.Hash,
+                    original_hash = record.OriginalHash, candidate_hash = record.CandidateHash, path = stage });
+            }
+            catch (Exception error) { journals.Add(new { token, state = "unreadable", error = error.Message }); }
+        }
+        return new { journals };
+    }
+
+    internal static object Resolve(string workspace, string token, string choice, string expectedRevision, Action<string>? checkpoint = null)
+    {
+        if (!Guid.TryParseExact(token, "N", out _)) throw new ArgumentException("Invalid journal token.");
+        if (choice is not ("keep_current" or "restore_original")) throw new ArgumentException("choice must be keep_current or restore_original.");
+        using MediaLibraryLease lease = new(workspace);
+        string stage = PathGuard.Under(JournalRoot(workspace), token);
+        PathGuard.TreeNoLinks(stage);
+        Record record = ReadRecord(Path.Combine(stage, "journal.json"), stage);
+        if (File.Exists(Path.Combine(stage, "committed.json")) || File.Exists(Path.Combine(stage, "rolled-back.json")))
+            throw new InvalidOperationException("This journal is already completed; ordinary media access will clean it.");
+        string clipPath = ClipPath(workspace, record.ClipId), target = Target(workspace, record.ClipId);
+        PathGuard.NoLinks(clipPath);
+        using (FileStream? clip = File.Exists(clipPath) ? new(clipPath, FileMode.Open, FileAccess.Read, FileShare.Read) : null)
+        using (BoundFile? current = File.Exists(target) ? BoundFile.Open(target, false) : null)
+        {
+            byte[]? currentBytes = current?.Read();
+            Observed observed = current is null ? new("", "") : new(current.Identity, Hash(currentBytes!));
+            Observed observedClip = clip is null ? new("", "") : new(Identity(clip.SafeFileHandle), Hash(clip));
+            if (Revision(stage, observed, observedClip) != expectedRevision)
+                throw new IOException("Journal revision changed; inspect the current conflict before resolving.");
+            if (choice == "restore_original" && (observedClip.Identity != record.ClipIdentity || observedClip.Hash != record.ClipHash))
+                throw new IOException("The media clip identity changed; original properties will not be assigned to another clip.");
+            if (currentBytes is not null)
+                WriteDurable(Path.Combine(stage, "accepted-current-" + Guid.NewGuid().ToString("N") + ".json"), currentBytes);
+            string decisionPath = Path.Combine(stage, "resolution.json");
+            if (File.Exists(decisionPath))
+            {
+                using BoundFile previous = BoundFile.Open(decisionPath, false);
+                previous.Rename(Path.Combine(stage, "resolution-history-" + Guid.NewGuid().ToString("N") + ".json"));
+                previous.Flush();
+            }
+            Decision decision = new(1, choice, Hash(File.ReadAllBytes(Path.Combine(stage, "journal.json"))), observed.Identity, observed.Hash);
+            WriteMarker(decisionPath, JsonSerializer.SerializeToUtf8Bytes(decision));
+            checkpoint?.Invoke("decision");
+        }
+        RecoverOne(workspace, stage);
+        return new { resolved = true, token, clip_id = record.ClipId, choice,
+            recovery_archive = Path.Combine(HistoryRoot(workspace), token) };
+    }
+
+    private static Observed ObserveFile(string path)
+    {
+        PathGuard.NoLinks(path);
+        if (!File.Exists(path)) return new("", "");
+        using FileStream file = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return new(Identity(file.SafeFileHandle), Hash(file));
+    }
+
+    private static string Revision(string stage, Observed current, Observed clip)
+    {
+        string decision = Path.Combine(stage, "resolution.json");
+        return Hash(Encoding.UTF8.GetBytes(string.Join("|", Hash(File.ReadAllBytes(Path.Combine(stage, "journal.json"))),
+            current.Identity, current.Hash, clip.Identity, clip.Hash, File.Exists(decision) ? Hash(File.ReadAllBytes(decision)) : "")));
+    }
+
     private static void RecoverOne(string workspace, string stage)
     {
         PathGuard.TreeNoLinks(stage);
@@ -138,12 +226,22 @@ internal sealed class MediaPropertyJournal : IDisposable
             return;
         }
         Record journal = ReadRecord(Path.Combine(stage, "journal.json"), stage);
+        Decision? decision = null;
+        string decisionPath = Path.Combine(stage, "resolution.json");
+        if (File.Exists(decisionPath))
+        {
+            decision = JsonSerializer.Deserialize<Decision>(File.ReadAllBytes(decisionPath)) ?? throw new IOException("Invalid recovery decision.");
+            if (decision.Version != 1 || decision.Choice is not ("keep_current" or "restore_original") ||
+                decision.JournalHash != Hash(File.ReadAllBytes(Path.Combine(stage, "journal.json"))))
+                throw new IOException("Recovery decision does not match its journal.");
+            if (decision.Choice == "keep_current") { ArchiveResolved(workspace, stage); return; }
+        }
         string marker = File.Exists(Path.Combine(stage, "committed.json")) ? "committed.json" : "rolled-back.json";
         if (File.Exists(Path.Combine(stage, marker)))
         {
             if (ReadRecord(Path.Combine(stage, marker), stage) != journal)
                 throw new IOException("Media completion marker does not match its journal.");
-            RemoveStage(stage);
+            if (decision is null) RemoveStage(stage); else ArchiveResolved(workspace, stage);
             return;
         }
         byte[] saved = File.ReadAllBytes(Path.Combine(stage, "original.json"));
@@ -158,10 +256,11 @@ internal sealed class MediaPropertyJournal : IDisposable
             if (hash == journal.OriginalHash)
             {
                 WriteMarker(Path.Combine(stage, "rolled-back.json"), JsonSerializer.SerializeToUtf8Bytes(journal));
-                RemoveStage(stage);
+                if (decision is null) RemoveStage(stage); else ArchiveResolved(workspace, stage);
                 return;
             }
-            if (current.Identity != journal.CandidateIdentity || hash != journal.CandidateHash)
+            bool accepted = decision is not null && current.Identity == decision.AcceptedIdentity && hash == decision.AcceptedHash;
+            if (!accepted && (current.Identity != journal.CandidateIdentity || hash != journal.CandidateHash))
                 throw new IOException("External media property conflict; current file preserved, journal retained at " + stage);
             current.Rename(Path.Combine(stage, "rollback-" + Guid.NewGuid().ToString("N") + ".json"));
             current.Flush();
@@ -180,7 +279,7 @@ internal sealed class MediaPropertyJournal : IDisposable
             restore.Write(saved); restore.Rename(target); restore.Flush();
         }
         WriteMarker(Path.Combine(stage, "rolled-back.json"), JsonSerializer.SerializeToUtf8Bytes(journal));
-        RemoveStage(stage);
+        if (decision is null) RemoveStage(stage); else ArchiveResolved(workspace, stage);
     }
 
     private static Record ReadRecord(string path, string stage)
@@ -202,14 +301,14 @@ internal sealed class MediaPropertyJournal : IDisposable
 
     private static FileStream OpenClip(string workspace, string id)
     {
-        string path = Path.Combine(Path.GetDirectoryName(Target(workspace, id))!, id + ".vsclip");
+        string path = ClipPath(workspace, id);
         PathGuard.NoLinks(path);
         FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         try
         {
             using JsonDocument data = JsonDocument.Parse(stream);
-            if (data.RootElement.TryGetProperty("vocaloid_bridge_archive_entities_v1", out _))
-                throw new IOException("project_preservation: archived media property recovery is guarded.");
+            if (data.RootElement.ValueKind != JsonValueKind.Object)
+                throw new IOException("Media clip root must be an object.");
             stream.Position = 0;
             return stream;
         }
@@ -226,6 +325,16 @@ internal sealed class MediaPropertyJournal : IDisposable
     }
     private static void ValidateId(string id) { if (!Guid.TryParseExact(id, "D", out _)) throw new IOException("Invalid media journal clip ID."); }
     private static string JournalRoot(string workspace) => Path.Combine(Path.GetFullPath(workspace), ".runtime", "media-property");
+    private static string ClipPath(string workspace, string id) => Path.Combine(Path.GetDirectoryName(Target(workspace, id))!, id + ".vsclip");
+    private static string HistoryRoot(string workspace) => Path.Combine(Path.GetFullPath(workspace), ".runtime", "media-recovery-history");
+    private static void ArchiveResolved(string workspace, string stage)
+    {
+        string history = HistoryRoot(workspace);
+        PathGuard.CreateDirectory(history);
+        string destination = PathGuard.Under(history, Path.GetFileName(stage));
+        PathGuard.TreeNoLinks(stage); PathGuard.NoLinks(destination);
+        Directory.Move(stage, destination);
+    }
     private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
     private static string Hash(FileStream file) { file.Position = 0; string hash = Convert.ToHexString(SHA256.HashData(file)); file.Position = 0; return hash; }
     private static void WriteDurable(string path, byte[] bytes)

@@ -66,8 +66,7 @@ transaction; a staged change commits to native history and can be undone or
 redone.
 Applying a style retains its existing internal effect-commit behavior rather
 than wrapping each constituent effect as an independent history operation.
-The preservation guard for effect edits in extension-bearing projects remains
-in force. The actual master-effect transaction and rollback case passed in
+In 0.24.0, extension-bearing effect edits use the same transaction and validate existing curve owners; add/undo has focused evidence. The actual master-effect transaction and rollback case passed in
 `artifacts/feature-acceptance-f97d35cd5451/audio.effect_history.json`; that
 batch also records two later-corrected test failures in other cases.
 
@@ -273,8 +272,7 @@ changes commit with native undo history, and failures attempt native rollback.
 An ordinary-project import/edit/undo/redo/reopen case passed in
 `artifacts/feature-acceptance-eb4111329c4f/summary.json`; ordinary audio media
 capture/import also passed in `artifacts/feature-acceptance-6cc1fd525f8e/summary.json`.
-Archive-extension import/edit and effect mutations remain guarded pending their
-own focused native testing, including audio resource-name collisions.
+0.24.0 has a focused archive-extension audio import/edit and effect add/undo case. Broader resource-name collisions and media-archive audio metadata still have separate boundaries; see [Agent completion](agent-completion-33.md).
 For extension-tracked projects, `process_audio` is available for an explicit
 external WAV because it changes no sequence data; the same receipt verifies
 native reverse samples, input protection, project history and saved fields.

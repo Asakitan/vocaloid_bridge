@@ -96,7 +96,7 @@ internal sealed partial class EngineHost
         part_count = track.NumParts
     };
 
-    private static object ScoreTrackEdit(EngineSession session, string operation, JsonElement options)
+    private object ScoreTrackEdit(EngineSession session, string operation, JsonElement options)
     {
         WIVSMSequence sequence = session.Sequence;
         if (operation == "track.create")
@@ -150,7 +150,9 @@ internal sealed partial class EngineHost
         if (operation == "track.remove")
             return ScoreMutate(session, operation, () =>
             {
+                var deleted = ArchiveDeletePrepare(session, [track]);
                 ScoreRequire(sequence.RemoveTrack(track), operation, sequence);
+                ArchiveDeleteStaged(session, deleted);
                 return new { removed = true, track_index = trackIndex };
             });
 
@@ -303,7 +305,9 @@ internal sealed partial class EngineHost
             ulong partIndex = track.IndexOf(part);
             return ScoreMutate(session, operation, () =>
             {
+                var deleted = ArchiveDeletePrepare(session, [part]);
                 ScoreRequire(track.RemovePart(part), operation, session.Sequence);
+                ArchiveDeleteStaged(session, deleted);
                 return new { removed = true, track_index = trackIndex, part_index = partIndex };
             });
         }
@@ -399,17 +403,21 @@ internal sealed partial class EngineHost
             List<WIVSMNote> selected = indices.Select(index => part.GetNote((ulong)index)
                 ?? throw new InvalidOperationException("Native note lookup failed.")).OrderBy(note => note.RelPosTick.Value).ToList();
             ArchiveEntity[] identities = selected.Select(ArchiveKey).ToArray();
+            var pitches = ArchivePitchCapture(session, selected);
             return ScoreMutate(session, operation, () =>
             {
                 ScoreRequire(part.JoinNotes(selected), operation, session.Sequence);
                 ArchiveJoinNotes(session, part, identities);
+                ArchivePitchMigrate(session, pitches, part.Notes.Where(item => identities.Contains(ArchiveKey(item))));
                 return ScoreNoteList(session, options);
             });
         }
         if (operation == "note.clear")
             return ScoreMutate(session, operation, () =>
             {
+                var deleted = ArchiveDeletePrepare(session, part.Notes.Cast<object>().ToArray());
                 ScoreRequire(part.RemoveAllNotes(), operation, session.Sequence);
+                ArchiveDeleteStaged(session, deleted);
                 return new { removed = true, note_count = part.NumNotes };
             });
         WIVSMNote? note = operation == "note.add" ? null : ScoreNote(part, options);
@@ -417,11 +425,13 @@ internal sealed partial class EngineHost
         {
             int tick = ScoreInt(options, "split_tick", checked((int)note!.RelPosTick.Value) + 1,
                 checked((int)note.RelEndTick.Value) - 1);
+            var pitches = ArchivePitchCapture(session, [note]);
             return ScoreMutate(session, operation, () =>
             {
                 WIVSMNote created = part.DivideNote(note, new VSMRelTick(tick))
                     ?? throw new InvalidOperationException("Native note.split failed: " + part.LastError);
                 ArchiveCopySplitNote(session, note, created);
+                ArchivePitchMigrate(session, pitches, [note, created]);
                 return new { notes = new[] { ScoreNoteSummary(note, ScoreNoteIndex(part, note)), ScoreNoteSummary(created, ScoreNoteIndex(part, created)) } };
             });
         }
@@ -430,7 +440,9 @@ internal sealed partial class EngineHost
             int noteIndex = ScoreNoteIndex(part, note!);
             return ScoreMutate(session, operation, () =>
             {
+                var deleted = ArchiveDeletePrepare(session, [note!]);
                 ScoreRequire(part.RemoveNote(note!), operation, session.Sequence);
+                ArchiveDeleteStaged(session, deleted);
                 return new { removed = true, note_index = noteIndex };
             });
         }

@@ -92,8 +92,9 @@ internal sealed partial class EngineHost
             throw new IOException("Native media catalog refresh failed before editing.");
         }
         UserClip clip = LibraryOwnedClip(id);
-        if (LibraryArchiveHasMetadata(clip))
-            throw new InvalidOperationException("project_preservation: property editing a media clip with archive metadata is not supported.");
+        // The immutable clip (including archive sidecars) is held by the journal.
+        // Only requested property fields are published; the worker verifies that
+        // its native serializer has left every clip byte unchanged.
         string[] genres = LibraryStrings(options, "add_genres"), types = LibraryStrings(options, "add_types");
         JsonObject request = new() { ["clip_id"] = id, ["add_genres"] = JsonSerializer.SerializeToNode(genres), ["add_types"] = JsonSerializer.SerializeToNode(types) };
         if (LibraryOption(options, "name").ValueKind != JsonValueKind.Undefined) request["name"] = LibraryText(options, "name");

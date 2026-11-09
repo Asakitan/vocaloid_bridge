@@ -1,3 +1,5 @@
+> Historical investigation. The relevant deletion, ordinary-edit, split/join and transfer contracts were implemented with additional native validation in 0.24.0; see [current evidence and remaining limits](agent-completion-33.md). Earlier failed receipts below remain historical evidence.
+
 # Note array preservation investigation
 
 The bridge implements a restricted `directPitches` extension path; other

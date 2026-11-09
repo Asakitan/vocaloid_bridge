@@ -1,3 +1,5 @@
+> 0.24.0 adds explicit revision-bound conflict resolution, durable decisions and archive-bearing property updates; see [current protocol](agent-completion-33.md). The session-32 evidence below predates those additions.
+
 # Media concurrency and process-crash recovery — session 32
 
 ## Scope and protocol

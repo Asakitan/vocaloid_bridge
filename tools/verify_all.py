@@ -31,9 +31,7 @@ import check_tempo_metadata_noop
 import check_master_automation_20
 import check_track_automation_21
 import check_timeline_delete_21
-import check_note_delete_guards_21
 import check_timeline_meter_22
-import check_extension_edit_guards_22
 import check_file_event_identity_24
 import check_score_noop_24
 import check_score_noop_25
@@ -46,12 +44,14 @@ import check_note_add_31
 import check_lyrics_transactions_31
 import check_media_properties_31
 import check_media_recovery_32
+import check_agent_completion_33
+import check_timeline_meter_collision_23
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining
 
-# Experimental format probes and the protected extension-audio write scenario
-# remain individually callable, not release gates.
+# Historical probes and the broader resource-collision audio scenario remain
+# individually callable; the targeted 0.24 extension-audio case is maintained.
 release_interchange = {"remaining.clone_audio", "remaining.vsqx3", "remaining.vsqx4", "remaining.ppsf3",
                        "remaining.integrity_guard", "remaining.integrity_ai", "remaining.ppsf3_selected_voice"}
 experimental = {"preservation.audio_mutation", "preservation.controller_split_native_probe",
@@ -60,7 +60,8 @@ experimental = {"preservation.audio_mutation", "preservation.controller_split_na
                 "preservation.note_pitch_transitions", "preservation.tempo_collision_native_probe",
                 "preservation.tempo_same_collision_native_probe", "preservation.note_pitch_delete_note",
                 "preservation.note_pitch_delete_clear", "preservation.note_pitch_delete_part",
-                "preservation.note_pitch_delete_track", "preservation.timeline_delete_native_21"}
+                "preservation.note_pitch_delete_track", "preservation.timeline_delete_native_21",
+                "preservation.note_pitch_mixed_controller_guard"}
 v.CASES[:] = [case for case in v.CASES if case.identifier in baseline_ids | release_interchange
               and case.identifier not in experimental]
 

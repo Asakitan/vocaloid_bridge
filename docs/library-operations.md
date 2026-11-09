@@ -1,3 +1,5 @@
+> Current 0.24.0 contracts and evidence: [Agent completion](agent-completion-33.md). Recovery list/resolve are session-independent; archive-bearing property updates preserve the immutable clip byte stream.
+
 # Native Library Operations
 
 ## Entry Point and Ownership
@@ -73,6 +75,8 @@ integers; the default `track_index`, `part_index`, and `note_index` is `0`.
 | `media_delete` | Required | `clip_id` | `{session_id,clip_id,deleted:true}` after native file/catalog removal |
 | `media_capture` | Required | Target part (optional `track_index=0`, `part_index=0`), optional `name`, `tempo` (native hundredths of BPM), `genres=[]`, `types=[]` | `{session_id,clip:Clip,preview_audio_created:false}` |
 | `media_import` | Required | `clip_id`, `track_index=0`, `position_tick=0`, optional `name` | MIDI: `{session_id,clip_id,track_index,position_tick,duration,notes}`; audio: `{session_id,clip_id,track_index,imported}` |
+| `media_recovery_list` | Optional | `{}` | Pending journals with token, clip ID, state, opaque revision, source-match flag, digests and recovery path; no automatic resolution |
+| `media_recovery_resolve` | Optional | `journal_token`, `choice=keep_current/restore_original`, `expected_revision` from the list | Explicit conflict resolution; stale revisions are rejected, all alternatives are retained in the returned recovery archive |
 
 `Style` contains `style_id,name,type,path,vendor,languages,singers,genres,
 sub_genres,colors,midi_effect_count,audio_effect_count`. For `style_get`,
@@ -102,9 +106,8 @@ The G2PA mutation result is:
 ```
 
 `affected_length` is returned by native G2PA (reset operations use the actual
-part note count). The complete part note array is read back after commit; no
-text-to-phoneme approximation is used. Phrase application begins at the target
-note and lets native G2PA distribute syllables over subsequent notes. `protect`
+part note count). The complete part note array is checked within the transaction and returned after commit; no
+text-to-phoneme approximation is used. Phrase application begins at the target note and validates complete candidate coverage (or the full whitespace-normalized lyric when no candidate is supplied); truncation rolls back. `protect`
 sets the target note's phoneme-protection flag when explicitly supplied.
 An empty candidate list is a legitimate native result, not proof that the lyric
 cannot be converted: the installed Japanese manager returns no alternatives for
@@ -183,12 +186,11 @@ archive metadata or the target tracks entity extensions, and validates its saved
 snapshot and extension overlay. During the candidate and target import the
 clip file is held read-only, and native wrappers are reacquired after the
 candidate closes. Metadata pointers must end at unknown native-schema fields;
-native fields and paths through arrays are rejected. Clip property edits with
-this metadata are rejected rather than risking its loss. The AI fixture in
+native fields and paths through arrays are rejected. Clip property edits preserve this metadata through the immutable-byte journal protocol in 0.24.0. The AI fixture in
 `artifacts/feature-acceptance-39ed0d000904/summary.json` verifies source and
 target extensions, ordinary-target upgrade and prior undo history, redo,
 clone, reopen, conflicts and malformed metadata. Controller extensions and
-extension-tracked audio import remain guarded; only the tested combinations
+media-captured extension-audio import remains guarded; only the tested combinations
 are established.
 
 MIDI capture writes both primary and secondary voice IDs through native VMM.
@@ -339,7 +341,7 @@ property file, clip file, catalog view, and project history remained unchanged.
 The handle was closed and the disposable clip deleted. This establishes one
 locked-file failure only, not crash atomicity, manager restart, arbitrary I/O
 failures, external concurrent writers, or archive-bearing clip update safety;
-the archive metadata update guard remains in place.
+the archive metadata update guard remained in place at that historical checkpoint.
 
 The archive-bearing expected-success case `preservation.media_update_entities`
 in `tools/check_archive_media_update.py` is a red baseline against the current
@@ -349,7 +351,7 @@ passing. Its subsequent locked-file and import/history/reopen assertions were
 not reached. Automatic review rejected a request to remove the guard because the
 ordinary-clip probe and lack of rebuilt end-to-end evidence do not establish
 that archive extensions survive; losing extension metadata remains the risk.
-The guard remains unchanged. A later independent private-desktop probe on a
+The guard was unchanged at that checkpoint. A later independent private-desktop probe on a
 disposable archive-bearing AI clip found that native property `Save(true)` left
 the `.vsclip` bytes and its archive metadata unchanged, but removed an injected
 unknown nested field from `property.json`; a locked save left the tested files
@@ -391,4 +393,4 @@ returned its success enum and omitted the clip from enumeration; the old clip
 reference remained invalid even after an unlock and later successful enumeration.
 This is a silently incomplete refresh observation, not an injected native
 non-success return or full recovery proof. See `docs/media-failure-22.md`.
-Production property behavior and the archive-bearing guard remain unchanged.
+Production property behavior and the archive-bearing guard were unchanged in session 22; 0.24.0 supersedes that boundary.

@@ -101,6 +101,7 @@ internal sealed partial class EngineHost
         var native = session.Sequence.Tracks.ToDictionary(track => ArchiveKey(track));
         foreach (var pair in state.Before.Where(pair => pair.Value.TrackAutomation is not null))
         {
+            if (state.Deleted?.Contains(pair.Key) == true) continue;
             if (!native.TryGetValue(pair.Key, out WIVSMTrack? track) ||
                 !state.Live.TryGetValue(pair.Key, out ArchiveEntry? current) || current.TrackAutomation is null)
                 throw new InvalidDataException("project_preservation: track automation owner disappeared before commit.");

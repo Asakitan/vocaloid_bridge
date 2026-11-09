@@ -100,6 +100,14 @@ internal sealed partial class EngineHost
                 {
                     ScoreMutate(source, "clipboard.cut", () =>
                     {
+                        var selected = indices.Select(index => kind switch
+                        {
+                            "tracks" => (object)ClipboardTrack(source, index),
+                            "parts" => ClipboardTrack(source, trackIndex).GetPart(index)!,
+                            "notes" => ClipboardMidiPart(source, trackIndex, partIndex).GetNote(index)!,
+                            _ => throw new InvalidOperationException("Unknown clipboard selection.")
+                        }).ToArray();
+                        var deleted = ArchiveDeletePrepare(source, selected);
                         foreach (ulong index in indices.OrderDescending())
                         {
                             bool removed = kind switch
@@ -112,6 +120,7 @@ internal sealed partial class EngineHost
                             if (!removed)
                                 throw new InvalidOperationException("Native clipboard cut failed: " + source.Sequence.LastError);
                         }
+                        ArchiveDeleteStaged(source, deleted);
                         return true;
                     });
                 }

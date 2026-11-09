@@ -99,6 +99,7 @@ internal sealed partial class EngineHost
         }
         Dictionary<nint, (int Bar, int Numer, int Denom)> meters = [];
         (int Bar, int Numer, int Denom)? generatedMeter = null;
+        (int Bar, int Numer, int Denom)? occupiedMeter = null;
         if (before.CheckTimeSig)
         {
             WIVSMTimeSig current = session.Sequence.GetTimeSig(new VSMAbsTick(start), true, false)
@@ -122,13 +123,14 @@ internal sealed partial class EngineHost
                 if (shift != 0 && (current.Numer != final.Numer || current.Denom != final.Denom))
                 {
                     if (before.TimeSigs.Values.Any(value => value.Bar == beginBar))
-                        throw new InvalidOperationException("project_preservation: timeline time signature boundary collision is not verified.");
-                    generatedMeter = (beginBar, final.Numer, final.Denom);
+                        occupiedMeter = (beginBar, final.Numer, final.Denom);
+                    else generatedMeter = (beginBar, final.Numer, final.Denom);
                 }
                 foreach (var (key, value) in before.TimeSigs)
                 {
                     if (shift != 0 && value.Bar > beginBar && value.Bar <= endBar) continue;
-                    meters.Add(key, (checked(value.Bar - (shift != 0 && value.Bar > endBar ? shift : 0)), value.Numer, value.Denom));
+                    meters.Add(key, occupiedMeter is { } occupied && value.Bar == occupied.Bar ? occupied :
+                        (checked(value.Bar - (shift != 0 && value.Bar > endBar ? shift : 0)), value.Numer, value.Denom));
                 }
             }
         }

@@ -1,3 +1,5 @@
+> Historical investigation. The relevant deletion, ordinary-edit, split/join and transfer contracts were implemented with additional native validation in 0.24.0; see [current evidence and remaining limits](agent-completion-33.md). Earlier failed receipts below remain historical evidence.
+
 # Controller extensions with note edits — session 22
 
 The existing controller-event extension guard rejects note add, update and batch

@@ -96,7 +96,7 @@ internal sealed partial class EngineHost
         using MediaLibraryLease? lease = mediaOperation ? new MediaLibraryLease(Workspace) : null;
         if (mediaOperation)
         {
-            MediaPropertyJournal.RecoverAll(Workspace);
+            if (operation is not ("media_recovery_list" or "media_recovery_resolve")) MediaPropertyJournal.RecoverAll(Workspace);
             InvalidateMediaCatalog();
             mediaAccessDepth++;
         }
@@ -135,6 +135,9 @@ internal sealed partial class EngineHost
                 "media_delete" => LibraryDeleteMedia(LibrarySession(id), options),
                 "media_capture" => LibraryCaptureMedia(LibrarySession(id), options),
                 "media_import" => LibraryImportMedia(LibrarySession(id), options),
+                "media_recovery_list" => MediaPropertyJournal.ListPending(Workspace),
+                "media_recovery_resolve" => MediaPropertyJournal.Resolve(Workspace, LibraryText(options, "journal_token"),
+                    LibraryText(options, "choice"), LibraryText(options, "expected_revision")),
                 _ => throw new ArgumentException("Unknown library operation: " + operation)
             };
             return new { session_id = id, operation, native = operation != "phoneme_table", result };
@@ -505,7 +508,8 @@ internal sealed partial class EngineHost
             else
             {
                 WIVSMNote note = LibraryNote(part, options);
-                G2PAManager manager = LibraryLyrics(LibraryLanguage(options, note.LangID));
+                G2PAManagerLangID requestedLanguage = LibraryLanguage(options, note.LangID);
+                G2PAManager manager = LibraryLyrics(requestedLanguage);
                 string text = LibraryText(options, operation == "lyrics_apply" ? "lyrics" : "phonemes");
                 bool extension = LibraryBool(options, "use_extension_dictionary");
                 bool? protect = LibraryOption(options, "protect").ValueKind == JsonValueKind.Undefined
@@ -519,7 +523,37 @@ internal sealed partial class EngineHost
                 {
                     if (!manager.CanConvert(text, extension, note.IsAi))
                         throw new ArgumentException("Native G2PA does not accept the requested lyrics.");
+                    WIVSMNote[] before = part.Notes.ToArray();
+                    int first = ScoreNoteIndex(part, note);
+                    var candidates = manager.CandidatePhonemes((nint)note, text, extension, note.IsAi);
+                    string[] states = before.Select(item => LibraryLyricState(item, false)).ToArray();
+                    string[] fullStates = before.Select(item => LibraryLyricState(item, true)).ToArray();
                     LibraryRequire(manager.SetLyrics((nint)note, text, extension, note.IsAi, out affectedLength), operation);
+                    WIVSMNote[] after = part.Notes.ToArray();
+                    if (affectedLength < 1 || affectedLength > after.Length - first || before.Length != after.Length)
+                        throw new InvalidOperationException("Native G2PA did not cover the requested phrase within the available notes.");
+                    for (int i = 0; i < after.Length; i++)
+                    {
+                        bool affected = i >= first && i < first + affectedLength;
+                        if (!after[i].Equals(before[i]) || (affected ? LibraryLyricState(after[i], false) != states[i]
+                            : LibraryLyricState(after[i], true) != fullStates[i]))
+                            throw new InvalidOperationException("Native G2PA changed a note outside its lyric assignment.");
+                    }
+                    WIVSMNote[] applied = after.Skip(first).Take(affectedLength).ToArray();
+                    if (applied.Any(item => item.LangID != (int)requestedLanguage || !item.IsValidPhonemes || string.IsNullOrEmpty(item.Phonemes)))
+                        throw new InvalidOperationException("Native G2PA returned invalid phrase phonemes.");
+                    if (candidates.Count > 0)
+                    {
+                        if (!candidates.Any(candidate => candidate.Count == applied.Length &&
+                            candidate.Zip(applied).All(pair => pair.First.Syllable == pair.Second.Lyric && pair.First.Phoneme == pair.Second.Phonemes)))
+                            throw new InvalidOperationException("Native G2PA did not preserve a complete phrase candidate.");
+                    }
+                    else
+                    {
+                        string Compact(string value) => new(value.Where(character => !char.IsWhiteSpace(character)).ToArray());
+                        if (Compact(string.Concat(applied.Select(item => item.Lyric))) != Compact(text))
+                            throw new InvalidOperationException("Native G2PA truncated the requested phrase.");
+                    }
                 }
                 if (protect.HasValue)
                 {
@@ -536,6 +570,11 @@ internal sealed partial class EngineHost
             notes = LibraryMidiPart(session, options).Notes.Select(LibraryNoteView).ToArray()
         });
     }
+
+    private static string LibraryLyricState(WIVSMNote note, bool includeLyrics) => JsonSerializer.Serialize(
+        JsonSerializer.SerializeToElement(ScoreNoteSummary(note, 0)).EnumerateObject()
+            .Where(item => includeLyrics || item.Name is not ("lyric" or "phonemes" or "is_valid_phonemes" or "lang_id"))
+            .ToDictionary(item => item.Name, item => item.Value));
 
     private static void LibraryRequire(bool result, string operation)
     {

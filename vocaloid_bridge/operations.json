@@ -610,6 +610,18 @@
           ]
         },
         {
+          "operation": "media_recovery_list",
+          "contract_rows": [
+            "| `media_recovery_list` | Optional | `{}` | Pending journals with token, clip ID, state, opaque revision, source-match flag, digests and recovery path; no automatic resolution |"
+          ]
+        },
+        {
+          "operation": "media_recovery_resolve",
+          "contract_rows": [
+            "| `media_recovery_resolve` | Optional | `journal_token`, `choice=keep_current/restore_original`, `expected_revision` from the list | Explicit conflict resolution; stale revisions are rejected, all alternatives are retained in the returned recovery archive |"
+          ]
+        },
+        {
           "operation": "media_update",
           "contract_rows": [
             "| `media_update` | Required | `clip_id`, optional `name`, `tempo`, `add_genres=[]`, `add_types=[]` | `{session_id,clip:Clip}` |"

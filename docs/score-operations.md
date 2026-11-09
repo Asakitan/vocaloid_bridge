@@ -237,7 +237,7 @@ managed helper's one-to-one native moves. Tested deletion maps surviving tempo
 and same-boundary-meter events, discards deleted events' extensions, and gives a
 newly generated tempo boundary no inherited extensions. A tested generated meter
 boundary at an unoccupied begin bar also receives no inherited extensions;
-initial-tempo deletion and occupied-start meter collisions remain guarded. Identity, position and
+initial-tempo deletion remains guarded. Occupied-start meter replacement now retains and validates the native event identity (0.24.0). Identity, position and
 value are checked on an independent candidate and around the actual transaction;
 event kinds without extensions retain native behavior. Audio and other unverified
 combinations remain guarded. Focused insertion and deletion cases passed in
@@ -315,7 +315,7 @@ validated against native output. Tested note, part and track duplicates preserve
 item metadata through native history and save/reopen. Track update/reorder and
 part update/move verify each prior owner and complete point set before commit;
 an indistinguishable destination part is rejected before moving or duplicating.
-Split/join, deletion, clipboard, source-track merge and media capture remain guarded.
+0.24.0 validates selected-owner deletion, note/part split and join, clipboard transfer and project merge. Note pitch joins reject conflicting coordinate/value provenance; generated points have no inherited fields. Media capture of pitch-item extensions remains guarded. See [current evidence](agent-completion-33.md).
 
 ## Part Performance
 
@@ -379,8 +379,7 @@ native values during the transaction and on history restoration and save.
 The same selected-tick policy applies to tested track-volume and track-pan item
 extensions, bound to their native track owner. Tested track update/reorder,
 undo/redo, clone/reopen and ambiguous-owner protection retain the fields.
-Timeline edits with any of these item extensions, and unverified track-extension
-mutations and transfers, remain guarded. The master-volume case passed in
+Timeline edits with these item extensions remain guarded. Ordinary score mutations, selected-owner deletion and native track transfers now use complete owner/point validation; see [0.24.0 contracts](agent-completion-33.md). The master-volume case passed in
 `artifacts/feature-acceptance-5b8f6372f11d/summary.json`; the track cases passed
 in `artifacts/feature-acceptance-e8eb9b6496cb/summary.json`.
 

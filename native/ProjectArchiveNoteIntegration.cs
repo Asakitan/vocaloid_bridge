@@ -37,15 +37,14 @@ internal sealed partial class EngineHost
     private void RequireArchiveNoteArrayOperation(EngineSession session, string operation)
     {
         if (!ArchiveHasNoteArrayState(session)) return;
-        if (operation is not ("note.update" or "note.duplicate" or "part.duplicate" or "track.duplicate" or "track.update" or "track.reorder" or "part.update" or "part.move" or "pitch.set" or "pitch.clear" or "undo" or "redo" or "history.rollback"))
+        if (!ArchiveDeletionOperation(operation) && !ArchiveStableCurveOwnerOperation(operation) && operation is not ("part.split" or "part.join" or "undo" or "redo" or "history.rollback"))
             throw new InvalidOperationException("project_preservation: direct pitch extension operation has no verified identity mapping: " + operation);
     }
 
     private void RequireArchiveNoteArrayExternalOperation(EngineSession session, string domain, string operation)
     {
-        if (!ArchiveHasNoteArrayState(session)) return;
-        if (domain == "clipboard" && operation is ("copy" or "cut" or "paste"))
-            throw new InvalidOperationException("project_preservation: direct pitch extension clipboard mapping is unverified.");
+        // Clipboard mutations use the same target-bound deletion and validated
+        // native duplicate mapping as score and merge operations.
     }
 
     private void ArchiveNoteArrayPartDestinationPreflight(EngineSession session, WIVSMMidiPart part,
@@ -112,7 +111,8 @@ internal sealed partial class EngineHost
     private void ValidateArchiveNoteArraysBeforeCommit(EngineSession session)
     {
         if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state) || state.Before is null) return;
-        if (state.Action is "track.update" or "track.reorder" or "part.update" or "part.move")
+        if ((ArchiveStableCurveOwnerOperation(state.Action!) && state.Action is not ("pitch.set" or "pitch.clear" or "note.split" or "note.join")) ||
+            ArchiveDeletionOperation(state.Action!))
         {
             // A remove notification can temporarily evict descendants from Live.
             // Require every pre-edit pitch owner by native identity before commit,
@@ -127,6 +127,7 @@ internal sealed partial class EngineHost
             foreach ((ArchiveEntity key, ArchiveEntry entry) in state.Before)
             {
                 if (entry.DirectPitch is null) continue;
+                if (state.Deleted?.Contains(key) == true) continue;
                 if (!notes.TryGetValue(key, out WIVSMNote? note))
                     throw new InvalidDataException("project_preservation: non-destructive edit replaced a direct pitch owner before commit.");
                 ProjectArchiveNoteArrays.Validate(entry.DirectPitch, ScorePitchPoints(note));

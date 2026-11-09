@@ -30,6 +30,7 @@ internal sealed partial class EngineHost
         internal readonly Stack<ArchiveHistory> Undo = new();
         internal readonly Stack<ArchiveHistory> Redo = new();
         internal Dictionary<ArchiveEntity, ArchiveEntry>? Before;
+        internal HashSet<ArchiveEntity>? Deleted;
         internal JsonObject? BeforeRoot;
         internal JsonObject? BeforeMaster;
         internal JsonObject? UpgradeRoot;
@@ -873,7 +874,13 @@ internal sealed partial class EngineHost
             if (state.Before.TryGetValue(note.Key, out ArchiveEntry? entry))
             {
                 var destination = lookup[note.Signature];
-                state.Live[destination.Key] = new ArchiveEntry((JsonObject)entry.Extra.DeepClone(), destination.Parent);
+                if (entry.DirectPitch is not null)
+                {
+                    WIVSMNote native = targets.SelectMany(part => part.Notes).Single(item => ArchiveKey(item) == destination.Key);
+                    ProjectArchiveNoteArrays.Validate(entry.DirectPitch, ScorePitchPoints(native));
+                }
+                state.Live[destination.Key] = new ArchiveEntry((JsonObject)entry.Extra.DeepClone(), destination.Parent,
+                    DirectPitch: entry.DirectPitch is null ? null : ProjectArchiveNoteArrays.Clone(entry.DirectPitch));
             }
     }
 
@@ -901,6 +908,16 @@ internal sealed partial class EngineHost
                 throw new InvalidDataException("project_preservation: duplicate native identity is invalid or already tracked.");
             if (state.Live.TryGetValue(from, out ArchiveEntry? sourceEntry))
             {
+                if (sourceEntry.TrackAutomation is not null)
+                {
+                    if (original is not WIVSMTrack sourceTrack || copy is not WIVSMTrack copiedTrack)
+                        throw new InvalidDataException("project_preservation: automation duplicate owner is not a track.");
+                    foreach (var lane in sourceEntry.TrackAutomation)
+                    {
+                        ProjectArchiveArrays.ValidateController(lane.Value, ArchiveNativeTrackAutomation(sourceTrack, lane.Key));
+                        ProjectArchiveArrays.ValidateController(lane.Value, ArchiveNativeTrackAutomation(copiedTrack, lane.Key));
+                    }
+                }
                 if (sourceEntry.DirectPitch is not null)
                 {
                     if (original is not WIVSMNote sourceNote || copy is not WIVSMNote copiedNote)
@@ -988,7 +1005,9 @@ internal sealed partial class EngineHost
             var controllers = entry.Controller?.ToDictionary(lane => lane.Key, lane => lane.Value.ToDictionary(
                 point => point.Key, point => new ProjectArchiveArrays.ControllerPoint(point.Value.Value, (JsonObject)point.Value.Extra.DeepClone())));
             var directPitch = entry.DirectPitch is null ? null : ProjectArchiveNoteArrays.Clone(entry.DirectPitch);
-            state.Live.Add(to, new ArchiveEntry((JsonObject)entry.Extra.DeepClone(), parent, controllers, directPitch));
+            var automation = entry.TrackAutomation?.ToDictionary(lane => lane.Key, lane => lane.Value.ToDictionary(
+                point => point.Key, point => new ProjectArchiveArrays.ControllerPoint(point.Value.Value, (JsonObject)point.Value.Extra.DeepClone())));
+            state.Live.Add(to, new ArchiveEntry((JsonObject)entry.Extra.DeepClone(), parent, controllers, directPitch, automation));
         }
     }
 
@@ -1040,6 +1059,8 @@ internal sealed partial class EngineHost
         if (surviving[0].Pointer == nint.Zero ||
             (state.Live.TryGetValue(surviving[0], out ArchiveEntry? survivor) && survivor.Parent != ArchiveKey(part)))
             throw new InvalidDataException("project_preservation: note join survivor identity conflicts with another entity.");
+        foreach (ArchiveEntity source in sources)
+            if (source != surviving[0]) state.Live.Remove(source);
         state.Live[surviving[0]] = new ArchiveEntry(merged, ArchiveKey(part));
     }
 
@@ -1063,6 +1084,12 @@ internal sealed partial class EngineHost
             // output; it does not mutate the project sequence or its history.
             if (operation is "devices" or "inspect_audio" or "export_audio" or "effects" or "process_audio" or
                 "transport_prepare" or "transport_status" or "transport_play" or "transport_stop" or "transport_seek" or "transport_release") return;
+            if (operation is "import_audio" or "edit_audio" or "set_effect")
+            {
+                RequireArchiveMutationSupported(session, operation == "set_effect" ? "audio.set_effect" :
+                    operation == "import_audio" ? "part.create" : "part.update");
+                return;
+            }
         }
         throw new InvalidOperationException("project_preservation: this operation requires a verified entity-identity transaction: " + method);
     }
@@ -1076,11 +1103,12 @@ internal sealed partial class EngineHost
     internal void CheckArchiveExternalOperation(string? id, string domain, string operation)
     {
         if (id is null || !HasArchiveEntityExtensions(GetSession(id))) return;
-        if (domain == "clipboard" && operation is ("copy" or "cut" or "paste") && ArchiveHasTrackAutomationExtensions(GetSession(id)))
-            throw new InvalidOperationException("project_preservation: track automation clipboard transfer has no verified identity mapping.");
-        if (domain == "clipboard" && operation is ("copy" or "cut" or "paste") && ArchiveHasControllerExtensions(GetSession(id)))
-            throw new InvalidOperationException("project_preservation: controller extension clipboard transfer has no verified identity mapping.");
         RequireArchiveNoteArrayExternalOperation(GetSession(id), domain, operation);
+        if (domain == "library" && operation is ("lyrics_apply" or "lyrics_reset" or "phonemes_apply" or "phonemes_reset"))
+        {
+            RequireArchiveMutationSupported(GetSession(id), operation);
+            return;
+        }
         bool readOnly = domain == "clipboard"
             ? operation is "copy" or "cut" or "paste" or "list" or "clear"
             : operation is "languages" or "phoneme_table" or "lyrics_can_convert" or "lyrics_candidates" or
@@ -1094,11 +1122,11 @@ internal sealed partial class EngineHost
     {
         if (!HasArchiveEntityExtensions(session)) return;
         RequireArchiveNoteArrayOperation(session, operation);
-        if (ArchiveHasTrackAutomationExtensions(session) && operation is not ("automation.set" or "automation.remove" or "track.update" or "track.reorder" or "undo" or "redo" or "history.rollback"))
+        if (ArchiveHasTrackAutomationExtensions(session) && !ArchiveDeletionOperation(operation) && !ArchiveStableCurveOwnerOperation(operation) && operation is not ("automation.set" or "automation.remove" or "part.split" or "part.join" or "undo" or "redo" or "history.rollback"))
             throw new InvalidOperationException("project_preservation: track automation mutation has no verified identity mapping: " + operation);
         if (archiveStates[session.Id].MasterVolume is not null && operation is ("time.insert" or "time.delete"))
             throw new InvalidOperationException("project_preservation: master volume extension timeline mapping is not verified.");
-        if (ArchiveHasControllerExtensions(session) && operation is not ("controller.set" or "controller.remove" or "track.duplicate" or "part.duplicate" or "part.split" or "part.join" or "undo" or "redo"))
+        if (ArchiveHasControllerExtensions(session) && !ArchiveDeletionOperation(operation) && !ArchiveStableCurveOwnerOperation(operation) && operation is not ("controller.set" or "controller.remove" or "part.split" or "part.join" or "undo" or "redo"))
             throw new InvalidOperationException("project_preservation: controller extension mutation has no verified identity mapping: " + operation);
         if (operation is not ("track.create" or "track.update" or "track.reorder" or "track.remove" or "track.duplicate" or
             "part.create" or "part.update" or "part.move" or "part.resize" or "part.remove" or "part.duplicate" or "part.split" or "part.join" or
@@ -1107,9 +1135,22 @@ internal sealed partial class EngineHost
             "controller.set" or "controller.remove" or "automation.set" or "automation.remove" or "loop.set" or
             "tuning.set" or "vibrato.set" or "phoneme_timing.set" or "phoneme_timing.reset" or
             "pitch.set" or "pitch.clear" or "performance.set" or "selection.set" or "sequence.update" or
-            "undo" or "redo" or "history.rollback" or "time.insert" or "time.delete" or "clipboard.paste" or "clipboard.cut" or "project.merge" or "media_import"))
+            "undo" or "redo" or "history.rollback" or "time.insert" or "time.delete" or "clipboard.paste" or "clipboard.cut" or "project.merge" or "media_import" or
+            "lyrics_apply" or "lyrics_reset" or "phonemes_apply" or "phonemes_reset" or "audio.set_effect"))
             throw new InvalidOperationException("project_preservation: this mutation has no verified identity transaction: " + operation);
     }
+
+    // These operations may proceed only while every existing curve owner and
+    // its complete native point set survive the pre-commit checks unchanged.
+    private static bool ArchiveStableCurveOwnerOperation(string operation) => operation is
+        "track.create" or "track.update" or "track.reorder" or "part.create" or "part.update" or "part.move" or "part.resize" or
+        "note.add" or "note.update" or "note.duplicate" or "note.batch_update" or "track.duplicate" or "part.duplicate" or
+        "note.split" or "note.join" or
+        "clipboard.paste" or "project.merge" or
+        "lyrics_apply" or "lyrics_reset" or "phonemes_apply" or "phonemes_reset" or "audio.set_effect" or
+        "voice.set" or "vibrato.set" or "phoneme_timing.set" or "phoneme_timing.reset" or "pitch.set" or "pitch.clear" or
+        "performance.set" or "selection.set" or "sequence.update" or "tempo.set" or "tempo.remove" or
+        "time_signature.set" or "time_signature.remove" or "loop.set" or "tuning.set";
 
     private void BeginArchiveMutation(EngineSession session, string action)
     {
@@ -1122,6 +1163,7 @@ internal sealed partial class EngineHost
             throw new InvalidOperationException("project_preservation: native history has no corresponding identity snapshot.");
         ArchiveValidateTrackAutomation(state);
         state.Before = new(state.Live);
+        state.Deleted = null;
         state.BeforeRoot = (JsonObject)state.Root.DeepClone();
         state.BeforeMaster = (JsonObject)state.Master.DeepClone();
         state.BeforeResources = new(state.ResourcePaths, StringComparer.Ordinal);
@@ -1152,6 +1194,23 @@ internal sealed partial class EngineHost
                 }
         if (seen.Count != tracked.Count)
             throw new InvalidDataException("project_preservation: tracked controller part is absent before commit.");
+        if (ArchiveStableCurveOwnerOperation(state.Action!))
+        {
+            Dictionary<ArchiveEntity, WIVSMMidiPart> owners = [];
+            foreach (WIVSMTrack track in session.Sequence.Tracks)
+                if (track.Type is VSMTrackType.Midi or VSMTrackType.MidiAi)
+                    foreach (WIVSMPart part in track.Parts)
+                        owners.Add(ArchiveKey(part), part as WIVSMMidiPart ?? new WIVSMMidiPart(part));
+            foreach ((ArchiveEntity key, ArchiveEntry old) in state.Before)
+            {
+                if (old.Controller is null) continue;
+                if (!owners.TryGetValue(key, out WIVSMMidiPart? owner) || !state.Live.TryGetValue(key, out ArchiveEntry? current) ||
+                    !ReferenceEquals(old.Controller, current.Controller))
+                    throw new InvalidDataException("project_preservation: ordinary edit replaced a controller owner or its extension map.");
+                foreach (var lane in old.Controller)
+                    ProjectArchiveArrays.ValidateController(lane.Value, ArchiveNativeControllers(owner, lane.Key));
+            }
+        }
         if (state.Action is "track.duplicate" or "part.duplicate" or "controller.set" or "controller.remove")
             foreach ((ArchiveEntity key, ArchiveEntry entry) in state.Before)
                 if (entry.Controller is not null && !state.Live.ContainsKey(key))
@@ -1172,6 +1231,7 @@ internal sealed partial class EngineHost
         Dictionary<int, ProjectArchiveArrays.TimeSig>? beforeTimeSig = state.BeforeTimeSig;
         Dictionary<int, ProjectArchiveArrays.ControllerPoint>? beforeMasterVolume = state.BeforeMasterVolume;
         state.Before = null;
+        state.Deleted = null;
         state.BeforeRoot = null; state.BeforeMaster = null; state.BeforeResources = null; state.BeforeTempo = null; state.BeforeTimeSig = null; state.BeforeMasterVolume = null;
         ArchiveHistory HistorySnapshot(Dictionary<ArchiveEntity, ArchiveEntry> snapshot, JsonObject root, JsonObject master, Dictionary<string, string> resources, Dictionary<int, ProjectArchiveArrays.Tempo>? tempo, Dictionary<int, ProjectArchiveArrays.TimeSig>? timeSig, Dictionary<int, ProjectArchiveArrays.ControllerPoint>? masterVolume) =>
             new(state.PreUpgradeEmptyHistory && snapshot.Values.All(entry => !ArchiveEntryHasPayload(entry)) ? EmptyHistoryMarker : snapshot, root, master, resources, tempo, timeSig, masterVolume);

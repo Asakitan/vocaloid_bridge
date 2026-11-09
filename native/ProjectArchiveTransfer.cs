@@ -161,8 +161,6 @@ internal sealed partial class EngineHost
                 ? (JsonObject)entry.Extra.DeepClone() : new JsonObject();
             if (from is not null && from.HasEntityExtensions && !from.Live.ContainsKey(a))
                 throw new InvalidDataException("project_preservation: source transfer identity is not tracked.");
-            if (from is not null && from.Live.TryGetValue(a, out ArchiveEntry? pitchEntry) && pitchEntry.DirectPitch is not null)
-                throw new InvalidOperationException("project_preservation: direct pitch extension transfer is not verified.");
             if (from is not null && from.Live.TryGetValue(a, out ArchiveEntry? sourceEntry) && sourceEntry.Parent != sourceParent)
                 throw new InvalidDataException("project_preservation: source transfer parent identity changed.");
             if (parent is ArchiveEntity parentKey && !to.Live.ContainsKey(parentKey) && !pending.Any(item => item.Key == parentKey))
@@ -181,7 +179,34 @@ internal sealed partial class EngineHost
                         pair => new ProjectArchiveArrays.ControllerPoint(pair.Value.Value, (JsonObject)pair.Value.Extra.DeepClone())));
                 }
             }
-            pending.Add((b, new ArchiveEntry(extra, parent, controllers)));
+            Dictionary<int, ProjectArchiveNoteArrays.Point>? pitches = null;
+            Dictionary<string, Dictionary<int, ProjectArchiveArrays.ControllerPoint>>? automation = null;
+            if (from is not null && from.Live.TryGetValue(a, out ArchiveEntry? payload))
+            {
+                if (payload.DirectPitch is not null)
+                {
+                    if (left is not WIVSMNote sourceNote || right is not WIVSMNote targetNote)
+                        throw new InvalidDataException("project_preservation: pitch transfer owner is not a note.");
+                    ProjectArchiveNoteArrays.Validate(payload.DirectPitch, ScorePitchPoints(sourceNote));
+                    ProjectArchiveNoteArrays.Validate(payload.DirectPitch, ScorePitchPoints(targetNote));
+                    pitches = ProjectArchiveNoteArrays.Clone(payload.DirectPitch);
+                }
+                if (payload.TrackAutomation is not null)
+                {
+                    if (left is not WIVSMTrack sourceTrack || right is not WIVSMTrack targetTrack)
+                        throw new InvalidDataException("project_preservation: automation transfer owner is not a track.");
+                    automation = [];
+                    foreach (var lane in payload.TrackAutomation)
+                    {
+                        ProjectArchiveArrays.ValidateController(lane.Value, ArchiveNativeTrackAutomation(sourceTrack, lane.Key));
+                        var mapped = lane.Value.ToDictionary(pair => pair.Key == 0 ? 0 : checked((int)(pair.Key + partOffset)),
+                            pair => new ProjectArchiveArrays.ControllerPoint(pair.Value.Value, (JsonObject)pair.Value.Extra.DeepClone()));
+                        ProjectArchiveArrays.ValidateController(mapped, ArchiveNativeTrackAutomation(targetTrack, lane.Key));
+                        automation.Add(lane.Key, mapped);
+                    }
+                }
+            }
+            pending.Add((b, new ArchiveEntry(extra, parent, controllers, pitches, automation)));
         }
         void Notes(WIVSMMidiPart left, WIVSMMidiPart right)
         {

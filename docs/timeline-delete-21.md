@@ -15,9 +15,11 @@ start zero remains guarded.
 
 For meter events, the installed helper compares the starting and ending meter,
 removes events after the begin bar through the end bar, and shifts later bars
-left by the resulting bar difference. The bridge implements this map only when
-the endpoint meters match or no bar shift occurs. A different-meter boundary
-that can require a newly generated time signature remains guarded. The private
+left by the resulting bar difference. At the session 21 checkpoint the bridge
+implemented this map only when the endpoint meters match or no bar shift occurs.
+Session 22 subsequently added
+the tested unoccupied generated time-signature boundary; an occupied begin-bar
+collision remains guarded. See `docs/timeline-meter-22.md`. The private
 ordinary native meter probe in
 `artifacts/feature-acceptance-467a9a7eaeab/summary.json` observed one same-meter
 removal/shift and one different-meter generated boundary; this observation is
@@ -30,8 +32,9 @@ The old host rejected the expected-success fixture before mutation in
 build, `preservation.timeline_delete_extensions_21` passed in
 `artifacts/feature-acceptance-e8eb9b6496cb/summary.json`: existing and generated
 tempo boundaries, same-meter deletion and shifted survivors, unknown-field
-ownership, undo/redo, clone/reopen, source preservation, and a different-meter
-guard. The same run covered insertion and unchanged-map regressions and cleaned
+ownership, undo/redo, clone/reopen, source preservation, and the then-current
+different-meter guard. That guard was narrowed in session 22 for tested empty
+begin bars and retained for occupied-start collisions. The same run covered insertion and unchanged-map regressions and cleaned
 up all owned sessions without a foreground switch.
 
 The restricted MIDI/AI route preflights an independent native candidate and

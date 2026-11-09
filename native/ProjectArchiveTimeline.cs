@@ -10,7 +10,7 @@ internal sealed partial class EngineHost
         Dictionary<nint, (long Tick, int Value)> Tempos,
         Dictionary<nint, (int Bar, int Numer, int Denom)> TimeSigs);
     private sealed record TimelineEntities(HashSet<ArchiveEntity> Tracks, Dictionary<ArchiveEntity, TimelinePart> Parts,
-        TimelineEventMap Events, TimelineEventMap BeforeEvents, (long Tick, int Value)? GeneratedTempo);
+        TimelineEventMap Events, TimelineEventMap BeforeEvents, (long Tick, int Value)? GeneratedTempo, (int Bar, int Numer, int Denom)? GeneratedMeter);
 
     private static TimelineEventMap ArchiveTimelineEvents(WIVSMSequence sequence, bool checkTempo, bool checkTimeSig)
     {
@@ -98,6 +98,7 @@ internal sealed partial class EngineHost
                 generatedTempo = (start, removed[^1].Value);
         }
         Dictionary<nint, (int Bar, int Numer, int Denom)> meters = [];
+        (int Bar, int Numer, int Denom)? generatedMeter = null;
         if (before.CheckTimeSig)
         {
             WIVSMTimeSig current = session.Sequence.GetTimeSig(new VSMAbsTick(start), true, false)
@@ -119,7 +120,11 @@ internal sealed partial class EngineHost
                 int shift = checked(endBar - beginBar);
                 if (shift < 0) throw new InvalidDataException("project_preservation: timeline bar order changed.");
                 if (shift != 0 && (current.Numer != final.Numer || current.Denom != final.Denom))
-                    throw new InvalidOperationException("project_preservation: timeline time signature boundary generation is not verified.");
+                {
+                    if (before.TimeSigs.Values.Any(value => value.Bar == beginBar))
+                        throw new InvalidOperationException("project_preservation: timeline time signature boundary collision is not verified.");
+                    generatedMeter = (beginBar, final.Numer, final.Denom);
+                }
                 foreach (var (key, value) in before.TimeSigs)
                 {
                     if (shift != 0 && value.Bar > beginBar && value.Bar <= endBar) continue;
@@ -127,7 +132,7 @@ internal sealed partial class EngineHost
                 }
             }
         }
-        return new TimelineEntities(tracks, parts, new TimelineEventMap(before.CheckTempo, before.CheckTimeSig, tempos, meters), before, generatedTempo);
+        return new TimelineEntities(tracks, parts, new TimelineEventMap(before.CheckTempo, before.CheckTimeSig, tempos, meters), before, generatedTempo, generatedMeter);
     }
 
 
@@ -162,6 +167,9 @@ internal sealed partial class EngineHost
                 if (!next.TryAdd(target.Bar, new ProjectArchiveArrays.TimeSig(target.Bar, target.Numer, target.Denom, entry.Extra)))
                     throw new InvalidDataException("project_preservation: timeline time signature destination collision.");
             }
+            if (expected.GeneratedMeter is { } generated &&
+                !next.TryAdd(generated.Bar, new ProjectArchiveArrays.TimeSig(generated.Bar, generated.Numer, generated.Denom, new JsonObject())))
+                throw new InvalidDataException("project_preservation: generated timeline time signature destination collision.");
             ProjectArchiveArrays.ValidateTimeSig(next, ArchiveNativeTimeSigs(session.Sequence));
             state.TimeSig = next;
         }
@@ -173,13 +181,18 @@ internal sealed partial class EngineHost
         int generatedCount = expected.GeneratedTempo.HasValue ? 1 : 0;
         if (events.Tempos.Count != expected.Events.Tempos.Count + generatedCount ||
             expected.Events.Tempos.Any(pair => !events.Tempos.TryGetValue(pair.Key, out var value) || value != pair.Value) ||
-            events.TimeSigs.Count != expected.Events.TimeSigs.Count ||
-            events.TimeSigs.Any(pair => !expected.Events.TimeSigs.TryGetValue(pair.Key, out var value) || value != pair.Value))
+            events.TimeSigs.Count != expected.Events.TimeSigs.Count + (expected.GeneratedMeter.HasValue ? 1 : 0) ||
+            expected.Events.TimeSigs.Any(pair => !events.TimeSigs.TryGetValue(pair.Key, out var value) || value != pair.Value))
             throw new InvalidDataException("project_preservation: timeline event identity transaction changed the tempo or time signature map.");
         var created = events.Tempos.Where(pair => !expected.Events.Tempos.ContainsKey(pair.Key)).ToArray();
         if (created.Length != generatedCount || (expected.GeneratedTempo is { } generated &&
             (expected.BeforeEvents.Tempos.ContainsKey(created[0].Key) || created[0].Value != generated)))
             throw new InvalidDataException("project_preservation: generated timeline tempo identity differs from the expected boundary.");
+        var createdMeters = events.TimeSigs.Where(pair => !expected.Events.TimeSigs.ContainsKey(pair.Key)).ToArray();
+        if (createdMeters.Length != (expected.GeneratedMeter.HasValue ? 1 : 0) ||
+            (expected.GeneratedMeter is { } generatedMeter &&
+            (expected.BeforeEvents.TimeSigs.ContainsKey(createdMeters[0].Key) || createdMeters[0].Value != generatedMeter)))
+            throw new InvalidDataException("project_preservation: generated timeline time signature identity differs from the expected boundary.");
         HashSet<ArchiveEntity> tracks = [];
         HashSet<ArchiveEntity> parts = [];
         foreach (WIVSMTrack track in session.Sequence.Tracks)

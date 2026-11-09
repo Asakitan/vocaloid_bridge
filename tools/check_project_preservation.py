@@ -879,13 +879,14 @@ async def timeline_native_probe(check):
 
 @v.feature("preservation.timeline_extension_guard", "preservation", "score_compose", "project_open", "project_edit", "project_save")
 async def timeline_extension_guard(check):
-    """Red baseline: extension-bearing timeline edits stop before native mutation."""
+    """An occupied generated-meter boundary stops before native mutation."""
     seed = await check.call("score_compose", output_name=check.output("timeline-extension-seed"), title="Timeline extension guard", bpm=120,
         notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
     sid = seed["native_session"]["session_id"]
     await check.edit(sid, "part.move", track_index=0, part_index=0, start_tick=7680)
     await check.edit(sid, "tempo.set", start_tick=1920, bpm=130)
     await check.edit(sid, "time_signature.set", bar=2, numerator=3, denominator=4)
+    await check.edit(sid, "time_signature.set", bar=3, numerator=4, denominator=4)
     seq, path = await check.save(sid, "timeline-extension-native")
     await check.close(sid)
     _, members = v.read_vpr(path)
@@ -901,10 +902,10 @@ async def timeline_extension_guard(check):
     original = source.read_bytes()
     sid = (await check.call("project_open", path=str(source)))["session_id"]
     history = await check.edit(sid, "history.status")
-    # The end crosses a meter change and would require a generated signature.
+    # The start already has a signature and the end crosses a different meter.
     for operation in ("time.delete",):
         await check.rejected("project_edit", "time signature|identity transaction", session_id=sid, operation=operation,
-            options={"start_tick": 1920, "duration_tick": 2380, "include_tempo": True})
+            options={"start_tick": 3840, "duration_tick": 1700, "include_tempo": True})
         v.require(await check.edit(sid, "history.status") == history, "Guard changed native history")
     saved, out = await check.save(sid, "timeline-extension-guarded")
     v.require(saved == seq, "Guard changed project content")
@@ -1051,6 +1052,7 @@ async def timeline_event_unchanged(check):
     for tick, bpm in ((1000, 130), (1200, 140), (1500, 150), (2000, 160)):
         await check.edit(sid, "tempo.set", start_tick=tick, bpm=bpm)
     await check.edit(sid, "time_signature.set", bar=2, numerator=3, denominator=4)
+    await check.edit(sid, "time_signature.set", bar=3, numerator=4, denominator=4)
     seq, path = await check.save(sid, "event-map-native")
     await check.close(sid)
     _, members = v.read_vpr(path)
@@ -1070,7 +1072,7 @@ async def timeline_event_unchanged(check):
         history = await check.edit(sid, "history.status")
         for operation, include in (("time.delete", True),):
             await check.rejected("project_edit", "timeline|time signature", session_id=sid, operation=operation,
-                options={"start_tick": 1920, "duration_tick": 2380, "include_tempo": include})
+                options={"start_tick": 3840, "duration_tick": 1700, "include_tempo": include})
             v.require(await check.edit(sid, "history.status") == history, "Rejected event map edit changed history")
             rejected, _ = await check.save(sid, "event-map-rejected")
             v.require(rejected == before, "Rejected event map edit changed content")

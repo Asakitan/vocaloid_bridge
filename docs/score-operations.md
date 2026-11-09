@@ -220,13 +220,15 @@ controller-event, direct-pitch-item, master-volume-event or track-automation-ite
 extensions. For insertion, tempo and meter extension maps follow the installed
 managed helper's one-to-one native moves. Tested deletion maps surviving tempo
 and same-boundary-meter events, discards deleted events' extensions, and gives a
-newly generated tempo boundary no inherited extensions. Initial-tempo deletion
-and different-meter boundary generation remain guarded. Identity, position and
+newly generated tempo boundary no inherited extensions. A tested generated meter
+boundary at an unoccupied begin bar also receives no inherited extensions;
+initial-tempo deletion and occupied-start meter collisions remain guarded. Identity, position and
 value are checked on an independent candidate and around the actual transaction;
 event kinds without extensions retain native behavior. Audio and other unverified
 combinations remain guarded. Focused insertion and deletion cases passed in
 `artifacts/feature-acceptance-5b8f6372f11d/summary.json` and
-`artifacts/feature-acceptance-e8eb9b6496cb/summary.json`.
+`artifacts/feature-acceptance-e8eb9b6496cb/summary.json`; generated meter
+boundaries are covered by `artifacts/feature-acceptance-80b1c4779514/summary.json`.
 
 ## Selection
 

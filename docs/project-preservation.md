@@ -216,8 +216,8 @@ before mutation, applies the operation to a candidate, establishes an
 operation-specific mapping for retained events, validates the entire post-state,
 and commits the extension snapshot with native history. Deleted events lose
 their metadata; newly generated tempo boundaries inherit none. Additional
-evidence is needed for meter collisions, generated time-signature boundaries,
-address reuse and untested combinations. The earlier observations alone do not
+evidence is needed for occupied-start meter collisions, address reuse and
+untested combinations. The earlier observations alone do not
 justify mapping all generated tempo and meter extensions.
 The bridge implements a restricted MIDI/AI route: it excludes audio tracks,
 controller-event, direct-pitch-item, master-volume-item and track-automation-item
@@ -225,8 +225,8 @@ extensions, preflights an independent clone and checks retained track, part and
 note identities and expected positions before and after commit. Insertion maps
 tested one-to-one tempo/meter event moves. Restricted deletion maps survivors,
 discards deleted payloads and assigns no inherited extension to a generated
-tempo boundary; different-meter boundary generation remains guarded. The
-focused cases in `artifacts/feature-acceptance-5b8f6372f11d/summary.json` and
+tempo boundary. Tested unoccupied generated meter boundaries also receive no
+inherited fields; occupied-start collisions remain guarded. The focused cases in `artifacts/feature-acceptance-5b8f6372f11d/summary.json` and
 `artifacts/feature-acceptance-e8eb9b6496cb/summary.json` pass the tested paths,
 history, reopen and source preservation.
 The controller-array case also checks timeline rejection, and
@@ -357,7 +357,8 @@ fields: the event-extension guard rejects them, history remains unchanged, and t
 source, save, clone and reopen retain the fields. Controller-extension and
 extended-audio write guards remain unchanged. The current insertion and
 restricted deletion paths are described above and in `docs/timeline-move-20.md`
-and `docs/timeline-delete-21.md`; different-meter generated boundaries and
+and `docs/timeline-delete-21.md`. Session 22 added the bounded unoccupied meter
+boundary mapping in `docs/timeline-meter-22.md`; occupied-start collisions and
 other unverified combinations still require evidence.
 
 ### Master volume event metadata
@@ -387,3 +388,13 @@ conflicting or malformed metadata, and retained controller and audio guards.
 Controller-event and direct-pitch-item extension capture/import and
 extension-tracked audio writes are not part of this result. Clip property
 updates with this metadata remain guarded.
+
+### Session 22 review boundary
+
+The proposed combined relaxation of track-automation and controller extension
+note/score guards was blocked by automatic review due to missing native identity
+and rollback evidence and possible silent metadata loss. No guard change was
+applied. Prospective cases remain red and standalone; the passing guard case and
+precise boundaries are in `docs/track-edits-22.md` and
+`docs/controller-notes-22.md`. Earlier controller cross-project, extended audio,
+archive-media and direct-pitch deletion guard decisions remain in force.

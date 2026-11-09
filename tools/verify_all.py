@@ -32,6 +32,8 @@ import check_master_automation_20
 import check_track_automation_21
 import check_timeline_delete_21
 import check_note_delete_guards_21
+import check_timeline_meter_22
+import check_extension_edit_guards_22
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining

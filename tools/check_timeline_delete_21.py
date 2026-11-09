@@ -107,10 +107,10 @@ async def timeline_delete_extensions(check):
         before, _ = await check.save(sid, "delete21-meter-guard-before")
         history = await check.edit(sid, "history.status")
         await check.rejected("project_edit", "timeline|signature|project_preservation", session_id=sid,
-                             operation="time.delete", options={"start_tick": 1920, "duration_tick": 2380, "include_tempo": False})
+                             operation="time.delete", options={"start_tick": 3840, "duration_tick": 1700, "include_tempo": False})
         after, _ = await check.save(sid, "delete21-meter-guard-after")
         v.require(after == before and await check.edit(sid, "history.status") == history,
-                  "Unmapped meter generation changed target or history")
+                  "Guarded occupied meter boundary changed target or history")
     finally: await check.close(sid)
     v.require(all(path.read_bytes() == data for path, data in sources.items()), "Timeline deletion changed source archives")
 

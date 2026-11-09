@@ -365,3 +365,13 @@ known fixture markers and detected one intervening write before replacement.
 It does not establish a generic array merge, a race-free transaction or recovery
 from native manager refresh failure. Production behavior and the
 archive-bearing property guard were not changed; see `docs/media-property-21.md`.
+
+A session 22 private-process probe in
+`artifacts/media-failure-22-045a23ff9013/receipt.json` confirmed a lost external
+write in a check-to-replacement interleaving. With `property.json` exclusively
+locked, an independent reader was denied, while native `ReadAllClipFiles()`
+returned its success enum and omitted the clip from enumeration; the old clip
+reference remained invalid even after an unlock and later successful enumeration.
+This is a silently incomplete refresh observation, not an injected native
+non-success return or full recovery proof. See `docs/media-failure-22.md`.
+Production property behavior and the archive-bearing guard remain unchanged.

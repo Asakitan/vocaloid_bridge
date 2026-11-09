@@ -136,8 +136,9 @@ Restricted MIDI/AI extension timeline edits preflight an independent native
 candidate and verify surviving native identities; insertion supports tested
 one-to-one tempo/meter event moves. Tested deletion removes the deleted event
 payloads, retains mapped survivors and assigns no extension payload to a newly
-generated tempo boundary. Different-meter generated boundaries and deletion of
-the initial tempo remain guarded. Controller-event, direct-pitch-item,
+generated tempo boundary. A tested different-meter deletion similarly generates
+a new unoccupied meter boundary without inherited fields; an occupied-start
+meter collision and deletion of the initial tempo remain guarded. Controller-event, direct-pitch-item,
 master-volume-item, track-automation-item and audio combinations remain guarded
 for time edits.
 Tracked `directPitches` unknown fields follow selected-tick upsert, replacement

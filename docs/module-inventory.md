@@ -10,7 +10,7 @@
 | `native/TransportOperations.cs` | 原生设备枚举与私有会话播放、停止、定位、释放 | 普通及扩展工程快照的 DirectSound 静音闭环通过；定位区分异步请求与观测 |
 | `native/TrackFreezeOperations.cs` | 会话自有冻结缓存、时基物化和作者态保存 | 多片段/非零起点/效果/自动化与正式 MCP 通过；不持久化冻结标志 |
 | `native/ProjectArchivePreservation.cs`、`native/ProjectArchiveArrays.cs` | 未知字段、实体身份、速度/拍号/控制器事件和额外归档资源保留 | 受测事件扩展编辑、控制器复制拆合及历史通过；跨工程控制器扩展和其他数组有限制 |
-| `native/ProjectArchiveTimeline.cs`、`native/ProjectArchiveNoteArrays.cs`、`native/ProjectArchiveNoteIntegration.cs`、`native/ProjectArchiveMasterAutomation.cs`、`native/ProjectArchiveTrackAutomation.cs` | 扩展时间编辑、音高项及主/轨道自动化项身份、事务和覆盖 | 受测事件插入和部分删除、音高项复制及身份操作、主/轨道自动化项编辑与历史通过；不同拍号生成、音高项删除及跨工程等边界保留 |
+| `native/ProjectArchiveTimeline.cs`、`native/ProjectArchiveNoteArrays.cs`、`native/ProjectArchiveNoteIntegration.cs`、`native/ProjectArchiveMasterAutomation.cs`、`native/ProjectArchiveTrackAutomation.cs` | 扩展时间编辑、音高项及主/轨道自动化项身份、事务和覆盖 | 受测事件插入和部分删除、音高项复制及身份操作、主/轨道自动化项编辑与历史通过；拍号生成位置碰撞、音高项删除及跨工程等边界保留 |
 | `native/MidiRecordingOperations.cs`、`native/MidiRecordingGuards.cs` | 设备枚举、MIDI 事件队列、事务录制及会话保护 | 六操作、静音同步、回调保护及自有虚拟输入通过；物理设备和驱动错误路径未验 |
 | `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 30 个操作有成功调用；样式及 HMM 通过，经典 Singing Skill 重开受身份问题影响 |
 | `native/ProjectInterchange.cs`、`native/ProjectArchiveTempoMerge.cs`、`native/ProjectArchiveTimeSigMerge.cs` | 原生格式交换、复制、恢复与合并 | 真实 PPSF3/音频克隆、受测纯元数据历史及空操作状态、tempo/拍号扩展合并和速度碰撞覆盖通过；其他音频组合受限 |
@@ -26,7 +26,7 @@
 | `vocaloid_bridge/music.py` | MIDI、音符与路径校验 | 定向检查通过 |
 | `vocaloid_bridge/templates/ai-starter.vpr` | 原生编辑器生成的 AI 片段模板 | 本机样本 |
 | `vocaloid_bridge/desktop.py` | 旧 UI 模块退役标记 | 不包含可调用后端 |
-| `tools/smoke_mcp.py` | 真实 stdio 原生生命周期及 MCP 版本验收 | 0.16.0 独立连接通过 |
+| `tools/smoke_mcp.py` | 真实 stdio 原生生命周期及 MCP 版本验收 | 0.17.0 独立连接通过 |
 | `tools/render_demo.py` | MCP stdio 编曲、保存、重开、合成和 WAV 样本验收 | 通过：374849 帧，非零峰值与 RMS，关闭后 0 会话 |
 | `tools/verify_features.py`、`tools/verify_all.py` | 按功能分类的真实 MCP 验收 | 历史整合 76/5/2；本轮定向证据及环境边界见 STATUS |
 | `tools/check_host_isolation.py` | 双原生宿主缓存回归 | 修复前失败、每宿主命名空间后通过 |
@@ -51,6 +51,7 @@
 | `tools/check_tempo_metadata_noop.py`、`tools/check_media_native_19.py` 及相关 PowerShell 探针 | 速度碰撞覆盖、相同地图扩展历史和隔离素材属性写入 | 受测速度覆盖及历史通过；原生素材属性保存会删除合成未知字段 |
 | `tools/check_master_automation_20.py`、`tools/check_part_overlap_native_20.py`、`tools/check_media_*_20.py` 及相关 PowerShell 探针 | 主音量项事务、片段重叠及素材属性暂存验证 | 主音量项及普通重叠原生观察通过；普通素材未知字段丢失，独立进程暂存仍缺失败事务证据 |
 | `tools/check_track_automation_21.py`、`tools/check_timeline_delete_21.py`、`tools/check_note_delete_guards_21.py`、`tools/check_media_process_21.py` | 轨道自动化项、时间删除、音高删除守卫与素材暂存定向验证 | 轨道项及部分时间删除通过；音高删除守卫保持，素材仅合成夹具手工恢复字段 |
+| `tools/check_timeline_meter_22.py`、`tools/check_extension_edit_guards_22.py`、`tools/check_track_edits_22.py`、`tools/check_controller_notes_22.py` | 拍号生成边界、现有守卫与潜在普通编辑正例 | 受测空位拍号生成及守卫通过；普通编辑候选为红基线，审查守卫未变 |
 | `tools/check_clipboard_ambiguity.py`、`tools/check_archive_export_limits.ps1`、`tools/check_tempo_array_helper.ps1` | 剪贴板候选、ZIP 导出限制和 tempo 数组原语回归 | 合成候选、缩小阈值 ZIP 和原语通过；完整 MCP 证据见 STATUS |
 | `tools/probe_appcontainer_pipe.cs`、`tools/probe_appcontainer_child.go` | 随机合成管道的后台进程隔离探针 | 受限令牌及单一默认权限管道拒绝访问已观察；非插件隔离证明 |
 | `tools/probe_appcontainer_server.cs`、`tools/probe_appcontainer_server_child.go`、`tools/probe_appcontainer_peer.cs`、`tools/probe_appcontainer_peer_child.go` | 随机合成管道受限服务端与同/异 profile 对端探针 | LOCAL 双向收发和负对照已观察；未证明真实插件隔离 |
@@ -101,5 +102,5 @@
 | 2026-11-10 | 升级 0.13.0：受限 AI 扩展时间线、音高项未知字段及历史通过；空合并保持状态，自动审查边界保留。 |
 | 2026-11-10 | 升级 0.14.0：音高项音符/片段复制、速度碰撞和不变扩展事件地图通过；素材未知属性丢失风险及审查边界保留。 |
 | 2026-11-10 | 升级 0.15.0：主音量项、插入事件移动及音高项身份操作定向通过；普通素材未知属性丢失与事务边界继续调查。 |
-
 | 2026-11-10 | 升级 0.16.0：轨道音量/声像项和部分时间删除的受测元数据事务通过；音高删除守卫及素材未知字段风险保持。 |
+| 2026-11-10 | 升级 0.17.0：受测空位拍号边界生成及原生身份通过；普通编辑守卫放宽被自动审查拦截，素材刷新竞争有新证据。 |

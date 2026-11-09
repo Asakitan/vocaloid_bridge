@@ -1,4 +1,9 @@
-param([Parameter(Mandatory=$true)][string]$Fixture)
+param(
+ [Parameter(Mandatory=$true)][string]$Fixture,
+ [long]$StartTick=1000,
+ [long]$EndTick=1500,
+ [string[]]$Operations=@('insert','delete')
+)
 $ErrorActionPreference = 'Stop'
 $install = 'C:\Program Files\VOCALOID6\Editor'; $workspace = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Add-Type @"
@@ -32,12 +37,12 @@ function Snapshot($sequence) {
 }
 try {
  $result=@{}
- foreach ($include in @($false,$true)) { foreach ($op in @('insert','delete')) {
+ foreach ($include in @($false,$true)) { foreach ($op in $Operations) {
   $a=[object[]]::new(1); $a[0]=$Fixture
   $session=$type.GetMethod('Open',$flags).Invoke($engine,$a)
   $seq=$session.GetType().GetProperty('Sequence',$flags).GetValue($session)
   $before=Snapshot $seq
-  $range=[Yamaha.VOCALOID.VSM.VSMTickRange]::new(1000,1500)
+  $range=[Yamaha.VOCALOID.VSM.VSMTickRange]::new($StartTick,$EndTick)
   $ok=if ($op -eq 'insert') {[Yamaha.VOCALOID.WIVSMSequenceExtension]::InsertSilence($seq,$range,$include)} else {[Yamaha.VOCALOID.WIVSMSequenceExtension]::DeleteTime($seq,$range,$include)}
   if (-not $ok) { throw "Native $op failed" }
   $pending=Snapshot $seq

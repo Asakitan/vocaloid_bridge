@@ -2,7 +2,7 @@
 
 ## Scope and conclusion
 
-The old blanket guard was first narrowed for transactions where each extension-bearing tempo or time-signature map remained unchanged in native identity, position and value. Session 20 subsequently added tested one-to-one insertion moves, described in `docs/timeline-move-20.md`. Session 21 later added a restricted deletion mapping and a no-inheritance policy for a generated tempo boundary; other generated or collided event cases remain guarded as described in `docs/timeline-delete-21.md`.
+The old blanket guard was first narrowed for transactions where each extension-bearing tempo or time-signature map remained unchanged in native identity, position and value. Session 20 subsequently added tested one-to-one insertion moves, described in `docs/timeline-move-20.md`. Session 21 later added a restricted deletion mapping and a no-inheritance policy for a generated tempo boundary; session 22 added the tested unoccupied generated meter boundary. Occupied-start collisions and other unverified cases remain guarded as described in `docs/timeline-meter-22.md`.
 
 ## Existing native evidence
 
@@ -24,4 +24,4 @@ The session 19 implementation retained extension metadata only when each extensi
 
 The session 19 `preservation.timeline_event_unchanged` case placed distinct markers on each tempo and meter event and used `[1000,1500)`: deletion with `include_tempo=false` was the unchanged-map positive case; insertion and deletion with `include_tempo=true` were negative cases under the former guard. It checked history and saved content after rejections, and positive undo, redo, save and reopen. A tempo-only extension case also verified that an unextended meter map could change. The session 19 native build and these cases passed in `artifacts/feature-acceptance-970ae8c4e0d2/summary.json`; the current insertion cases use the session 20 movement contract.
 
-Old-host red baseline: `artifacts/feature-acceptance-6f72924aa999/preservation.timeline_event_unchanged.json` records all three negative edits rejected with unchanged saved content and history, followed by rejection of the intended `time.delete` / `include_tempo=false` positive case by the old blanket guard. The current `timeline_extension_guard` case uses a different-meter deletion range whose generated time-signature boundary remains guarded; separate controller/audio/pitch protections are untouched.
+Old-host red baseline: `artifacts/feature-acceptance-6f72924aa999/preservation.timeline_event_unchanged.json` records all three negative edits rejected with unchanged saved content and history, followed by rejection of the intended `time.delete` / `include_tempo=false` positive case by the old blanket guard. The current `timeline_extension_guard` case uses a different-meter deletion range whose begin bar already has a time-signature event; that collision remains guarded; separate controller/audio/pitch protections are untouched.

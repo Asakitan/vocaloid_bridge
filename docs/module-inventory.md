@@ -5,14 +5,14 @@
 | `native/Program.cs` | 原生宿主入口、安装库解析、私有 desktop 检查 | 已编译 |
 | `native/EngineSession.cs` | VSM 会话、工程生命周期、声库、片段渲染和归档校验钩子 | 独立命名空间、零结果缓存；保存前 ZIP 及控制器事务校验有定向测试 |
 | `native/ProjectIntegrity.cs` | 原生打开与发布前的结构和声库身份检查 | 缺经典声库预检、丢失身份阻止覆盖、AI 正例通过；不代替经典声库 |
-| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 68 操作；控制器选点移动和受测扩展历史通过 |
+| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 68 操作；音高半开清除、控制器选点移动和受测扩展历史通过 |
 | `native/AudioOperations.cs` | 原生离线音频、效果与整轨混缩 | 16 个音频操作含传输；普通导入/编辑及效果编辑的原生撤销重做通过，扩展工程写入仍受保护 |
 | `native/TransportOperations.cs` | 原生设备枚举与私有会话播放、停止、定位、释放 | 普通及扩展工程快照的 DirectSound 静音闭环通过；定位区分异步请求与观测 |
 | `native/TrackFreezeOperations.cs` | 会话自有冻结缓存、时基物化和作者态保存 | 多片段/非零起点/效果/自动化与正式 MCP 通过；不持久化冻结标志 |
 | `native/ProjectArchivePreservation.cs`、`native/ProjectArchiveArrays.cs` | 未知字段、实体身份、速度/拍号/控制器事件和额外归档资源保留 | 受测事件扩展编辑、控制器复制拆合及历史通过；跨工程控制器扩展和其他数组有限制 |
 | `native/MidiRecordingOperations.cs`、`native/MidiRecordingGuards.cs` | 设备枚举、MIDI 事件队列、事务录制及会话保护 | 六操作、静音同步、回调保护及自有虚拟输入通过；物理设备和驱动错误路径未验 |
 | `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 30 个操作有成功调用；样式及 HMM 通过，经典 Singing Skill 重开受身份问题影响 |
-| `native/ProjectInterchange.cs`、`native/ProjectArchiveTempoMerge.cs`、`native/ProjectArchiveTimeSigMerge.cs` | 原生格式交换、复制、恢复与合并 | 真实 PPSF3/音频克隆、AI/音频实体、root/master、不透明资源和受测 tempo/拍号扩展合并通过；纯元数据和其他音频组合受限 |
+| `native/ProjectInterchange.cs`、`native/ProjectArchiveTempoMerge.cs`、`native/ProjectArchiveTimeSigMerge.cs` | 原生格式交换、复制、恢复与合并 | 真实 PPSF3/音频克隆、AI/音频实体、受测纯元数据历史和 tempo/拍号扩展合并通过；其他音频组合受限 |
 | `native/ProjectClipboard.cs`、`native/ProjectArchiveTransfer.cs` | 私有原生快照剪贴板及扩展身份迁移 | 受测 AI/音频扩展剪切/粘贴、原始及处理 WAV、工程级不透明资源迁移与候选预检通过；控制器扩展转移受限 |
 | `native/ProjectArchiveOutput.cs` | 带扩展工程的独立原生快照输出 | 人声渲染、MIDI 导出、离线混缩/分轨及源会话历史保护定向通过 |
 | `native/ProjectArchiveLibrary.cs`、`native/ProjectArchiveMedia.cs` | 扩展工程私有素材、MIDI 实体元数据与候选预检 | 受测 AI 片段/音符未知字段、历史和重开通过；controller 及音频扩展写入仍受保护 |
@@ -43,6 +43,9 @@
 | `tools/check_controller_splitting.py`、`tools/check_controller_transfer.py` | 控制器边界拆合和跨工程传输回归 | 工程内边界与冲突回滚通过；跨工程用例因现有保护未通过 |
 | `tools/check_archive_library.py`、`tools/check_archive_audio_mutations.py` | 扩展工程私有素材/离线音频及普通音频事务回归 | 受测路径通过；扩展工程音频导入/编辑用例仍受保护 |
 | `tools/check_archive_media_extensions.py`、`tools/check_archive_transport.py`、`tools/check_audio_effect_history.py` | 扩展 AI 素材、静音快照传输及普通效果事务回归 | 受测正例、历史与保护定向通过；设备和格式组合有边界 |
+| `tools/check_pitch_clear_boundaries.py`、`tools/check_metadata_history.py` | 音高清除边界及纯元数据原生历史回归 | 定向 MCP 用例及旧历史、冲突、最高速度通过 |
+| `tools/check_note_array_extensions.py`、`tools/run_pitch_clear_native_probe.py`、`tools/run_timeline_identity_probe.py` 及其 PowerShell 探针 | 音符数组与时间线原生身份和边界观察 | 私有 desktop 定向取证；生成点及未知字段仍有限制 |
+| `tools/check_archive_media_update.py` | 自有普通素材更新及扩展素材红色基线 | 普通更新/锁文件失败通过；扩展素材更新守卫解除被自动审查拦截 |
 | `tools/check_clipboard_ambiguity.py`、`tools/check_archive_export_limits.ps1`、`tools/check_tempo_array_helper.ps1` | 剪贴板候选、ZIP 导出限制和 tempo 数组原语回归 | 合成候选、缩小阈值 ZIP 和原语通过；完整 MCP 证据见 STATUS |
 | `tools/probe_appcontainer_pipe.cs`、`tools/probe_appcontainer_child.go` | 随机合成管道的后台进程隔离探针 | 受限令牌及单一默认权限管道拒绝访问已观察；非插件隔离证明 |
 | `tools/probe_appcontainer_server.cs`、`tools/probe_appcontainer_server_child.go`、`tools/probe_appcontainer_peer.cs`、`tools/probe_appcontainer_peer_child.go` | 随机合成管道受限服务端与同/异 profile 对端探针 | LOCAL 双向收发和负对照已观察；未证明真实插件隔离 |
@@ -89,3 +92,4 @@
 | 2026-11-10 | 升级 0.9.0：受测拍号扩展合并、控制器事件编辑、音频资源迁移及扩展工程原生输出；控制器扩展迁移和实际插件隔离继续保留边界。 |
 | 2026-11-10 | 升级 0.10.0：受测控制器扩展工程内复制拆合、独立素材/音频操作及普通音频撤销历史；控制器跨工程与扩展音频写入仍受保护。 |
 | 2026-11-10 | 升级 0.11.0：受测 AI 素材未知字段及历史、扩展工程静音快照传输和普通效果历史；扩展时间编辑与 controller/音频写入边界保留。 |
+| 2026-11-10 | 升级 0.12.0：音高半开清除和受测纯元数据/资源合并历史通过；时间事件生成点及素材更新审查边界保留。 |

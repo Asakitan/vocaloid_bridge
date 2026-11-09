@@ -309,3 +309,27 @@ This classic-format failure is not an accepted full roundtrip.
 Style capture or apply with `include_audio=true` requires releasing any active
 native transport first, including one owned by another session. The guard runs
 before creating a style draft or mutating the target part.
+
+A separate ordinary private MIDI clip probe, `tools/check_archive_media_update.py`,
+passed in `artifacts/feature-acceptance-2456c42fd76b/summary.json`. Its native
+property update changed `property.json` while leaving the `.vsclip` bytes intact;
+`media_get` remained consistent after saving and reopening the project (this does
+not restart the media manager). With the same new clip's `property.json` held
+open without write/delete sharing, native save returned an error and the observed
+property file, clip file, catalog view, and project history remained unchanged.
+The handle was closed and the disposable clip deleted. This establishes one
+locked-file failure only, not crash atomicity, manager restart, arbitrary I/O
+failures, external concurrent writers, or archive-bearing clip update safety;
+the archive metadata update guard remains in place.
+
+The archive-bearing expected-success case `preservation.media_update_entities`
+in `tools/check_archive_media_update.py` is a red baseline against the current
+host: `artifacts/feature-acceptance-720b23a039dd/summary.json` records the
+existing archive-metadata property guard rejecting the update, with cleanup
+passing. Its subsequent locked-file and import/history/reopen assertions were
+not reached. Automatic review rejected a request to remove the guard because the
+ordinary-clip probe and lack of rebuilt end-to-end evidence do not establish
+that archive extensions survive; losing extension metadata remains the risk.
+The guard remains unchanged. The older `preservation.media_entities` case still
+expects this rejection and would need reconciliation if the guard is changed
+through an approved, validated implementation.

@@ -127,8 +127,10 @@ event merge use the native history journal and candidate ZIP validation. Tempo
 and time-signature unknown fields have operation-specific transitions and tested
 merge mappings. Controller event fields support selected-point edits and native
 history; controller-extension track/part duplication and part split/join are
-mapped, while cross-project controller transfer and metadata-only merges without
-a native history entry are explicit errors. Independent private-library operations
+mapped, while cross-project controller transfer remains guarded. Metadata-only
+global/resource merges without an existing native change stage and restore a
+native tempo value in one transaction to create a native history entry; the
+focused metadata-only merge and history case has passed. Independent private-library operations
 and external-WAV processing are available with their selected-content guards.
 Owned AI MIDI media may retain tested part/note unknown fields in versioned
 clip metadata; an isolated native candidate validates the import and archive

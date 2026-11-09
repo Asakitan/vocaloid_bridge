@@ -204,13 +204,16 @@ async def merge_transfer(check):
         for name, payload in empty_members.items(): archive.writestr(name, payload)
     target = (await check.call("project_create", title="Empty global target"))["session_id"]
     try:
-        before = await check.call("project_status", session_id=target)
-        await check.rejected("project_merge", "requires a native history entry", session_id=target,
-                             path=str(empty_source), include_tracks=True, include_tempo=False)
-        v.require(await check.call("project_status", session_id=target) == before,
-                  "Rejected metadata-only merge changed target status")
+        await check.call("project_merge", session_id=target, path=str(empty_source),
+                         include_tracks=True, include_tempo=False)
         empty_saved, _ = await check.save(target, "merge-empty-global-target")
-        v.require("x_empty_global" not in empty_saved, "Rejected metadata-only merge changed global data")
+        v.require(empty_saved["x_empty_global"] == "only-metadata", "Metadata-only merge lost global data")
+        await check.edit(target, "undo")
+        undone, _ = await check.save(target, "merge-empty-global-undo")
+        v.require("x_empty_global" not in undone, "Metadata-only undo retained global data")
+        await check.edit(target, "redo")
+        redone, _ = await check.save(target, "merge-empty-global-redo")
+        v.require(redone["x_empty_global"] == "only-metadata", "Metadata-only redo lost global data")
     finally:
         await check.close(target)
     v.require(source.read_bytes() == original, "Source VPR changed")

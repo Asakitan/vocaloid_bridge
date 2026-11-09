@@ -1364,7 +1364,10 @@ internal sealed partial class EngineHost
             return ScoreMutate(session, operation, () =>
             {
                 ScoreRequire(note.ClearDirectPitches(clearAll ? WIVSMNote.DirectPitchClearingBeginTick : new VSMRelTick(begin),
-                    clearAll ? WIVSMNote.DirectPitchClearingEndTick : new VSMRelTick(end)), operation, session.Sequence);
+                    clearAll ? WIVSMNote.DirectPitchClearingEndTick : new VSMRelTick(end - 1)), operation, session.Sequence);
+                // Native clearing uses inclusive endpoints. Verify the complete
+                // half-open result while staged so a mismatch can roll back.
+                ReadClearedPitch();
                 return true;
             }, ReadClearedPitch);
         }

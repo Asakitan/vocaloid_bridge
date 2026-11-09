@@ -263,7 +263,13 @@ No wrapper-generated interpolation or replacement synthesis is used.
 Explicit `replace: true` removes all points of the selected controller type, or
 clears the addressed note's direct pitch using native clearing sentinels, before
 writing. A full `pitch.clear` also uses those sentinels; a partial clear uses the
-specified half-open note-relative range and verifies that outside points remain.
+specified half-open note-relative range. The native primitive includes its end
+tick, so the bridge passes `end_tick - 1` and verifies the complete remaining
+point set while staged and again after commit. A pre-commit mismatch rolls back.
+The native-boundary probe is recorded in `artifacts/pitch-clear-native-08cb8e42a1df.json`;
+the actual MCP regression in `artifacts/feature-acceptance-ecd0ad6f2b5c/summary.json`
+passes exact and single-tick boundaries, empty and invalid intervals, native
+history, full clear and saved-project reopen.
 After commit, pitch writes reacquire the note and require every requested anchor
 to exist with the correct native value. Readback failures are reported rather
 than accepting an empty or shortened curve. Uncommitted failures use the existing

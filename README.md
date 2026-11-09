@@ -33,7 +33,7 @@ powershell -NoProfile -File .\tools\setup.ps1
 
 这些条目均使用 `E:/VC/vocaloid_bridge/.venv/Scripts/python.exe -m vocaloid_bridge`，并显式设置 `VOCALOID_WORKSPACE`、`PYTHONPATH` 为 `E:/VC/vocaloid_bridge`，`PYTHONUTF8` 为 `1`。从其他目录启动时，输出仍写到本项目的 `output`。Codex 的 `tool_timeout_sec` 为 180。
 
-Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.11.0 提供 37 个工具和 125 个结构化操作，独立 stdio 客户端的定向测试已通过。本对话现有连接仍报告 Python MCP 0.4.0；其运行中的原生宿主此前经比对为 0.5.0 构建，尚未载入 0.11.0。重新连接后应核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
+Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.12.0 提供 37 个工具和 125 个结构化操作，独立 stdio 客户端的定向测试已通过。本对话现有连接仍报告 Python MCP 0.4.0；其运行中的原生宿主此前经比对为 0.5.0 构建，尚未载入 0.12.0。重新连接后应核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
 
 ## 工具
 
@@ -121,6 +121,8 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 0.10.0 的 [定向回执](artifacts/feature-acceptance-6cc1fd525f8e/summary.json) 覆盖控制器扩展的复制拆合、重叠冲突回滚、扩展工程独立离线音频和私有素材操作；[普通音频事务回执](artifacts/feature-acceptance-eb4111329c4f/summary.json) 验证导入、编辑和撤销重做。控制器跨工程扩展迁移和扩展工程音频写入仍有保护边界，详见 [STATUS](STATUS.md)。
 
 0.11.0 的 [AI 素材回执](artifacts/feature-acceptance-39ed0d000904/summary.json) 覆盖受测片段及音符未知字段的捕获、导入、旧历史、保存与重开；[扩展工程静音传输回执](artifacts/feature-acceptance-6667cde9784c/preservation.archive_transport.json) 验证私有快照播放和源工程保护。普通工程效果器原生撤销历史另见 [定向结果](artifacts/feature-acceptance-f97d35cd5451/audio.effect_history.json)；该批次中的两个测试失败及后续修正均保留记录。
+
+0.12.0 的 [定向回执](artifacts/feature-acceptance-b07ec74aa41d/summary.json) 验证音高半开区间边界、纯元数据和不透明资源合并、原生撤销历史及相关回归；[扩展目标及最高速度边界回执](artifacts/feature-acceptance-fc6a72130b1c/summary.json) 进一步验证源保护、冲突和历史。扩展素材属性更新的自动审查拦截、扩展时间编辑和音符数组未知字段边界仍在 [STATUS](STATUS.md) 中记录。
 
 原生混缩输出整工程或所选整轨，各分轨保留自己的时长；分轨不使用主效果和主音量自动化。`start_seconds`、`end_seconds` 和 `tail_seconds` 不受此原生入口支持，传入会明确报错。素材属性写入独立的 `property.json`；新建自有素材可在 `.vsclip` 中附加桥接元数据。
 

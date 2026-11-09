@@ -147,6 +147,60 @@ The earlier source guard is historical, not the current contract. A
 separate case verifies that tempo-only metadata does not require unrelated
 same-shaped tracks with different known values to be treated as ambiguous.
 
+### Timeline boundary probe
+
+The ordinary-project private native probe `preservation.timeline_boundary_probe`
+(`artifacts/feature-acceptance-e64467f2aa7f/preservation.timeline_boundary_probe.json`)
+exercised insert and delete at tick 1000 for 500 ticks with both `include_tempo`
+settings. In that fixture a part moved from tick 7680 to 8180 or 7180, with
+its notes and controller data included in the saved snapshots. Inserting moved
+the 3/4 signature from bar 2 to bar 3 even when tempo movement was disabled.
+With tempo movement enabled, deletion changed the event at tick 1000 from 130
+BPM to 150 BPM, removed the event at 1200, and moved the event at 2000 to
+1500; the event originally at 1500 supplied the resulting 1000 value. All four
+cases restored the exact saved track/master snapshots on undo and redo. These
+are observations of serialized values, not proof of native event identity or of
+extension migration. Nonaligned meter mapping, collision ownership, controller
+identity, failure rollback, and extension-bearing clone/reopen still require
+independent proof; extension-bearing time edits remain guarded.
+
+The separate private-desktop pointer probe is reproducible by running the
+boundary case above and then `python tools/run_timeline_identity_probe.py
+--fixture output/feature-RUN-ID-NNN-boundary-before.vpr`. The launcher accepts
+only a boundary fixture in the workspace output directory and never uses the
+interactive editor. The observed run is
+`artifacts/timeline-identity-probe-be167ab09a30.json`. For the deletion with
+tempo enabled, the original tick-1500 tempo object moved to 1000 while the
+original tick-1000 and tick-1200 objects disappeared. Rollback and undo
+restored those exact observed addresses, and redo restored the moved-object
+state. In the insert cases the moved meter and tempo objects retained their
+addresses; the moved part, note and its two controller events retained their
+addresses in all four cases. These values agree with the serialized boundary
+probe. Address equality in this one process does not establish ownership after
+address reuse or general event notification behavior.
+
+With `--omit-end-tempo`, the launcher creates a synthetic variant without the
+tick-1500 tempo. In `artifacts/timeline-identity-probe-7f40b43c2298.json`,
+deleting 1000–1500 generated a new tick-1000, 140 BPM event instead of moving
+the original tick-1200 object. After rollback, repeating the operation created
+the equivalent event at a different native address. Thus candidate object
+addresses cannot map generated events in the real transaction; the generated
+boundary event must not automatically inherit unknown fields from either the
+deleted tick-1000 event or the tick-1200 event. Its extension policy and mapping
+need an explicit tested contract before that deletion case can be enabled.
+
+A future timeline transaction must capture native identities and known values
+before mutation, apply the operation to a candidate, establish a unique
+operation-specific mapping for every retained or created event, validate the
+entire post-state, then commit the corresponding extension snapshot with native
+history. Deleted events must lose their metadata; collisions must map to the
+surviving native object, not merely to its destination tick. Any unknown or
+ambiguous correspondence must roll back. Additional evidence is needed for
+removed whole parts and their descendants, meter collisions and generated
+boundary events, native callback sequences and address reuse, mixed multiple
+tracks, extension-bearing rollback and clone/reopen. These observations alone
+do not justify opening the guarded route.
+
 ## Implemented scope and validation
 
 `native/ProjectArchivePreservation.cs` is integrated into open, save and clone.
@@ -206,7 +260,11 @@ outside the explicitly tracked subset are rejected. MIDI/AI/Audio clipboard cut/
 and track merge now use identity transactions. Source root/master fields with
 equal or disjoint pointers can be merged with target fields; new nested leaves
 are preflighted against a native target snapshot, while conflicting values and
-global-only merges without a native history entry are rejected. The focused
+global-only merges use a staged-and-restored native tempo marker if no other
+native history entry exists and no tempo/meter extension transaction is active.
+The marker preserves the final tempo and the archive journal shares that native
+history entry. The focused metadata-only merge and maximum-tempo case passed in
+`artifacts/feature-acceptance-fc6a72130b1c/summary.json`. The focused
 `artifacts/feature-acceptance-5a2c12f87c28/summary.json` verifies direct and
 nested additions, save/reopen, undo/redo, source protection and rejection of
 an indistinguishable-track conflict on an independent candidate before target

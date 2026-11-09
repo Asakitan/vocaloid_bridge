@@ -228,6 +228,12 @@ target merge. No existing member is overwritten.
 
 New resources are copied to private target-session storage and their mapping
 is journaled with the native merge; additions require a native history entry.
+For archive-only additions with no native change or tempo/meter extension
+transaction, the implementation stages a native tempo value and restores it
+within the same transaction to create an undo entry without a final tempo
+change. The focused AI/empty-project case in
+`artifacts/feature-acceptance-fc6a72130b1c/summary.json` checks metadata,
+resources, history, conflicts, no-op merging and the maximum native tempo.
 Undo, redo, rollback, and redo-clearing branches restore the corresponding
 mapping. Private copies remain until session cleanup so redo can restore
 them. The source project and existing destination files are not modified.

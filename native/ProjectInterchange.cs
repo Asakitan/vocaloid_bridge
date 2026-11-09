@@ -269,6 +269,12 @@ internal sealed partial class EngineHost
                         clipboard.Dispose();
                     }
                 }
+                // An archive-only merge still needs one real native history
+                // entry, so its metadata and opaque resources can share undo.
+                // Keep the native tempo map unchanged at the transaction edge.
+                if (!target.Sequence.IsStaged && mergedTempo is null && mergedTimeSig is null &&
+                    (globalChange || resources.Count != 0))
+                    StageArchiveMetadataHistory(target.Sequence);
                 if (mergedTempo is not null)
                 {
                     ProjectArchiveArrays.ValidateTempo(mergedTempo, ArchiveNativeTempos(target.Sequence));
@@ -305,6 +311,20 @@ internal sealed partial class EngineHost
             }
             throw;
         }
+    }
+
+    private static void StageArchiveMetadataHistory(WIVSMSequence sequence)
+    {
+        WIVSMTempo tempo = sequence.GetTempo(0)
+            ?? throw new InvalidOperationException("project_preservation: initial tempo is absent.");
+        int original = tempo.Value, minimum = sequence.GetMinTempoValue(), maximum = sequence.GetMaxTempoValue();
+        if (original < minimum || original > maximum || minimum >= maximum)
+            throw new InvalidDataException("project_preservation: native tempo range is invalid.");
+        int marker = original < maximum ? original + 1 : original - 1;
+        tempo.Value = marker;
+        ScoreRequire(tempo.Value == marker, "metadata history marker", sequence);
+        tempo.Value = original;
+        ScoreRequire(tempo.Value == original && sequence.IsStaged, "metadata history marker restore", sequence);
     }
 
     private void CleanupImportedProjects(string id)

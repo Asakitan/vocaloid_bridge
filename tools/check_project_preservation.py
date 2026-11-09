@@ -909,5 +909,35 @@ async def timeline_extension_guard(check):
     v.require(reopened_seq == seq, "Reopen changed guarded project")
     await check.close(reopened); await check.close(clone); await check.close(sid)
 
+@v.feature("preservation.timeline_boundary_probe", "preservation", "score_compose", "project_edit", "project_save")
+async def timeline_boundary_probe(check):
+    """Observe non-bar-aligned edits and deletion collisions on an ordinary private project."""
+    for include_tempo in (False, True):
+        for operation, start, duration in (("time.insert", 1000, 500), ("time.delete", 1000, 500)):
+            seed = await check.call("score_compose", output_name=check.output("timeline-boundary-seed"), title="Timeline boundary",
+                bpm=120, notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
+            sid = seed["native_session"]["session_id"]
+            try:
+                scope = {"track_index": 0, "part_index": 0}
+                await check.edit(sid, "controller.set", **scope, type="Dynamics", replace=True,
+                                 points=[{"tick": 60, "value": 30}, {"tick": 480, "value": 60}])
+                await check.edit(sid, "part.move", **scope, start_tick=7680)
+                for tick, bpm in ((1000, 130), (1200, 140), (1500, 150), (2000, 160)):
+                    await check.edit(sid, "tempo.set", start_tick=tick, bpm=bpm)
+                await check.edit(sid, "time_signature.set", bar=2, numerator=3, denominator=4)
+                async def snapshot(label):
+                    sequence, _ = await check.save(sid, "boundary-" + label)
+                    return {"tracks": sequence["tracks"], "master": sequence["masterTrack"]}
+                before = await snapshot("before")
+                await check.edit(sid, operation, start_tick=start, duration_tick=duration, include_tempo=include_tempo)
+                after = await snapshot("after")
+                await check.edit(sid, "undo")
+                v.require(await snapshot("undo") == before, "Boundary edit undo mismatch")
+                await check.edit(sid, "redo")
+                v.require(await snapshot("redo") == after, "Boundary edit redo mismatch")
+                check.evidence("boundary_%s_%s" % (operation, include_tempo), {"before": before, "after": after})
+            finally:
+                await check.close(sid)
+
 if __name__ == "__main__":
     raise SystemExit(v.main())

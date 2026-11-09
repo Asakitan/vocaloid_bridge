@@ -20,8 +20,12 @@ internal sealed partial class EngineHost
         EngineSession session = GetSession(id);
         if (options.ValueKind is not (JsonValueKind.Object or JsonValueKind.Undefined))
             throw new ArgumentException("Audio options must be an object.");
+        if (transport is not null && operation != "devices" && !operation.StartsWith("transport_", StringComparison.Ordinal))
+            throw new InvalidOperationException("Release the prepared transport before using other native audio operations.");
         return operation switch
         {
+            "devices" or "transport_prepare" or "transport_status" or "transport_play" or "transport_stop" or "transport_seek" or "transport_release"
+                => TransportOperation(session, operation, options),
             "inspect_audio" => InspectAudioFile(session, options),
             "import_audio" => ImportAudio(session, options),
             "edit_audio" => EditAudio(session, options),
@@ -234,7 +238,7 @@ internal sealed partial class EngineHost
                 if (track.Type is VSMTrackType.Midi or VSMTrackType.MidiAi && new WIVSMMidiTrack(track) is { IsFrozen: true } frozen)
                 {
                     AddAudioPlacement(AudioPlacementBuilder.CreateAudioPlacementFrozenTrack(sequence, frozen,
-                        AudioPlacementBuilder.CreateTimeRangeFrozenTrack(sequence, frozen)), placements, pending);
+                        FrozenTrackTimeRange(sequence, frozen)), placements, pending);
                     continue;
                 }
                 foreach (WIVSMPart part in track.Parts)
@@ -305,6 +309,13 @@ internal sealed partial class EngineHost
             throw new InvalidOperationException("Native file placement submission failed: " + result);
     }
 
+    private static VETimeRange FrozenTrackTimeRange(WIVSMSequence sequence, WIVSMMidiTrack track)
+    {
+        VETimeRange first = AudioPlacementBuilder.CreateTimeRangeFrozenTrack(sequence, track);
+        double end = track.Parts.Select(part => part.EndSec).DefaultIfEmpty(first.End).Max();
+        return new VETimeRange(first.Begin, Math.Max(first.End, end));
+    }
+
     private static void DrainAudioPlacements(AudioMixCallbacks callbacks, HashSet<int> pending)
     {
         while (callbacks.Placements.TryDequeue(out var result))
@@ -332,6 +343,18 @@ internal sealed partial class EngineHost
         {
             WIVSMTrack track = sequence.GetTrack(index)!;
             uint bus = (uint)index;
+            if (track.Type is VSMTrackType.Midi or VSMTrackType.MidiAi && new WIVSMMidiTrack(track).IsFrozen)
+            {
+                // The owned frozen stem already includes track gain and pan.
+                // Apply master processing only while replaying that stem.
+                VEAudioEngine.BeginEditInputGain(bus);
+                VEAudioEngine.AddInputGain(bus, 0, 1);
+                VEAudioEngine.EndEditInputGain(bus);
+                VEAudioEngine.BeginEditInputPan(bus);
+                VEAudioEngine.AddInputPan(bus, 0, 0);
+                VEAudioEngine.EndEditInputPan(bus);
+                continue;
+            }
             VEAudioEngine.BeginEditInputGain(bus);
             if (track.NumVolumes == 0)
                 VEAudioEngine.AddInputGain(bus, 0, AudioGain(track.GetDefaultVolumeValue()));
@@ -904,6 +927,7 @@ internal sealed partial class EngineHost
 
     private void DisposeAudioServices()
     {
+        ReleaseTransport();
         StopNativeAudio();
         audioEffects?.Dispose();
         audioEffects = null;

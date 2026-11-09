@@ -12,7 +12,7 @@
 - **X**：会操作用户前台、全局设置或授权，不符合当前约束。
 - **E**：需要外部设备、DAW 或其他未提供的环境；不是已验证功能。
 
-V 不由工具数量或能够枚举签名推导。当前为 36 个工具、109 个结构化操作；上轮 [完整回执](../artifacts/feature-acceptance-012574702338/summary.json) 的 76 通过、5 失败、2 个缺样本项保留作历史。会话 07 已补真实 PPSF3、Robot 缓存修复、完整表现参数、Take 和 VoiceColor 定向证据；经典声库及设备环境仍有缺口。当前证据汇总见 [STATUS](../STATUS.md)，不宣称本轮重跑了完整套件。
+V 不由工具数量或能够枚举签名推导。当前为 36 个工具、119 个结构化操作；[历史完整回执](../artifacts/feature-acceptance-012574702338/summary.json) 的 76 通过、5 失败、2 个缺样本项保留。会话 08 新增静音设备传输、会话冻结、未知数据保留与相应定向证据；经典声库、复杂扩展格式及外部环境仍有缺口。当前证据汇总见 [STATUS](../STATUS.md)，不宣称本轮重跑了完整套件。
 
 ## 工程与文件
 
@@ -31,6 +31,7 @@ V 不由工具数量或能够枚举签名推导。当前为 36 个工具、109 �
 | P-11 | 用户编辑器最近文件列表 | 不改用户全局偏好 | X | 14 |
 | P-12 | 用户编辑器自动保存设置 | 不改用户全局偏好 | X | 24 |
 | P-13 | 原生内部采样率与预送信息 | sequence.update 的采样率读写已验；presend_time_sec 原生只读；声乐合成限定 44100，输出率另见 X-03 | I | 原生 API |
+| P-14 | 自定义字段与额外工程资源保留 | root/master/track/part/note 与固定嵌套对象、资源、重排及历史通过；复杂数组/复制语义仍受限 | I | 格式扩展 |
 | F-01 | VPR 导入 | project_import；修改、保存、重开和源文件保护已验 | V | 15 |
 | F-02 | VOCALOID3/4 VSQX 导入 | project_import；两份样本音符数据已验，经典身份往返需 DSE 声库；丢失身份时保存前报错 | E | 14-15 |
 | F-03 | PPSF V2 导入 | project_import；497 个音符保留，经典完整往返需 DSE 声库；类型转换与身份丢失已有显式保护 | E | 14-15 |
@@ -54,6 +55,7 @@ V 不由工具数量或能够枚举签名推导。当前为 36 个工具、109 �
 | T-06 | 轨道音量、声像与自动化 | project_edit automation.list / set / remove；真实混音与工程往返已验 | V | 32,37,72-73 |
 | T-07 | 轨道输出总线路由 | bus_no 参数持久化、bus 0/1 离线混缩已验；实际外部总线路由需要 DAW | E | 72 |
 | T-08 | 轨道 MIDI 录音开关 | track.update midi_recording；会话内有效，重开恢复关闭 | V | 32,73 |
+| T-09 | 轨道冻结与解除冻结 | track.freeze/freeze_state/unfreeze；会话自有缓存，保存/克隆还原作者状态；受测多片段及自动化通过 | V | 原生 API |
 | R-01 | MIDI 片段枚举、新建 | project_edit part.list / create | V | 32-37 |
 | R-02 | MIDI 片段名称与位置 | project_edit part.update / move | V | 33-37 |
 | R-03 | MIDI 片段长度与右边界 | project_edit part.resize；左右音频边界见 A-03 | V | 32-37,44 |
@@ -82,7 +84,7 @@ V 不由工具数量或能够枚举签名推导。当前为 36 个工具、109 �
 | M-05 | 主调音 | project_edit tuning.get / set | V | 16 |
 | M-06 | 循环区间与开关 | project_edit loop.get / set | V | 20,29-30 |
 | M-07 | 循环区间起止标记 | project_edit loop.get / loop.set | V | 20,29-30 |
-| M-08 | 播放头与播放开始模式 | 需要独立音频传输上下文 | E | 20,29-30 |
+| M-08 | 播放头与播放开始模式 | transport 的开始/停止/异步定位已验；用户编辑器的全局开始模式设置不接管 | I | 20,29-30 |
 | C-01 | 参数曲线读取与编辑 | project_edit controller.list / set / remove | V | 50-51 |
 | C-02 | 原有 VPR 曲线的文件级替换 | score_curve | V | 50-51 |
 | C-03 | 直接音高曲线写入、清除 | project_edit pitch.list / set / clear；保存重开后回读 | V | 39,45 |
@@ -142,7 +144,7 @@ V 不由工具数量或能够枚举签名推导。当前为 36 个工具、109 �
 | L-09 | 非零起点的音频裁剪素材捕获 | project_library media_capture / media_import；PCM16 单声道样本跨速度变化逐帧验证 | V | 19,71 |
 | L-10 | AI 次声库素材捕获与恢复 | project_library media_capture / media_import；两套已安装 AI 声库实际往返 | V | 19,71 |
 | L-11 | 私有样式捕获、覆盖、改名、标签与删除 | style_capture/update/delete；原生 VSStyle 文件及应用后重开已验，用户原样式只读 | V | 54-55 |
-| U-01 | 直接播放、停止、听音确认 | 需要独立音频设备验收 | E | 20,29,39,45 |
+| U-01 | 直接播放、停止、听音确认 | 指定 DirectSound 设备的静音播放/停止/定位/释放通过；实际听音质量仍未确认 | I | 20,29,39,45 |
 | U-02 | 实时 MIDI/音频录制 | 需要独立设备与输入源 | E | 20,32,73 |
 | U-03 | DAW、VST/AU、ARA 宿主同步 | 需要用户提供 DAW 宿主 | E | 74-75 |
 | U-04 | 改变用户音频设备或全局偏好 | 不影响用户编辑器及设备状态 | X | 24-25 |
@@ -156,6 +158,6 @@ V 不由工具数量或能够枚举签名推导。当前为 36 个工具、109 �
 
 所有可在当前约束内独立完成的功能都必须有实际入口和验收证据；M/I 行不能算作 V。E/X 不是成功，也不是静默回退。完整覆盖率以本文件及实际程序集目录共同核对，不以新增工具数量判断。
 
-仍待完成：对应 DSE 声库下的经典身份、Emotion、Singing Skill、六个经典 VoiceColor 参数，以及特定特殊素材组合和设备/DAW 环境。真实 PPSF3、Robot、Take 和三项 AI VoiceColor 已取得本轮定向证据；内部合成率与输出率、离线求和与外部路由的界限现已明确。静态音素表不是具体声库能力枚举，任意秒区间和尾长也不是当前原生混缩入口。前台窗口从未加入调用面。
+仍待完成：对应 DSE 声库下的经典身份、Emotion、Singing Skill、六个经典 VoiceColor，以及复杂扩展数据、实时输入/录制和 DAW 环境。原生设备传输已作静音验收，会话冻结及受支持的未知字段保留已具备入口和证据。内部合成率与输出率、离线求和与外部路由继续区分；静态音素表不是具体声库能力枚举，任意秒区间和尾长也不是当前原生混缩入口。前台窗口从未加入调用面。
 
 官方来源：`https://rsc-net.vocaloid.com/assets/pdf_files/bb/VOCALOID6_Reference_Manual_6130_ENG.pdf`。本机原文缓存和抽取文本只保存在被忽略的 `.runtime` 中。

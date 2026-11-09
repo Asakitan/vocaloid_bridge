@@ -1,0 +1,619 @@
+using System.IO;
+using System.IO.Compression;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Yamaha.VOCALOID.VSM;
+
+internal sealed partial class EngineHost
+{
+    private readonly record struct ArchiveEntity(string Kind, nint Pointer);
+    private sealed record ArchiveEntry(JsonObject Extra, ArchiveEntity? Parent);
+
+    private sealed class ArchiveState
+    {
+        internal required EngineSession Session;
+        internal required WIVSMUpdateObserver Observer;
+        internal required UpdateObserverNotifyEventHandler Handler;
+        internal JsonObject Root = new();
+        internal JsonObject Master = new();
+        internal Dictionary<ArchiveEntity, ArchiveEntry> Live = [];
+        internal readonly Stack<Dictionary<ArchiveEntity, ArchiveEntry>> Undo = new();
+        internal readonly Stack<Dictionary<ArchiveEntity, ArchiveEntry>> Redo = new();
+        internal Dictionary<ArchiveEntity, ArchiveEntry>? Before;
+        internal string? Action;
+        internal readonly List<string> ExtraFiles = [];
+        internal string? Invalid;
+        internal bool HasEntityExtensions;
+        internal bool ObserverAttached;
+    }
+
+    private readonly Dictionary<string, ArchiveState> archiveStates = new(StringComparer.Ordinal);
+    private static JsonObject? archiveSchema;
+
+    private static JsonObject ArchiveSchema()
+    {
+        if (archiveSchema is not null)
+            return archiveSchema;
+        string install = Path.GetDirectoryName(typeof(WVSMModuleIF).Assembly.Location)!;
+        byte[] binary = File.ReadAllBytes(Path.Combine(install, "VSM.dll"));
+        byte[] prefix = Encoding.Unicode.GetBytes("{\"$schema\":\"http://json-schema.org/draft-04/schema\"");
+        int start = binary.AsSpan().IndexOf(prefix);
+        if (start < 0)
+            throw new InvalidDataException("project_preservation: native VPR schema was not found.");
+        int end = start;
+        while (end + 1 < binary.Length && (binary[end] != 0 || binary[end + 1] != 0)) end += 2;
+        if (end + 1 >= binary.Length || end - start > 2 * 1024 * 1024)
+            throw new InvalidDataException("project_preservation: invalid native schema bounds.");
+        archiveSchema = JsonNode.Parse(Encoding.Unicode.GetString(binary, start, end - start)) as JsonObject
+            ?? throw new InvalidDataException("project_preservation: native VPR schema is invalid.");
+        return archiveSchema;
+    }
+
+    private static JsonObject ArchiveResolveSchema(JsonObject schema, JsonObject root)
+    {
+        string? path = schema["$ref"]?.GetValue<string>();
+        if (path is null)
+            return schema;
+        if (!path.StartsWith("#/", StringComparison.Ordinal))
+            throw new InvalidDataException("project_preservation: unsupported schema reference.");
+        JsonNode? node = root;
+        foreach (string segment in path[2..].Split('/'))
+            node = node?[segment.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal)];
+        return node as JsonObject ?? throw new InvalidDataException("project_preservation: unresolved native schema reference.");
+    }
+
+    private static JsonObject ArchiveUnknownFields(JsonObject value, JsonObject schema, string path)
+    {
+        JsonObject result = new();
+        void Collect(JsonObject current, JsonObject currentSchema, string pointer)
+        {
+            JsonObject properties = ArchiveResolveSchema(currentSchema, ArchiveSchema())["properties"] as JsonObject
+                ?? throw new InvalidDataException("project_preservation: missing object schema at " + path + pointer);
+            foreach ((string key, JsonNode? item) in current)
+            {
+                string escaped = key.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);
+                string childPointer = pointer + "/" + escaped;
+                if (properties[key] is not JsonObject childSchema)
+                    result.Add(childPointer, item?.DeepClone());
+                else if (item is JsonObject child && !(path == "" && pointer == "" && key == "masterTrack"))
+                    Collect(child, childSchema, childPointer);
+            }
+        }
+        Collect(value, schema, "");
+        return result;
+    }
+
+    private static JsonObject ArchiveObject(JsonNode? node, string path) => node as JsonObject
+        ?? throw new InvalidDataException("project_preservation: expected object at " + path);
+
+    private static JsonArray ArchiveArray(JsonNode? node, string path) => node is null ? new JsonArray() : node as JsonArray
+        ?? throw new InvalidDataException("project_preservation: expected array at " + path);
+
+    private static JsonObject ArchivePropertySchema(JsonObject schema, string name)
+    {
+        JsonObject resolved = ArchiveResolveSchema(schema, ArchiveSchema());
+        return resolved["properties"]?[name] as JsonObject
+            ?? throw new InvalidDataException("project_preservation: missing native schema property " + name);
+    }
+
+    private static JsonObject ArchiveItemSchema(JsonObject schema)
+    {
+        JsonObject resolved = ArchiveResolveSchema(schema, ArchiveSchema());
+        return resolved["items"] as JsonObject
+            ?? throw new InvalidDataException("project_preservation: missing native array schema.");
+    }
+
+    // Reject extensions outside the currently supported object owners rather than
+    // silently copying stale structures or losing fields. The installed schema's
+    // langIDs array omits items; its only declared member is handled explicitly.
+    private static void ArchiveValidateNested(JsonNode? node, JsonObject schema, string path,
+        bool owner = false)
+    {
+        if (node is null) return;
+        JsonObject resolved = ArchiveResolveSchema(schema, ArchiveSchema());
+        if (node is JsonObject value)
+        {
+            JsonObject properties = resolved["properties"] as JsonObject
+                ?? throw new InvalidDataException("project_preservation: no native object schema at " + path);
+            foreach ((string key, JsonNode? child) in value)
+            {
+                if (properties[key] is not JsonObject childSchema)
+                {
+                    if (!owner) throw new InvalidDataException("project_preservation: unsupported nested unknown field at " + path + "/" + key);
+                    continue;
+                }
+                // These owners are visited separately and bound to native identities.
+                if ((path == "" && (key == "masterTrack" || key == "tracks")) ||
+                    (path == "/tracks[]" && key == "parts") ||
+                    (path == "/tracks[]/parts[]" && key == "notes")) continue;
+                ArchiveValidateNested(child, childSchema, path + "/" + key, owner && child is JsonObject);
+            }
+        }
+        else if (node is JsonArray array)
+        {
+            if (resolved["items"] is JsonObject items)
+                foreach (JsonNode? child in array) ArchiveValidateNested(child, items, path + "[]");
+            else if (path.EndsWith("/langIDs", StringComparison.Ordinal) && resolved["langID"] is JsonObject)
+            {
+                foreach (JsonNode? child in array)
+                {
+                    JsonObject lang = ArchiveObject(child, path);
+                    if (lang.Any(pair => pair.Key != "langID"))
+                        throw new InvalidDataException("project_preservation: unsupported language metadata at " + path);
+                }
+            }
+            else if (array.Count != 0 && array.Any(child => child is JsonObject or JsonArray))
+                throw new InvalidDataException("project_preservation: native schema does not describe array items at " + path);
+        }
+    }
+
+    private static ArchiveEntity ArchiveKey(object value) => value switch
+    {
+        WIVSMNote note => new("note", note.CppObjPtr),
+        WIVSMTrack track => new("track", (nint)track),
+        WIVSMPart part => new("part", (nint)part),
+        _ => default
+    };
+
+    private static void ArchiveBind(ArchiveState state, object entity, JsonObject unknown, ArchiveEntity? parent)
+    {
+        ArchiveEntity key = ArchiveKey(entity);
+        if (key.Pointer == nint.Zero || !state.Live.TryAdd(key, new ArchiveEntry(unknown, parent)))
+            throw new InvalidDataException("project_preservation: duplicate or missing native identity.");
+        state.HasEntityExtensions |= unknown.Count != 0;
+    }
+
+    private static string ArchiveString(JsonObject value, string key) => value[key]?.GetValue<string>() ?? "";
+
+    private void CaptureArchivePreservation(EngineSession session, string extractedRoot)
+    {
+        string jsonPath = Path.Combine(extractedRoot, "Project", "sequence.json");
+        PathGuard.NoLinks(jsonPath);
+        if (new FileInfo(jsonPath).Length > 128L * 1024 * 1024)
+            throw new InvalidDataException("project_preservation: sequence JSON exceeds 128 MiB.");
+        JsonObject root = ArchiveObject(JsonNode.Parse(File.ReadAllText(jsonPath)), "");
+        JsonObject schema = ArchiveSchema();
+        JsonObject master = ArchiveObject(root["masterTrack"], "/masterTrack");
+        JsonObject masterSchema = ArchivePropertySchema(schema, "masterTrack");
+        JsonObject trackSchema = ArchiveItemSchema(ArchivePropertySchema(schema, "tracks"));
+        JsonObject partSchema = ArchiveItemSchema(ArchivePropertySchema(trackSchema, "parts"));
+        JsonObject noteSchema = ArchiveItemSchema(ArchivePropertySchema(partSchema, "notes"));
+        WIVSMUpdateObserver observer = new();
+        ArchiveState? state = null;
+        UpdateObserverNotifyEventHandler handler = e =>
+        {
+            try
+            {
+                if (state is null) return;
+                if (Environment.CurrentManagedThreadId != ownerThread) { state.Invalid = "observer callback left owner thread"; return; }
+                if ((e.NotifyType is VSMNotifyType.DidRemove or VSMNotifyType.DidInsert) &&
+                    state.Before is null && state.HasEntityExtensions)
+                {
+                    state.Invalid = "structural notification outside a tracked mutation";
+                    return;
+                }
+                if (e.NotifyType != VSMNotifyType.DidRemove) return;
+                foreach (object item in e.Objects)
+                {
+                    ArchiveEntity removed = ArchiveKey(item);
+                    if (removed.Pointer == nint.Zero) continue;
+                    HashSet<ArchiveEntity> dead = [removed];
+                    bool changed;
+                    do
+                    {
+                        changed = false;
+                        foreach ((ArchiveEntity key, ArchiveEntry entry) in state.Live)
+                            if (entry.Parent is ArchiveEntity parent && dead.Contains(parent) && dead.Add(key)) changed = true;
+                    } while (changed);
+                    foreach (ArchiveEntity key in dead) state.Live.Remove(key);
+                }
+            }
+            catch (Exception error) { if (state is not null) state.Invalid = error.Message; }
+        };
+        state = new ArchiveState { Session = session, Observer = observer, Handler = handler,
+            Root = ArchiveUnknownFields(root, schema, ""), Master = ArchiveUnknownFields(master, masterSchema, "/masterTrack") };
+        bool registered = false;
+        try
+        {
+            ArchiveValidateNested(root, schema, "", true);
+            ArchiveValidateNested(master, masterSchema, "/masterTrack", true);
+            JsonArray tracks = ArchiveArray(root["tracks"], "/tracks");
+            if ((ulong)tracks.Count != session.Sequence.NumTrack)
+                throw new InvalidDataException("project_preservation: track count changed while loading.");
+            for (int ti = 0; ti < tracks.Count; ti++)
+            {
+                JsonObject trackJson = ArchiveObject(tracks[ti], "/tracks[]");
+                WIVSMTrack track = session.Sequence.GetTrack((ulong)ti) ?? throw new InvalidDataException("project_preservation: missing track.");
+                ArchiveValidateTrack(track, trackJson);
+                ArchiveBind(state, track, ArchiveUnknownFields(trackJson, trackSchema, "/tracks[]"), null);
+                ArchiveValidateNested(trackJson, trackSchema, "/tracks[]", true);
+                JsonArray parts = ArchiveArray(trackJson["parts"], "/tracks[]/parts");
+                if ((ulong)parts.Count != track.NumParts) throw new InvalidDataException("project_preservation: part count changed while loading.");
+                for (int pi = 0; pi < parts.Count; pi++)
+                {
+                    JsonObject partJson = ArchiveObject(parts[pi], "/tracks[]/parts[]");
+                    WIVSMPart part = track.GetPart((ulong)pi) ?? throw new InvalidDataException("project_preservation: missing part.");
+                    ArchiveValidatePart(part, partJson);
+                    ArchiveBind(state, part, ArchiveUnknownFields(partJson, partSchema, "/tracks[]/parts[]"), ArchiveKey(track));
+                    ArchiveValidateNested(partJson, partSchema, "/tracks[]/parts[]", true);
+                    JsonArray notes = ArchiveArray(partJson["notes"], "/tracks[]/parts[]/notes");
+                    if (part is not WIVSMMidiPart midi)
+                    {
+                        if (notes.Count != 0) throw new InvalidDataException("project_preservation: notes on non-MIDI part.");
+                        continue;
+                    }
+                    if ((ulong)notes.Count != midi.NumNotes) throw new InvalidDataException("project_preservation: note count changed while loading.");
+                    for (int ni = 0; ni < notes.Count; ni++)
+                    {
+                        JsonObject noteJson = ArchiveObject(notes[ni], "/tracks[]/parts[]/notes[]");
+                        WIVSMNote note = midi.GetNote((ulong)ni) ?? throw new InvalidDataException("project_preservation: missing note.");
+                        ArchiveValidateNote(note, noteJson);
+                        ArchiveBind(state, note, ArchiveUnknownFields(noteJson, noteSchema, "/tracks[]/parts[]/notes[]"), ArchiveKey(part));
+                        ArchiveValidateNested(noteJson, noteSchema, "/tracks[]/parts[]/notes[]", true);
+                    }
+                }
+            }
+            if (state.HasEntityExtensions) ArchiveValidateUnambiguous(tracks);
+            // Referenced audio remains native-managed; opaque members that were
+            // already unreferenced are retained as independent archive content.
+            HashSet<string> audioNames = new(StringComparer.OrdinalIgnoreCase);
+            foreach (JsonNode? track in tracks)
+                foreach (JsonNode? part in ArchiveArray(track?["parts"], "parts"))
+                    if (part?["wav"] is JsonObject wav)
+                        foreach (string key in new[] { "name", "processedName" })
+                            if (wav[key] is JsonValue name && name.TryGetValue(out string? n) && !string.IsNullOrEmpty(n)) audioNames.Add(n);
+            foreach (string file in Directory.EnumerateFiles(extractedRoot, "*", SearchOption.AllDirectories))
+            {
+                PathGuard.NoLinks(file);
+                string relative = Path.GetRelativePath(extractedRoot, file).Replace('\\', '/');
+                if (relative.Equals("Project/sequence.json", StringComparison.OrdinalIgnoreCase) ||
+                    relative.Equals(ProjectValidityEntry, StringComparison.OrdinalIgnoreCase)) continue;
+                if (relative.StartsWith("Project/Audio/", StringComparison.OrdinalIgnoreCase))
+                {
+                    string audioName = relative["Project/Audio/".Length..];
+                    if (!audioNames.Contains(audioName)) state.ExtraFiles.Add(relative);
+                    continue;
+                }
+                state.ExtraFiles.Add(relative);
+            }
+            if (!state.HasEntityExtensions) state.Live.Clear();
+            if (!state.HasEntityExtensions && state.Root.Count == 0 && state.Master.Count == 0 && state.ExtraFiles.Count == 0)
+            {
+                observer.Dispose();
+                return;
+            }
+            if (state.HasEntityExtensions)
+            {
+                observer.Notified += handler;
+                if (!session.Sequence.AddUpdateObserver(observer))
+                    throw new InvalidOperationException("project_preservation: native observer registration failed.");
+                registered = true;
+                state.ObserverAttached = true;
+            }
+            archiveStates.Add(session.Id, state);
+            if (state.HasEntityExtensions) session.ArchiveBegin = operation =>
+            {
+                RequireArchiveMutationSupported(session, operation);
+                BeginArchiveMutation(session, operation);
+            };
+            if (state.HasEntityExtensions) session.ArchiveEnd = action => EndArchiveMutation(session, action);
+        }
+        catch
+        {
+            if (registered) session.Sequence.RemoveUpdateObserver(observer);
+            observer.Notified -= handler;
+            observer.Dispose();
+            throw;
+        }
+    }
+
+    private static void ArchiveValidateNote(WIVSMNote note, JsonObject json)
+    {
+        if (json["pos"]?.GetValue<long>() != note.RelPosTick.Value ||
+            json["duration"]?.GetValue<long>() != note.DurationTick.Value ||
+            json["number"]?.GetValue<int>() != note.NoteNumber ||
+            ArchiveString(json, "lyric") != note.Lyric || ArchiveString(json, "phoneme") != note.Phonemes)
+            throw new InvalidDataException("project_preservation: native note order or identity differs from serialized data.");
+    }
+
+    private static void ArchiveValidateTrack(WIVSMTrack track, JsonObject json)
+    {
+        if ((json["name"] is not null && ArchiveString(json, "name") != track.Name) ||
+            json["type"]?.GetValue<int>() != (int)track.Type)
+            throw new InvalidDataException("project_preservation: native track order or identity differs from serialized data.");
+    }
+
+    private static void ArchiveValidatePart(WIVSMPart part, JsonObject json)
+    {
+        if ((json["name"] is not null && ArchiveString(json, "name") != part.Name) ||
+            (json["pos"] is not null && json["pos"]!.GetValue<long>() != part.AbsPosTick.Value) ||
+            (json["duration"] is not null && json["duration"]!.GetValue<long>() != part.DurationTick.Value))
+            throw new InvalidDataException("project_preservation: native part order or identity differs from serialized data.");
+    }
+
+    private static void ArchiveValidateUnambiguous(JsonArray tracks)
+    {
+        static string Key(JsonObject value, params string[] names) => string.Join("|", names.Select(name => value[name]?.ToJsonString() ?? "null"));
+        HashSet<string> trackKeys = new(StringComparer.Ordinal);
+        foreach (JsonNode? trackNode in tracks)
+        {
+            JsonObject track = ArchiveObject(trackNode, "tracks[]");
+            if (!trackKeys.Add(Key(track, "type", "name")))
+                throw new InvalidDataException("project_preservation: ambiguous track identities in snapshot.");
+            HashSet<string> partKeys = new(StringComparer.Ordinal);
+            foreach (JsonNode? partNode in ArchiveArray(track["parts"], "parts"))
+            {
+                JsonObject part = ArchiveObject(partNode, "parts[]");
+                if (!partKeys.Add(Key(part, "name", "pos", "duration")))
+                    throw new InvalidDataException("project_preservation: ambiguous part identities in snapshot.");
+                HashSet<string> noteKeys = new(StringComparer.Ordinal);
+                foreach (JsonNode? noteNode in ArchiveArray(part["notes"], "notes"))
+                {
+                    JsonObject note = ArchiveObject(noteNode, "notes[]");
+                    if (!noteKeys.Add(Key(note, "pos", "duration", "number", "lyric", "phoneme")))
+                        throw new InvalidDataException("project_preservation: ambiguous note identities in snapshot.");
+                }
+            }
+        }
+    }
+
+    private bool HasArchiveEntityExtensions(EngineSession session) =>
+        archiveStates.TryGetValue(session.Id, out ArchiveState? state) && state.HasEntityExtensions;
+
+    internal void CheckArchiveRequest(EngineSession session, string method, JsonElement parameters)
+    {
+        if (!HasArchiveEntityExtensions(session)) return;
+        if (method is "session" or "save" or "clone_project" or "close" or "revert_project" or
+            "members" or "get" or "enumerate" or "construct" or "set" or "call") return;
+        if (method == "score_edit")
+        {
+            string operation = parameters.GetProperty("operation").GetString() ?? "";
+            if (operation.EndsWith(".get", StringComparison.Ordinal) || operation.EndsWith(".list", StringComparison.Ordinal) ||
+                operation is "controller.types" or "note.expression_bounds" or "time.convert" or "history.status" or "track.freeze_state") return;
+            RequireArchiveMutationSupported(session, operation);
+            return;
+        }
+        if (method == "audio_op")
+        {
+            string operation = parameters.GetProperty("operation").GetString() ?? "";
+            if (operation is "devices" or "inspect_audio" or "export_audio" or "effects" or "transport_status" or "transport_release") return;
+        }
+        throw new InvalidOperationException("project_preservation: this operation requires a verified entity-identity transaction: " + method);
+    }
+
+    internal void CheckArchiveNativeMutation(EngineSession session, string operation)
+    {
+        if (HasArchiveEntityExtensions(session))
+            throw new InvalidOperationException("project_preservation: raw native mutation has no tracked entity-identity transaction: " + operation);
+    }
+
+    internal void CheckArchiveExternalOperation(string? id, string domain, string operation)
+    {
+        if (id is null || !HasArchiveEntityExtensions(GetSession(id))) return;
+        bool readOnly = domain == "clipboard"
+            ? operation is "copy" or "list" or "clear"
+            : operation is "languages" or "phoneme_table" or "lyrics_can_convert" or "lyrics_candidates" or
+                "style_list" or "style_get" or "media_list" or "media_get" or "dvqm_catalog" or "dvqm_get" or
+                "note_skill_get" or "singing_skill_catalog" or "singing_skill_get";
+        if (!readOnly)
+            throw new InvalidOperationException("project_preservation: this operation requires a verified entity-identity transaction: " + domain + "." + operation);
+    }
+
+    private void RequireArchiveMutationSupported(EngineSession session, string operation)
+    {
+        if (!HasArchiveEntityExtensions(session)) return;
+        if (operation is not ("track.create" or "track.update" or "track.reorder" or "track.remove" or
+            "part.create" or "part.update" or "part.move" or "part.resize" or "part.remove" or
+            "note.update" or "note.remove" or "note.add" or "note.clear" or "note.batch_update" or
+            "voice.set" or "tempo.set" or "tempo.remove" or "time_signature.set" or "time_signature.remove" or
+            "controller.set" or "controller.remove" or "automation.set" or "automation.remove" or "loop.set" or
+            "tuning.set" or "vibrato.set" or "phoneme_timing.set" or "phoneme_timing.reset" or
+            "pitch.set" or "pitch.clear" or "performance.set" or "selection.set" or "sequence.update" or
+            "undo" or "redo" or "history.rollback"))
+            throw new InvalidOperationException("project_preservation: this mutation has no verified identity transaction: " + operation);
+    }
+
+    private void BeginArchiveMutation(EngineSession session, string action)
+    {
+        if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state)) return;
+        ArchiveCheck(state);
+        if (state.Before is not null) throw new InvalidOperationException("project_preservation: nested mutation is unsupported.");
+        if (state.HasEntityExtensions && ((action == "undo" && state.Undo.Count == 0) || (action == "redo" && state.Redo.Count == 0)))
+            throw new InvalidOperationException("project_preservation: native history has no corresponding identity snapshot.");
+        state.Before = new(state.Live);
+        state.Action = action;
+    }
+
+    // action is commit, sync, undo, redo or rollback. Only an actual
+    // Commit(true) advances history. A no-op/Commit(false) uses sync.
+    private void EndArchiveMutation(EngineSession session, string action)
+    {
+        if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state)) return;
+        Dictionary<ArchiveEntity, ArchiveEntry> before = state.Before
+            ?? throw new InvalidOperationException("project_preservation: mutation boundary was not started.");
+        state.Before = null;
+        switch (action)
+        {
+            case "commit": state.Undo.Push(before); state.Redo.Clear(); break;
+            case "undo":
+                if (state.Undo.Count == 0) { state.Invalid = "untracked undo"; break; }
+                state.Redo.Push(before); state.Live = state.Undo.Pop(); break;
+            case "redo":
+                if (state.Redo.Count == 0) { state.Invalid = "untracked redo"; break; }
+                state.Undo.Push(before); state.Live = state.Redo.Pop(); break;
+            case "rollback": state.Live = before; break;
+            case "sync":
+                if (!before.Keys.ToHashSet().SetEquals(state.Live.Keys)) { state.Undo.Clear(); state.Redo.Clear(); }
+                break;
+            default: state.Invalid = "unknown mutation boundary"; break;
+        }
+        bool preserveExisting = state.Action is "track.create" or "track.update" or "track.reorder" or "part.create" or
+            "part.update" or "part.move" or "part.resize" or "note.update" or "note.batch_update" or "note.add" or
+            "voice.set" or "tempo.set" or "tempo.remove" or "time_signature.set" or "time_signature.remove" or
+            "controller.set" or "controller.remove" or "automation.set" or "automation.remove" or "loop.set" or
+            "tuning.set" or "vibrato.set" or "phoneme_timing.set" or "phoneme_timing.reset" or
+            "pitch.set" or "pitch.clear" or "performance.set" or "selection.set" or "sequence.update";
+        ArchiveRefreshParents(state, preserveExisting ? before : null);
+        int limit = (int)Math.Min(state.Session.Sequence.GetMaxUndoCount(), 65536UL);
+        TrimArchiveHistory(state.Undo, limit);
+        TrimArchiveHistory(state.Redo, limit);
+        state.Action = null;
+        ArchiveCheck(state);
+    }
+
+    private static void TrimArchiveHistory(Stack<Dictionary<ArchiveEntity, ArchiveEntry>> history, int limit)
+    {
+        if (history.Count <= limit) return;
+        var keep = history.Take(limit).Reverse().ToArray();
+        history.Clear();
+        foreach (var snapshot in keep) history.Push(snapshot);
+    }
+
+    private static void ArchiveRefreshParents(ArchiveState state, Dictionary<ArchiveEntity, ArchiveEntry>? preserve)
+    {
+        HashSet<ArchiveEntity> seen = [];
+        void Mark(object entity, ArchiveEntity? parent)
+        {
+            ArchiveEntity key = ArchiveKey(entity);
+            if (!state.Live.ContainsKey(key) && preserve is not null && preserve.TryGetValue(key, out ArchiveEntry? previous))
+                state.Live.Add(key, previous);
+            if (state.Live.TryGetValue(key, out ArchiveEntry? entry))
+            {
+                state.Live[key] = entry with { Parent = parent };
+                seen.Add(key);
+            }
+        }
+        foreach (WIVSMTrack track in state.Session.Sequence.Tracks)
+        {
+            ArchiveEntity trackKey = ArchiveKey(track);
+            Mark(track, null);
+            foreach (WIVSMPart part in track.Parts)
+            {
+                ArchiveEntity partKey = ArchiveKey(part);
+                Mark(part, trackKey);
+                if (part is WIVSMMidiPart midi)
+                    foreach (WIVSMNote note in midi.Notes) Mark(note, partKey);
+            }
+        }
+        if (seen.Count != state.Live.Count)
+            state.Invalid = "native object lifecycle diverged from tracked identities";
+        if (preserve is not null && preserve.Any(pair => pair.Value.Extra.Count != 0 && !seen.Contains(pair.Key)))
+            state.Invalid = "a non-destructive edit replaced an extended native entity";
+    }
+
+    private static void ArchiveCheck(ArchiveState state)
+    {
+        if (state.Invalid is not null)
+            throw new InvalidOperationException("project_preservation: " + state.Invalid);
+        if (state.Before is not null)
+            throw new InvalidOperationException("project_preservation: mutation remains in progress.");
+    }
+
+    private void ApplyArchivePreservation(EngineSession session, string stageRoot)
+    {
+        if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state)) return;
+        ArchiveCheck(state);
+        string path = Path.Combine(stageRoot, "Project", "sequence.json");
+        PathGuard.NoLinks(path);
+        if (new FileInfo(path).Length > 128L * 1024 * 1024)
+            throw new InvalidDataException("project_preservation: snapshot JSON exceeds 128 MiB.");
+        JsonObject root = ArchiveObject(JsonNode.Parse(File.ReadAllText(path)), "");
+        JsonObject master = ArchiveObject(root["masterTrack"], "/masterTrack");
+        ArchiveOverlay(root, state.Root); ArchiveOverlay(master, state.Master);
+        JsonArray tracks = ArchiveArray(root["tracks"], "/tracks");
+        if ((ulong)tracks.Count != session.Sequence.NumTrack) throw new InvalidDataException("project_preservation: snapshot track count changed.");
+        if (state.HasEntityExtensions) ArchiveValidateUnambiguous(tracks);
+        if (state.HasEntityExtensions)
+        {
+        HashSet<ArchiveEntity> seen = [];
+        void Overlay(object entity, JsonObject target)
+        {
+            ArchiveEntity key = ArchiveKey(entity);
+            if (state.Live.TryGetValue(key, out ArchiveEntry? entry)) { ArchiveOverlay(target, entry.Extra); seen.Add(key); }
+        }
+        for (int ti = 0; ti < tracks.Count; ti++)
+        {
+            JsonObject trackJson = ArchiveObject(tracks[ti], "/tracks[]");
+            WIVSMTrack track = session.Sequence.GetTrack((ulong)ti) ?? throw new InvalidDataException("project_preservation: missing snapshot track.");
+            ArchiveValidateTrack(track, trackJson);
+            Overlay(track, trackJson);
+            JsonArray parts = ArchiveArray(trackJson["parts"], "parts");
+            if ((ulong)parts.Count != track.NumParts) throw new InvalidDataException("project_preservation: snapshot part count changed.");
+            for (int pi = 0; pi < parts.Count; pi++)
+            {
+                JsonObject partJson = ArchiveObject(parts[pi], "parts[]");
+                WIVSMPart part = track.GetPart((ulong)pi) ?? throw new InvalidDataException("project_preservation: missing snapshot part.");
+                ArchiveValidatePart(part, partJson);
+                Overlay(part, partJson);
+                if (part is not WIVSMMidiPart midi) continue;
+                JsonArray notes = ArchiveArray(partJson["notes"], "notes");
+                if ((ulong)notes.Count != midi.NumNotes) throw new InvalidDataException("project_preservation: snapshot note count changed.");
+                for (int ni = 0; ni < notes.Count; ni++)
+                {
+                    JsonObject noteJson = ArchiveObject(notes[ni], "notes[]");
+                    WIVSMNote note = midi.GetNote((ulong)ni) ?? throw new InvalidDataException("project_preservation: missing snapshot note.");
+                    ArchiveValidateNote(note, noteJson); Overlay(note, noteJson);
+                }
+            }
+        }
+        if (seen.Count != state.Live.Count)
+            throw new InvalidDataException("project_preservation: tracked object is no longer present; refusing ambiguous attachment.");
+        }
+        File.WriteAllText(path, root.ToJsonString());
+        foreach (string relative in state.ExtraFiles)
+        {
+            string source = PathGuard.Under(session.Directory, relative);
+            string target = PathGuard.Under(stageRoot, relative);
+            PathGuard.NoLinks(source); PathGuard.CreateDirectory(Path.GetDirectoryName(target)!);
+            if (File.Exists(target)) throw new IOException("project_preservation: native output collides with retained member: " + relative);
+            File.Copy(source, target, false);
+        }
+    }
+
+    private static void ArchiveOverlay(JsonObject target, JsonObject extra)
+    {
+        foreach ((string pointer, JsonNode? value) in extra)
+        {
+            string[] segments = pointer[1..].Split('/').Select(segment => segment
+                .Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal)).ToArray();
+            JsonObject parent = target;
+            for (int index = 0; index < segments.Length - 1; index++)
+                parent = parent[segments[index]] as JsonObject
+                    ?? throw new InvalidDataException("project_preservation: retained field parent is absent: " + pointer);
+            string key = segments[^1];
+            if (parent.ContainsKey(key)) throw new InvalidDataException("project_preservation: retained field conflicts with native output: " + pointer);
+            parent.Add(key, value?.DeepClone());
+        }
+    }
+
+    private void AddOuterArchiveMembers(EngineSession session, string stageRoot, string archivePath)
+    {
+        if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state)) return;
+        using ZipArchive archive = ZipFile.Open(archivePath, ZipArchiveMode.Update);
+        HashSet<string> names = new(archive.Entries.Select(entry => entry.FullName.TrimEnd('/')), StringComparer.OrdinalIgnoreCase);
+        foreach (string relative in state.ExtraFiles.Where(name => !name.StartsWith("Project/", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (!names.Add(relative.TrimEnd('/')))
+                throw new IOException("project_preservation: archive member collides case-insensitively: " + relative);
+            string path = PathGuard.Under(stageRoot, relative);
+            PathGuard.NoLinks(path);
+            using Stream input = File.OpenRead(path);
+            using Stream output = archive.CreateEntry(relative, CompressionLevel.Optimal).Open();
+            input.CopyTo(output);
+        }
+    }
+
+    private void ReleaseArchivePreservation(EngineSession session)
+    {
+        if (!archiveStates.Remove(session.Id, out ArchiveState? state)) return;
+        session.ArchiveBegin = null;
+        session.ArchiveEnd = null;
+        if (state.ObserverAttached)
+        {
+            session.Sequence.RemoveUpdateObserver(state.Observer);
+            state.Observer.Notified -= state.Handler;
+        }
+        state.Observer.Dispose();
+    }
+}

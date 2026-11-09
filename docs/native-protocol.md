@@ -84,12 +84,27 @@ The historical real-MCP acceptance receipt is
 `artifacts/feature-acceptance-19d5e92a5f26/summary.json`: 44 feature cases plus
 cleanup pass, covering all 35 advertised tools and the 81 structured operations.
 This does not certify every raw native member, voice, effect, or file format.
-The current 36-tool, 109-operation surface and subsequent focused receipts are
+The current 36-tool, 119-operation surface and subsequent focused receipts are
 listed in `STATUS.md`. Open/load and save/clone now check native track and voice
 identity. The known no-classic-bank condition reports `missing_classic_bank`
 before loading a classic VPR; a lossy native snapshot reports
 `project_integrity` before publication. These checks preserve existing files,
 not add a missing voice model or promise classic synthesis.
+
+Native standalone transport is exposed through `audio_op` with an explicit
+enumerated device ID. Its device and callback lifetime is owned by one session;
+prepared-session mutations are blocked until release, and close releases it.
+Seek requests are asynchronous: `requested_seconds` is distinct from observed
+`seconds`. Frozen track caches are likewise session-owned; saved/cloned VPRs
+retain the pre-freeze authoring effect state. Raw writes to `IsFrozen` are
+excluded in favor of the complete structured operation.
+
+For VPR extensions, the host binds supported unknown properties to observed
+native entity lifetimes and transaction history, then overlays only those
+unknown properties onto native snapshots. Unsupported identity transformations
+are explicit errors for affected extended projects; plain projects retain their
+existing operation paths. Extra archive members are preserved without reviving
+deleted native-managed audio.
 
 Summaries contain `session_id`, native `title`, native `track_count`, host `dirty`,
 `root_ref`, and nullable `last_saved_path`. Creation uses the real VSM manager,

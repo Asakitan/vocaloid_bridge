@@ -65,6 +65,9 @@ made undoable by this wrapper. History is not a transaction journal for files.
 | `track.remove` | `track_index` | `removed`, old `track_index` |
 | `track.reorder` | `track_index`, `to_index` in the existing list | Moved track summary |
 | `track.duplicate` | `track_index`; optional insertion `index` (default immediately after source), `name` | Native duplicate summary |
+| `track.freeze_state` | `track_index` | Native `frozen`, `can_freeze`, and whether the cache is owned by this session |
+| `track.freeze` | `track_index` | Render a private native track cache; active only for this session, with authoring settings preserved on save/clone |
+| `track.unfreeze` | `track_index` | Release a cache owned by this session and restore editable native playback |
 
 Track summaries contain `track_index`, native `type`, `name`, `color`, `mute`,
 `solo`, and `part_count`. Track duplication uses the installed public
@@ -345,9 +348,12 @@ assets; the field mapping does not imply a classic synthesis result.
 
 The earlier Release host build and real MCP acceptance passed for the then-51
 operation names in `artifacts/feature-acceptance-19d5e92a5f26/summary.json`.
-The current dispatch has 65 operations; session 06 and 07 receipts below cover
+The current dispatch has 68 operations; session 06, 07 and 08 receipts cover
 the additions, including `note.expression_bounds` and all 19 expression fields
 in `artifacts/feature-acceptance-9eec19449679/summary.json`.
+The three session-freeze operations pass the real-MCP case in
+`artifacts/feature-acceptance-26a71f9b1dc5/summary.json`; see `track-freeze.md`
+for the audio and authoring-state boundaries.
 Track colors, native no-op handling, direct pitch anchors, clear operations,
 history, saved VPR readback, and child-reference invalidation are exercised.
 Every enum value, voice and parameter combination is not covered by this result.

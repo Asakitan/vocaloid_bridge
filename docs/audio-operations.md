@@ -51,6 +51,13 @@ Indices are zero-based. Fields marked optional have the defaults shown.
 | `mixdown_stems` | `output_prefix`; same optional mix fields | One native mix per selected track, named `PREFIX-track-INDEX.wav`. Existing destinations are preflighted before the first stem. Earlier completed stems remain if a later native render fails. |
 | `effects` | optional `scope=catalog`, `effect_id`, `track_index`, `part_index` | Bundled VEM effect discovery or current master/track/part chain inspection. |
 | `set_effect` | `action=add\|set\|remove\|move`; optional `scope=master`, `slot`, `track_index`, `part_index`, fields below | Edits the native persisted effect chain; no plugin editor is opened. |
+| `devices` | None | Enumerates native VAE devices and sample rates without selecting a system default. |
+| `transport_prepare` | `device_id`; optional `track_indices`, `sample_rate=44100`, `buffer_samples=2048`, `mute_output=false` | Pre-renders native parts and prepares one explicitly selected standalone VAE device for this session. |
+| `transport_status` | None | Prepared/playing state, device, native position, loop and output peak. |
+| `transport_play` | None | Starts the prepared private native transport. |
+| `transport_stop` | None | Stops playback, retaining the prepared transport. |
+| `transport_seek` | `seconds` within prepared duration | Requests a native asynchronous position change; returns `requested_seconds` and `position_update_async=true` separately from current `seconds`. Poll `transport_status` to observe application. |
+| `transport_release` | None | Stops and releases the private device, placements and callbacks. |
 
 Audio import initializes the region before attaching the source file, matching
 the installed editor's import path. A previous run produced a saved track and

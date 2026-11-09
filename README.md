@@ -33,7 +33,7 @@ powershell -NoProfile -File .\tools\setup.ps1
 
 这些条目均使用 `E:/VC/vocaloid_bridge/.venv/Scripts/python.exe -m vocaloid_bridge`，并显式设置 `VOCALOID_WORKSPACE`、`PYTHONPATH` 为 `E:/VC/vocaloid_bridge`，`PYTHONUTF8` 为 `1`。从其他目录启动时，输出仍写到本项目的 `output`。Codex 的 `tool_timeout_sec` 为 180。
 
-Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前 0.2.1 提供 36 个工具和 109 个结构化操作；既有客户端需要重新加载 MCP 服务才能发现新增工具。没有强制重启客户端或改变登录、模型与其他 MCP 服务。
+Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前 0.3.0 提供 36 个工具和 119 个结构化操作；既有客户端需要重新加载 MCP 服务才能发现新版目录。没有强制重启客户端或改变登录、模型与其他 MCP 服务。
 
 ## 工具
 
@@ -47,7 +47,7 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 | 工程状态、原生对象成员和参数 | `project_status`, `project_members`, `project_get`, `project_set` |
 | 精确签名调用、原生数据结构、集合 | `project_call`, `project_value_create`, `project_items` |
 | 结构化轨道、音符、曲线和历史 | `project_edit` |
-| 原生离线音频、效果与混缩 | `project_audio` |
+| 原生离线音频、效果、混缩和独立设备传输 | `project_audio` |
 | 原生歌词、音素、样式与媒体库 | `project_library` |
 | 私有剪切、复制与粘贴 | `project_clipboard` |
 | 本机声库 | `voicebanks` |
@@ -71,8 +71,10 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 
 - 只使用原生引擎这一条执行路径，不提供 UI 或其他音源回退。
 - 新宿主通过 `CreateProcess` 的 `lpDesktop` 进入私有 Windows desktop，不调用 `SwitchDesktop`。
-- 不启动 `VOCALOID6.exe`，不向用户窗口发送输入，不改变用户的播放状态。
+- 不启动 `VOCALOID6.exe`，不向用户窗口发送输入，不改变用户交互编辑器的播放状态。
 - 原生对象全部由宿主的同一 STA 线程使用；子进程归属 kill-on-close Job Object。
+- 设备传输明确选择枚举到的设备 ID，只管理 MCP 自己的音频引擎；准备期间先释放传输再修改所属工程。
+- `track.freeze` 使用会话自有缓存；保存和克隆输出未冻结的作者状态，关闭清理缓存。
 - 工程输入可以是显式指定的本机 VPR；输出限定在工作区 `output`，默认不覆盖现有文件。
 - 未保存工程需要显式 `discard_changes=true` 才能关闭。原始输入工程不能被覆盖。
 - 授权与声库仍由本机 VOCALOID 组件检查，不复制或修改授权数据。
@@ -97,6 +99,8 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 ```
 
 上轮 [完整验收回执](artifacts/feature-acceptance-012574702338/summary.json) 为 76 通过、5 失败、2 个缺样本项。0.2.1 已取得 Robot 缓存修复、真实 PPSF3、Take、三个 AI VoiceColor 参数以及项目完整性保护的定向证据；[生命周期与素材回归](artifacts/feature-acceptance-983dee33baea/summary.json) 为 6 项通过。没有把历史套件改称本轮全部通过；结果与剩余环境依赖见 [STATUS](STATUS.md) 和 [功能矩阵](docs/feature-matrix.md)。
+
+0.3.0 的 [整合定向回执](artifacts/feature-acceptance-26a71f9b1dc5/summary.json) 验证正式冻结、119 项目录和静音设备传输。未知字段、固定嵌套对象和额外资源的保留，以及删除/重建、撤销/重做的实体关联，另有独立回执。详见 [工程保留](docs/project-preservation.md)、[设备传输](docs/transport.md) 和 [轨道冻结](docs/track-freeze.md)；这些范围不等于任意扩展格式、声库、设备与效果组合都已验证。
 
 原生混缩输出整工程或所选整轨，各分轨保留自己的时长；分轨不使用主效果和主音量自动化。`start_seconds`、`end_seconds` 和 `tail_seconds` 不受此原生入口支持，传入会明确报错。素材属性写入独立的 `property.json`；新建自有素材可在 `.vsclip` 中附加桥接元数据。
 

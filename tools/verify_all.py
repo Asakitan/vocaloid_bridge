@@ -1,10 +1,13 @@
-"""Run the MCP acceptance and maintained session-06/07 operation cases."""
+"""Run the MCP acceptance and maintained native operation cases."""
 import verify_features as v
 import check_library_remaining
 import check_audio_remaining
 import check_score_remaining_mcp
 import check_session_features
 import check_voicecolor_audio
+import check_transport
+import check_project_preservation
+import check_track_freeze
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining

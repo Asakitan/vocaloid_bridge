@@ -310,6 +310,18 @@
           ]
         },
         {
+          "operation": "track.freeze",
+          "contract_rows": [
+            "| `track.freeze` | `track_index` | Render a private native track cache; active only for this session, with authoring settings preserved on save/clone |"
+          ]
+        },
+        {
+          "operation": "track.freeze_state",
+          "contract_rows": [
+            "| `track.freeze_state` | `track_index` | Native `frozen`, `can_freeze`, and whether the cache is owned by this session |"
+          ]
+        },
+        {
           "operation": "track.list",
           "contract_rows": [
             "| `track.list` | None | `tracks`: track summaries |"
@@ -325,6 +337,12 @@
           "operation": "track.reorder",
           "contract_rows": [
             "| `track.reorder` | `track_index`, `to_index` in the existing list | Moved track summary |"
+          ]
+        },
+        {
+          "operation": "track.unfreeze",
+          "contract_rows": [
+            "| `track.unfreeze` | `track_index` | Release a cache owned by this session and restore editable native playback |"
           ]
         },
         {
@@ -379,6 +397,12 @@
       "documentation": "docs/audio-operations.md",
       "operations": [
         {
+          "operation": "devices",
+          "contract_rows": [
+            "| `devices` | None | Enumerates native VAE devices and sample rates without selecting a system default. |"
+          ]
+        },
+        {
           "operation": "edit_audio",
           "contract_rows": [
             "| `edit_audio` | `track_index`, `part_index`; optional `position_tick`, `begin_tick`, `end_tick`, `name` | Calls `SetRegion`, `MovePart`, and `SetName`; returns the new native sorted part index. Region tick offsets are relative to the underlying audio asset, not the project start. |"
@@ -430,6 +454,43 @@
           "operation": "set_effect",
           "contract_rows": [
             "| `set_effect` | `action=add\\|set\\|remove\\|move`; optional `scope=master`, `slot`, `track_index`, `part_index`, fields below | Edits the native persisted effect chain; no plugin editor is opened. |"
+          ]
+        },
+        {
+          "operation": "transport_play",
+          "contract_rows": [
+            "| `transport_play` | None | Starts the prepared private native transport. |"
+          ]
+        },
+        {
+          "operation": "transport_prepare",
+          "contract_rows": [
+            "| `transport_prepare` | `device_id`; optional `track_indices`, `sample_rate=44100`, `buffer_samples=2048`, `mute_output=false` | Pre-renders native parts and prepares one explicitly selected standalone VAE device for this session. |"
+          ]
+        },
+        {
+          "operation": "transport_release",
+          "contract_rows": [
+            "| `transport_release` | None | Stops and releases the private device, placements and callbacks. |"
+          ]
+        },
+        {
+          "operation": "transport_seek",
+          "contract_rows": [
+            "| `transport_seek` | `seconds` within prepared duration | Requests a native asynchronous position change; returns `requested_seconds` and `position_update_async=true` separately from current `seconds`. Poll `transport_status` to observe application. |"
+          ]
+        },
+        {
+          "operation": "transport_status",
+          "contract_rows": [
+            "| `transport_status` | None | Prepared/playing state, device, native position, loop and output peak. |",
+            "| `transport_seek` | `seconds` within prepared duration | Requests a native asynchronous position change; returns `requested_seconds` and `position_update_async=true` separately from current `seconds`. Poll `transport_status` to observe application. |"
+          ]
+        },
+        {
+          "operation": "transport_stop",
+          "contract_rows": [
+            "| `transport_stop` | None | Stops playback, retaining the prepared transport. |"
           ]
         }
       ]

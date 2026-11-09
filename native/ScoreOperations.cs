@@ -14,6 +14,8 @@ internal sealed partial class EngineHost
             throw new ArgumentException("options must be a JSON object.", nameof(options));
         object result = operation switch
         {
+            "track.freeze" or "track.unfreeze" or "track.freeze_state"
+                => TrackFreezeOperation(session, operation, options),
             "track.list" => new { tracks = Enumerable.Range(0, ScoreCount(session.Sequence.NumTrack))
                 .Select(index => ScoreTrackSummary(ScoreTrack(session, index), index)).ToArray() },
             "track.create" or "track.update" or "track.remove" or "track.reorder" or "track.duplicate"
@@ -1567,12 +1569,17 @@ internal sealed partial class EngineHost
     {
         WIVSMSequence sequence = session.Sequence;
         if (!sequence.IsStaged) return new { rolled_back = false, staged = false };
+        session.ArchiveBegin?.Invoke("history.rollback");
+        bool tracking = session.ArchiveEnd is not null;
+        void End(string action) { if (tracking) { tracking = false; session.ArchiveEnd!(action); } }
         try
         {
             ScoreRequire(sequence.Rollback(), "history.rollback", sequence);
             ScoreRequire(!sequence.IsStaged, "history.rollback readback", sequence);
+            End("rollback");
             return new { rolled_back = true, staged = false };
         }
+        catch { End("invalid"); throw; }
         finally { session.InvalidateChildren(); }
     }
 
@@ -1615,15 +1622,20 @@ internal sealed partial class EngineHost
         ScoreRequireUnstaged(sequence);
         if (!(redo ? sequence.CanRedo() : sequence.CanUndo()))
             throw new InvalidOperationException(redo ? "Native redo is unavailable." : "Native undo is unavailable.");
+        session.ArchiveBegin?.Invoke(redo ? "redo" : "undo");
+        bool tracking = session.ArchiveEnd is not null;
+        void End(string action) { if (tracking) { tracking = false; session.ArchiveEnd!(action); } }
         try
         {
             if (redo)
                 sequence.Redo();
             else
                 sequence.Undo();
+            End(redo ? "redo" : "undo");
             session.Dirty = true;
             return ScoreHistory(sequence);
         }
+        catch { End("invalid"); throw; }
         finally
         {
             session.InvalidateChildren();
@@ -1634,21 +1646,32 @@ internal sealed partial class EngineHost
     {
         WIVSMSequence sequence = session.Sequence;
         ScoreRequireUnstaged(sequence);
+        session.ArchiveBegin?.Invoke(operation);
+        bool tracking = session.ArchiveEnd is not null;
+        void End(string action) { if (tracking) { tracking = false; session.ArchiveEnd!(action); } }
         try
         {
             object result = action();
-            if (sequence.IsStaged && !sequence.Commit())
+            bool staged = sequence.IsStaged;
+            if (staged && !sequence.Commit())
+            {
+                End("invalid");
                 throw new InvalidOperationException("Native " + operation + " commit failed: " + sequence.LastError);
+            }
+            End(staged ? "commit" : "sync");
             session.Dirty = true;
             return readback is null ? result : readback();
         }
         catch (Exception error)
         {
-            if (sequence.IsStaged && !sequence.Rollback())
+            bool staged = sequence.IsStaged;
+            if (staged && !sequence.Rollback())
             {
                 session.Dirty = true;
+                End("invalid");
                 throw new InvalidOperationException("Native " + operation + " failed and rollback failed: " + sequence.LastError, error);
             }
+            End(staged ? "rollback" : "sync");
             throw;
         }
         finally

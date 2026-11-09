@@ -79,10 +79,21 @@ internal sealed class RpcServer(EngineHost host, string desktop)
         if (method == "voices")
             return host.Voices();
         if (method == "library_op")
+        {
+            host.CheckArchiveExternalOperation(OptionalString(parameters, "session_id"), "library", RequiredString(parameters, "operation"));
+            host.CheckFrozenExternalOperation(OptionalString(parameters, "session_id"), "library", RequiredString(parameters, "operation"));
             return host.LibraryOperation(OptionalString(parameters, "session_id"), RequiredString(parameters, "operation"), Required(parameters, "options"));
+        }
         if (method == "clipboard")
+        {
+            host.CheckArchiveExternalOperation(OptionalString(parameters, "session_id"), "clipboard", RequiredString(parameters, "operation"));
+            host.CheckFrozenExternalOperation(OptionalString(parameters, "session_id"), "clipboard", RequiredString(parameters, "operation"));
             return host.ClipboardOperation(OptionalString(parameters, "session_id"), RequiredString(parameters, "operation"), Required(parameters, "options"));
+        }
         EngineSession session = host.GetSession(RequiredString(parameters, "session_id"));
+        host.CheckTransportAccess(session, method, parameters);
+        host.CheckArchiveRequest(session, method, parameters);
+        host.CheckFrozenRequest(session, method, parameters);
         return method switch
         {
             "session" => session.Summary(),
@@ -191,7 +202,8 @@ internal sealed class RpcServer(EngineHost host, string desktop)
             result["can_read"] = canRead;
             result["can_write"] = canWrite;
             result["read_reason"] = canRead ? null : reason ?? "no_public_getter";
-            result["write_reason"] = canWrite ? null : reason ?? (IsStatic(member) ? "static_write_not_exposed" : "no_public_setter_or_readonly_field");
+            result["write_reason"] = canWrite ? null : reason ?? (member.Name == "IsFrozen"
+                ? "requires_structured_freeze_workflow" : IsStatic(member) ? "static_write_not_exposed" : "no_public_setter_or_readonly_field");
             if (member is PropertyInfo property)
                 result["parameters"] = property.GetIndexParameters().Select(DescribeParameter).ToArray();
         }
@@ -263,6 +275,8 @@ internal sealed class RpcServer(EngineHost host, string desktop)
         MemberInfo slot = Slot(target.Value.GetType(), member);
         if (!CanWrite(slot) || IsStatic(slot))
             throw new InvalidOperationException("Member is not publicly writable on this object.");
+        host.CheckArchiveNativeMutation(session, member);
+        host.CheckFrozenNativeMutation(session);
         object? converted = ConvertValue(session, value, SlotType(slot));
         EnsureVoiceOperation(target.Value.GetType(), member);
         session.Dirty = true;
@@ -282,6 +296,8 @@ internal sealed class RpcServer(EngineHost host, string desktop)
         bool readOnly = IsReadOnly(method.Name) || ReviewedDataMethod(method);
         if (!readOnly)
         {
+            host.CheckArchiveNativeMutation(session, method.Name);
+            host.CheckFrozenNativeMutation(session);
             EnsureVoiceOperation(target.Value.GetType(), method.Name);
             session.Dirty = true;
         }
@@ -623,8 +639,8 @@ internal sealed class RpcServer(EngineHost host, string desktop)
 
     private static Type SlotType(MemberInfo member) => member is PropertyInfo property ? property.PropertyType : ((FieldInfo)member).FieldType;
     private static bool CanRead(MemberInfo member) => member is not PropertyInfo property || property.GetMethod?.IsPublic == true;
-    private static bool CanWrite(MemberInfo member) => member is PropertyInfo property
-        ? property.SetMethod?.IsPublic == true : member is FieldInfo { IsInitOnly: false, IsLiteral: false };
+    private static bool CanWrite(MemberInfo member) => member.Name != "IsFrozen" && (member is PropertyInfo property
+        ? property.SetMethod?.IsPublic == true : member is FieldInfo { IsInitOnly: false, IsLiteral: false });
     private static bool IsStatic(MemberInfo member) => member is PropertyInfo property
         ? (property.GetMethod ?? property.SetMethod)!.IsStatic : ((FieldInfo)member).IsStatic;
     private static object? ReadSlot(MemberInfo member, object target) => member is PropertyInfo property

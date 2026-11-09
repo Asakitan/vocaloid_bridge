@@ -22,6 +22,8 @@ internal sealed partial class EngineHost
             string project = Path.Combine(directory, "Project");
             string json = Path.Combine(project, "sequence.json");
             ValidateNativeSnapshot(source.Sequence, json);
+            ApplyArchivePreservation(source, directory);
+            ApplyFrozenAuthoringState(source, directory);
             ValidateOpenRequirements(json);
             sequence = manager.OpenSequence(json,
                 Path.GetDirectoryName(typeof(WVSMModuleIF).Assembly.Location)!,
@@ -33,6 +35,7 @@ internal sealed partial class EngineHost
             if (title is not null)
                 sequence.Title = title;
             EngineSession clone = new(cloneId, directory, sequence, null, true);
+            CaptureArchivePreservation(clone, directory);
             sessions.Add(cloneId, clone);
             return clone;
         }
@@ -77,6 +80,8 @@ internal sealed partial class EngineHost
         bool touched = false;
         try
         {
+            if (HasArchiveEntityExtensions(source))
+                throw new InvalidOperationException("project_preservation: merging source entity extensions requires an identity transfer contract.");
             if (includeTracks && target.Sequence.NumTrack + source.Sequence.NumTrack > 32)
                 throw new InvalidOperationException("The merged project exceeds the native 32-track limit.");
             if (includeTracks)
@@ -146,6 +151,7 @@ internal sealed partial class EngineHost
             {
                 if (!source.Sequence.Close())
                     throw new InvalidOperationException("Native imported-source close failed: " + source.Sequence.LastError);
+                ReleaseArchivePreservation(source);
                 ownedSequences.Remove(source.Sequence);
                 source.InvalidateAll();
                 sessions.Remove(source.Id);

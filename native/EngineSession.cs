@@ -38,6 +38,8 @@ internal sealed class EngineSession
     internal string RootRef { get; }
     internal bool Dirty { get; set; }
     internal string? LastSavedPath { get; set; }
+    internal Action<string>? ArchiveBegin { get; set; }
+    internal Action<string>? ArchiveEnd { get; set; }
 
     internal object Summary() => new
     {
@@ -225,6 +227,7 @@ internal sealed partial class EngineHost : IDisposable
             ValidateLoadedTrackKinds(sequence, json);
             RestoreProjectValidity(sequence, directory);
             EngineSession session = new(id, directory, sequence, path, false);
+            CaptureArchivePreservation(session, directory);
             sessions.Add(id, session);
             return session;
         }
@@ -251,6 +254,8 @@ internal sealed partial class EngineHost : IDisposable
             throw new InvalidDataException("Native Save did not produce Project/sequence.json.");
         PathGuard.TreeNoLinks(project);
         ValidateNativeSnapshot(session.Sequence, Path.Combine(project, "sequence.json"));
+        ApplyArchivePreservation(session, stage);
+        ApplyFrozenAuthoringState(session, stage);
         string archive = Path.Combine(stage, "saved.vpr");
         ZipFile.CreateFromDirectory(project, archive, CompressionLevel.Optimal, true);
         if (validity.Notes.Count != 0)
@@ -259,6 +264,7 @@ internal sealed partial class EngineHost : IDisposable
             using Stream output = zip.CreateEntry(ProjectValidityEntry, CompressionLevel.Optimal).Open();
             JsonSerializer.Serialize(output, validity);
         }
+        AddOuterArchiveMembers(session, stage, archive);
         PathGuard.NoLinks(destination);
         File.Move(archive, destination, overwrite);
         session.LastSavedPath = destination;
@@ -533,8 +539,12 @@ internal sealed partial class EngineHost : IDisposable
         EngineSession session = GetSession(id);
         if (session.Dirty && !discard)
             throw new InvalidOperationException("Unsaved changes; save or set discard=true.");
+        if (transport?.SessionId == id)
+            ReleaseTransport();
         if (!session.Sequence.Close() || session.Sequence.IsOpen)
             throw new InvalidOperationException("Native close failed: " + session.Sequence.LastError);
+        ReleaseArchivePreservation(session);
+        ForgetFrozenAuthoring(session);
         ownedSequences.Remove(session.Sequence);
         session.InvalidateAll();
         sessions.Remove(id);
@@ -733,6 +743,11 @@ internal sealed partial class EngineHost : IDisposable
             return;
         CheckThread();
         List<Exception> errors = [];
+        try { ReleaseTransport(); } catch (Exception error) { errors.Add(error); }
+        foreach (EngineSession session in sessions.Values)
+            try { ReleaseArchivePreservation(session); } catch (Exception error) { errors.Add(error); }
+        foreach (EngineSession session in sessions.Values)
+            ForgetFrozenAuthoring(session);
         try { DisposeProjectClipboards(); } catch (Exception error) { errors.Add(error); }
         foreach (WIVSMSequence sequence in ownedSequences)
         {

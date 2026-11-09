@@ -5,8 +5,11 @@
 | `native/Program.cs` | 原生宿主入口、安装库解析、私有 desktop 检查 | 已编译 |
 | `native/EngineSession.cs` | VSM 会话、工程生命周期、声库和片段渲染 | 独立命名空间、零结果缓存、完成观察；生命周期与 Robot 声音差异通过 |
 | `native/ProjectIntegrity.cs` | 原生打开与发布前的结构和声库身份检查 | 缺经典声库预检、丢失身份阻止覆盖、AI 正例通过；不代替经典声库 |
-| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 65 操作；19 表现字段、批量、颤音、时序、回滚、换算及 Take 通过 |
-| `native/AudioOperations.cs` | 原生离线音频、效果与整轨混缩 | 9 个操作、5 种离线处理、11 个内置效果及受测采样格式通过 |
+| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 68 操作；新增会话冻结，原生历史同步扩展身份 |
+| `native/AudioOperations.cs` | 原生离线音频、效果与整轨混缩 | 16 个音频操作含传输；冻结回放避免重复应用音量/声像 |
+| `native/TransportOperations.cs` | 原生设备枚举与私有会话播放、停止、定位、释放 | DirectSound 静音闭环通过；定位区分异步请求与观测 |
+| `native/TrackFreezeOperations.cs` | 会话自有冻结缓存、时基物化和作者态保存 | 多片段/非零起点/效果/自动化与正式 MCP 通过；不持久化冻结标志 |
+| `native/ProjectArchivePreservation.cs` | 未知字段、实体身份和额外归档资源保留 | 五级及固定嵌套对象、历史与资源通过；复杂数组/复制语义有限制 |
 | `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 30 个操作有成功调用；样式及 HMM 通过，经典 Singing Skill 重开受身份问题影响 |
 | `native/ProjectInterchange.cs` | 原生格式交换、复制、恢复与合并 | 真实 PPSF3/音频克隆通过；PPSF2/VSQX 经典完整往返需 DSE 声库 |
 | `native/ProjectClipboard.cs` | 私有原生快照剪贴板 | 5 个操作及源关闭后的 MIDI 跨工程粘贴通过 |
@@ -27,6 +30,9 @@
 | `tools/check_session_features.py` | VPR 导入、完整表现、素材参数与 Breath 音频 | 参数往返及 Breath 启用/频率/音量差异通过，类型声音差异未成立 |
 | `tools/check_robot_runtime.py`、`tools/check_audio_routing.py` | Robot 时序/缓存和内部/输出率调查 | 原失败回归、双会话及六组合混音通过，非 44100 内部合成显式报错 |
 | `tools/check_voicecolor_audio.py`、`tools/check_score_parameters.py` | VoiceColor 和 Take 定向音频测量 | 三个 AI VoiceColor 及 Take 差异通过；六个经典 VoiceColor 待 DSE |
+| `tools/check_transport.py`、`tools/check_track_freeze.py` | 设备传输和冻结的真实 MCP/原生回归 | 正式入口、失败清理、作者态及静音传输通过 |
+| `tools/check_project_preservation.py` | 扩展数据和原生对象历史回归 | 未知字段、嵌套、额外资源、替换及参数编辑通过 |
+| `tools/check_internal_rate_static.py` | 安装版本的采样率分支取证 | 只读静态证据；不当作 96 kHz 动态验收 |
 | `tools/fetch_public_ppsf_fixture.py` | 公开样本获取及来源记录 | 作者原始 PPSF3 与最小格式夹具分开标识；歌曲不入 Git |
 | `docs/feature-matrix.md` | 官方手册与原生接口逐项覆盖 | 证据已回填，未验、缺失和受限项保留 |
 | `.vscode/mcp.json` | 工作区 stdio 服务配置 | 已配置 |
@@ -57,3 +63,4 @@
 | 2026-11-10 | 含手册和 VSQX3/4、PPSF V2 样本的完整 MCP 验收 60 通过、1 失败；35 工具及 91 个结构化操作有成功调用。 |
 | 2026-11-10 | 升级 0.2.0：36 工具、108 操作有成功调用；新增样式、HMM、细化编辑、操作目录和独立缓存。整合仍有经典格式、Robot 及缺样本项。 |
 | 2026-11-10 | 升级 0.2.1：109 操作，Robot 零缓存修复、PPSF3 真实样本、项目完整性保护、全部表现参数及 Take/AI VoiceColor 定向验证；经典与外部环境边界保留。 |
+| 2026-11-10 | 升级 0.3.0：119 操作，原生设备传输、会话冻结、未知字段/资源与历史保留；定向回归通过，扩展格式及经典资源边界继续保留。 |

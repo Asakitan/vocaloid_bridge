@@ -2023,38 +2023,52 @@ async def library_media_invalid_phoneme(check: Acceptance) -> None:
     require(original["is_valid_phonemes"] is False, "Native note did not retain its invalid phoneme flag", original)
     captured = await check.library("media_capture", identifier, track_index=0, part_index=0, name="Validity " + check.run_id)
     clip = captured["clip"]
-    require(clip["part"]["bridge_validity_metadata"] is True, "Private validity metadata was not identified", clip)
-    clip_document = json.loads(Path(clip["path"]).read_text(encoding="utf-8"))
-    require(clip_document.get("vocaloid_bridge_phoneme_validity_v1", {}).get("Version") == 1,
-            "Phoneme validity metadata is not embedded in the native media file")
-    track = (await check.edit(identifier, "track.create", type="MidiAi", name="Validity target"))["track_index"]
-    await check.library("media_import", identifier, clip_id=clip["clip_id"], track_index=track, position_tick=0)
-    destination = {"track_index": track, "part_index": 0, "note_index": 0}
-    notes = (await check.edit(identifier, "note.list", track_index=track, part_index=0))["notes"]
-    require(len(notes) == 1 and notes[0]["phonemes"] == "a" and notes[0]["is_valid_phonemes"] is False,
-        "Invalid phoneme state did not survive native media import", notes)
-    cloned = await check.call("project_clone", session_id=identifier, title="Validity clone")
-    clone_notes = (await check.edit(cloned["session_id"], "note.list", track_index=track, part_index=0))["notes"]
-    require(len(clone_notes) == 1 and clone_notes[0]["is_valid_phonemes"] is False,
-            "Invalid phoneme state did not survive native project clone", clone_notes)
-    await check.close(cloned["session_id"])
-    _, path = await check.save(identifier, "invalid-phoneme-media")
-    reopened = (await check.call("project_open", path=str(path)))["session_id"]
-    restored = (await check.edit(reopened, "note.list", track_index=track, part_index=0))["notes"]
-    require(len(restored) == 1 and restored[0]["is_valid_phonemes"] is False,
-        "Invalid phoneme state did not survive save/reopen", restored)
-    await check.close(reopened)
-    patched = await check.call("score_patch", path=str(path), output_name=check.output("validity-title-patch"),
-                               operations=[{"op": "replace", "path": "/title", "value": "Patched validity"}])
-    patched_session = (await check.call("project_open", path=patched["path"]))["session_id"]
-    patched_notes = (await check.edit(patched_session, "note.list", track_index=track, part_index=0))["notes"]
-    require(len(patched_notes) == 1 and patched_notes[0]["is_valid_phonemes"] is False,
-            "Unrelated VPR edit did not preserve the invalid phoneme flag", patched_notes)
-    await check.close(patched_session)
-    await check.rejected("score_patch", "phoneme.validity", path=str(path), output_name=check.output("validity-note-patch"),
-                         operations=[{"op": "replace", "path": "/tracks/0/parts/0/notes/0/number", "value": 61}])
-    await check.library("media_delete", identifier, clip_id=clip["clip_id"])
-    check.evidence("invalid_phoneme_media", {"clip_id": clip["clip_id"], "vpr": str(path)})
+    try:
+        require(clip["part"]["bridge_validity_metadata"] is True, "Private validity metadata was not identified", clip)
+        clip_document = json.loads(Path(clip["path"]).read_text(encoding="utf-8"))
+        require(clip_document.get("vocaloid_bridge_phoneme_validity_v1", {}).get("Version") == 1,
+                "Phoneme validity metadata is not embedded in the native media file")
+        track = (await check.edit(identifier, "track.create", type="MidiAi", name="Validity target"))["track_index"]
+        await check.library("media_import", identifier, clip_id=clip["clip_id"], track_index=track, position_tick=0)
+        destination = {"track_index": track, "part_index": 0, "note_index": 0}
+        notes = (await check.edit(identifier, "note.list", track_index=track, part_index=0))["notes"]
+        require(len(notes) == 1 and notes[0]["phonemes"] == "a" and notes[0]["is_valid_phonemes"] is False,
+            "Invalid phoneme state did not survive native media import", notes)
+        cloned = await check.call("project_clone", session_id=identifier, title="Validity clone")
+        clone_notes = (await check.edit(cloned["session_id"], "note.list", track_index=track, part_index=0))["notes"]
+        require(len(clone_notes) == 1 and clone_notes[0]["is_valid_phonemes"] is False,
+                "Invalid phoneme state did not survive native project clone", clone_notes)
+        await check.close(cloned["session_id"])
+        _, path = await check.save(identifier, "invalid-phoneme-media")
+        reopened = (await check.call("project_open", path=str(path)))["session_id"]
+        restored = (await check.edit(reopened, "note.list", track_index=track, part_index=0))["notes"]
+        require(len(restored) == 1 and restored[0]["is_valid_phonemes"] is False,
+            "Invalid phoneme state did not survive save/reopen", restored)
+        await check.close(reopened)
+        patched = await check.call("score_patch", path=str(path), output_name=check.output("validity-title-patch"),
+                                   operations=[{"op": "replace", "path": "/title", "value": "Patched validity"}])
+        patched_session = (await check.call("project_open", path=patched["path"]))["session_id"]
+        patched_notes = (await check.edit(patched_session, "note.list", track_index=track, part_index=0))["notes"]
+        require(len(patched_notes) == 1 and patched_notes[0]["is_valid_phonemes"] is False,
+                "Unrelated VPR edit did not preserve the invalid phoneme flag", patched_notes)
+        await check.close(patched_session)
+        adjusted = await check.call("score_patch", path=str(path), output_name=check.output("validity-note-patch"),
+                                    operations=[{"op": "replace", "path": "/tracks/0/parts/0/notes/0/number", "value": 61}])
+        adjusted_session = (await check.call("project_open", path=adjusted["path"]))["session_id"]
+        try:
+            adjusted_notes = (await check.edit(adjusted_session, "note.list", track_index=0, part_index=0))["notes"]
+            other_notes = (await check.edit(adjusted_session, "note.list", track_index=track, part_index=0))["notes"]
+            require(len(adjusted_notes) == 1 and adjusted_notes[0]["number"] == 61 and
+                    adjusted_notes[0]["is_valid_phonemes"] is False and
+                    len(other_notes) == 1 and other_notes[0]["is_valid_phonemes"] is False,
+                    "Pitched invalid note or another invalid owner changed", [adjusted_notes, other_notes])
+        finally:
+            await check.close(adjusted_session)
+        await check.rejected("score_patch", "phoneme.validity", path=str(path), output_name=check.output("validity-lyric-patch"),
+                             operations=[{"op": "replace", "path": "/tracks/0/parts/0/notes/0/lyric", "value": "い"}])
+        check.evidence("invalid_phoneme_media", {"clip_id": clip["clip_id"], "vpr": str(path)})
+    finally:
+        await check.library("media_delete", identifier, clip_id=clip["clip_id"])
 
 
 @feature("library.media_secondary_voice", "library", "project_library", "project_edit", "score_compose", "voicebanks", "project_save", "project_open")

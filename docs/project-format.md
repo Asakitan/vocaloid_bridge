@@ -50,8 +50,10 @@ are exported from `vocaloid_bridge.music`.
 `read` returns the sequence JSON object directly. `inspect` uses an RFC 6901
 JSON Pointer; an empty pointer returns the root object. `patch` uses the installed
 `jsonpatch` implementation, applies RFC 6902 operations to a copy, and writes a
-new VPR. It permits arbitrary JSON fields; it is not an editor-schema validator.
-The resulting document must remain an object and contain only finite JSON numbers.
+new VPR. It is not an editor-schema validator. The resulting document must remain
+an object and contain only finite JSON numbers. Note-tree changes on projects
+with guarded controller, track-automation or direct-pitch-item extensions are
+stopped before output creation.
 
 Project mutations return `{"path": absolute_path, "summary": summary_object}`.
 The summary includes `title`, `version`, `ticks_per_beat`, native `tempo`, `voices`,
@@ -84,12 +86,29 @@ verify the revision from which the caller obtained that data. Controlled local
 concurrency evidence and its limits are in [source consistency](source-snapshot-25.md).
 
 VPR copy operations require exactly one `Project/sequence.json`. They preserve
-member ordering, member payloads other than that JSON, member metadata supported
-by `zipfile`, and the archive comment. Embedded audio is copied without decoding.
-Only the sequence JSON is reserialized; ZIP compression and JSON whitespace may
-change. Unknown JSON fields outside explicitly replaced structures remain present.
-AI replacement notes use the explicit identity policy below. No archive member
-is extracted to the filesystem.
+member ordering, member metadata supported by `zipfile`, and the archive comment.
+Embedded audio and unrelated members are copied without decoding. Sequence JSON
+is reserialized; JSON Patch also reserializes the phoneme-validity sidecar when
+tracked note identities or signature fields change. Unknown sidecar root and
+per-entry fields remain in the tested file-level cases. ZIP compression and JSON
+whitespace may change. AI replacement notes use the explicit identity policy
+below. No archive member is extracted to the filesystem.
+
+## JSON Patch and phoneme-validity provenance
+
+When a `phoneme-validity-v1.json` sidecar is present, `patch` validates it
+against the source and follows each invalid note through RFC 6902 operations on
+a private in-memory copy. A moved note retains its sidecar identity at its new
+track/part/note index. A copied note receives an independent copy of its entry.
+Removed or replaced note objects lose the former entry; newly added literal notes
+do not inherit it. Position, duration and pitch updates update the stored signature.
+Changing a tracked note's lyric, phoneme or language is rejected before output;
+use the native project edit path for that change.
+
+If the calculated sidecar is unchanged, its original bytes are retained. A changed
+sidecar is reserialized with its other JSON fields intact in the tested cases.
+This is a file-level provenance contract, not native undo/redo or a general
+schema validator. See [patch provenance](patch-sidecar-27.md).
 
 ## Notes and Voices
 

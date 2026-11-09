@@ -89,7 +89,7 @@ def _validate_phoneme_validity(data: dict, payload: bytes,
             note = data["tracks"][track_index]["parts"][part_index]["notes"][note_index]
             fields = (("pos", "Position"), ("duration", "Duration"), ("number", "Number"),
                       ("lyric", "Lyric"), ("phoneme", "Phonemes"), ("langID", "LanguageId"))
-            if any(note[native] != expected[saved] for native, saved in fields):
+            if any(not _note_snapshot_equal(note[native], expected[saved]) for native, saved in fields):
                 raise ValueError("referenced note changed")
     except (KeyError, IndexError, TypeError, ValueError, UnicodeError) as error:
         raise ValueError("VPR phoneme-validity metadata conflicts with this edit; use native project_edit for affected notes") from error
@@ -150,7 +150,7 @@ def _guard_note_replacement(data: dict) -> None:
                 raise ValueError("note replacement is guarded for direct pitch item extensions")
 
 
-def _note_snapshot_equal(expected: dict, actual: dict) -> bool:
+def _note_snapshot_equal(expected: Any, actual: Any) -> bool:
     # JSON distinguishes booleans from numbers, unlike Python's ==.
     try:
         options = {"ensure_ascii": False, "allow_nan": False, "sort_keys": True, "separators": (",", ":")}
@@ -270,6 +270,141 @@ def _tempo_events(data: dict, events: list[dict]) -> None:
         tempo["global"].update(isEnabled=False, value=replacements[0]["value"])
 
 
+def _patch_touches_note_tree(path: str) -> bool:
+    parts = jsonpointer.JsonPointer(path).get_parts()
+    if not parts:
+        return True
+    if parts[0] != "tracks":
+        return False
+    if len(parts) <= 2:
+        return True
+    if parts[2] != "parts":
+        return False
+    if len(parts) <= 4:
+        return True
+    return parts[4] == "notes"
+
+
+def _tracked_subpaths(value: Any, records: list[tuple[dict, dict]]) -> list[tuple[tuple[Any, ...], dict, dict]]:
+    by_identity = {id(note): (note, entry) for note, entry in records}
+    result = []
+    stack = [(value, ())]
+    seen = set()
+    while stack:
+        current, path = stack.pop()
+        if not isinstance(current, (dict, list)):
+            continue
+        identity = id(current)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        found = by_identity.get(identity)
+        if found is not None and current is found[0]:
+            result.append((path, found[0], found[1]))
+        if isinstance(current, dict):
+            stack.extend((child, path + (key,)) for key, child in current.items())
+        else:
+            stack.extend((child, path + (index,)) for index, child in enumerate(current))
+    return result
+
+
+def _patch_validity(data: dict, payload: bytes | None, operations: list[dict]) -> tuple[dict, bytes | None]:
+    """Apply RFC 6902 on a private tree while tracking invalid-note provenance."""
+    patch = jsonpatch.JsonPatch(deepcopy(operations))
+    working = deepcopy(data)
+    metadata = None
+    records: list[tuple[dict, dict]] = []
+    if payload is not None:
+        _validate_phoneme_validity(data, payload)
+        metadata = json.loads(payload, parse_constant=_invalid_constant)
+        for entry in metadata["Notes"]:
+            track = working["tracks"][entry["TrackIndex"]]
+            part = track["parts"][entry["PartIndex"]]
+            note = part["notes"][entry["NoteIndex"]]
+            records.append((note, deepcopy(entry)))
+    for operation in patch:
+        kind = operation["op"]
+        if kind != "test" and isinstance(working, dict):
+            touches = _patch_touches_note_tree(operation["path"])
+            if kind == "move":
+                touches = touches or _patch_touches_note_tree(operation["from"])
+            if touches:
+                _guard_note_replacement(working)
+
+        matches = []
+        target_parent = target_key = None
+        if kind in ("copy", "move") and records:
+            source = jsonpointer.resolve_pointer(working, operation["from"])
+            matches = _tracked_subpaths(source, records)
+            if kind == "copy" and matches:
+                target_parent, target_key = jsonpointer.JsonPointer(operation["path"]).to_last(working)
+                if isinstance(target_parent, list) and target_key == "-":
+                    target_key = len(target_parent)
+        working = jsonpatch.JsonPatch([operation]).apply(working, in_place=True)
+        if kind == "copy" and matches:
+            copied = working if target_key is None else target_parent[target_key]
+            for path, original, entry in matches:
+                clone = copied
+                for component in path:
+                    clone = clone[component]
+                if not isinstance(clone, dict) or clone is original:
+                    raise ValueError("phoneme-validity copy did not create an independent note")
+                records.append((clone, deepcopy(entry)))
+            if len(records) > 65536:
+                raise ValueError("VPR has too many phoneme-validity note references")
+        elif kind == "move" and matches:
+            surviving = {id(note) for _, note, _ in _tracked_subpaths(working, records)}
+            if any(id(note) not in surviving for _, note, _ in matches):
+                raise ValueError("phoneme-validity note identity was lost during patch move")
+
+    if not isinstance(working, dict):
+        raise ValueError("project data must be an object")
+    if metadata is None:
+        return working, None
+
+    wanted = {id(note) for note, _ in records}
+    locations: dict[int, tuple[int, int, int]] = {}
+    tracks = working.get("tracks")
+    if isinstance(tracks, list):
+        for track_index, track in enumerate(tracks):
+            parts = track.get("parts") if isinstance(track, dict) else None
+            if not isinstance(parts, list):
+                continue
+            for part_index, part in enumerate(parts):
+                notes = part.get("notes") if isinstance(part, dict) else None
+                if not isinstance(notes, list):
+                    continue
+                for note_index, note in enumerate(notes):
+                    identity = id(note)
+                    if identity in wanted:
+                        if identity in locations:
+                            raise ValueError("phoneme-validity note has ambiguous patch identity")
+                        locations[identity] = (track_index, part_index, note_index)
+    entries = []
+    try:
+        for note, previous in records:
+            position = locations.get(id(note))
+            if position is None:
+                continue
+            entry = deepcopy(previous)
+            expected = entry["Note"]
+            for native, saved in (("lyric", "Lyric"), ("phoneme", "Phonemes"), ("langID", "LanguageId")):
+                if not _note_snapshot_equal(note[native], expected[saved]):
+                    raise ValueError("phoneme-validity lyric, phoneme or language changed during patch")
+            for native, saved in (("pos", "Position"), ("duration", "Duration"), ("number", "Number")):
+                expected[saved] = note[native]
+            entry["TrackIndex"], entry["PartIndex"], entry["NoteIndex"] = position
+            entries.append(entry)
+    except (KeyError, TypeError) as error:
+        raise ValueError("phoneme-validity note fields are missing after patch") from error
+    updated = deepcopy(metadata)
+    updated["Notes"] = entries
+    result_payload = (payload if _note_snapshot_equal(updated, metadata) else
+                      json.dumps(updated, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8"))
+    _validate_phoneme_validity(working, result_payload)
+    return working, result_payload
+
+
 class ProjectStore:
     """Read VPR sources and create new files under workspace/output."""
 
@@ -320,7 +455,8 @@ class ProjectStore:
         return jsonpointer.resolve_pointer(self.read(path), pointer)
 
     def _write_archive(self, archive: zipfile.ZipFile, data: dict, output_name: str,
-                       note_origins: tuple[int, int, list[int | None]] | None = None) -> dict:
+                       note_origins: tuple[int, int, list[int | None]] | None = None,
+                       validity_override: bytes | None = None) -> dict:
         if not isinstance(data, dict):
             raise ValueError("project data must be an object")
         serialized = json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
@@ -329,13 +465,21 @@ class ProjectStore:
         validity_count = archive.namelist().count(PHONEME_VALIDITY_MEMBER)
         if validity_count > 1:
             raise ValueError("VPR has duplicate phoneme-validity metadata")
+        if validity_override is not None and not validity_count:
+            raise ValueError("VPR has no phoneme-validity metadata to update")
         if validity_count:
-            _validate_phoneme_validity(data, archive.read(PHONEME_VALIDITY_MEMBER), note_origins)
+            validity = validity_override if validity_override is not None else archive.read(PHONEME_VALIDITY_MEMBER)
+            _validate_phoneme_validity(data, validity, note_origins)
         with _exclusive_output(self.workspace, output_name, (".vpr",)) as (destination, handle):
             with zipfile.ZipFile(handle, "w") as result:
                 result.comment = archive.comment
                 for member in archive.infolist():
-                    payload = serialized if member.filename == SEQUENCE_MEMBER else archive.read(member)
+                    if member.filename == SEQUENCE_MEMBER:
+                        payload = serialized
+                    elif member.filename == PHONEME_VALIDITY_MEMBER and validity_override is not None:
+                        payload = validity_override
+                    else:
+                        payload = archive.read(member)
                     result.writestr(copy(member), payload)
         return {"path": str(destination), "summary": self._summary(destination, data)}
 
@@ -347,8 +491,13 @@ class ProjectStore:
         if not isinstance(operations, list) or not all(isinstance(operation, dict) for operation in operations):
             raise ValueError("operations must be a JSON Patch array")
         with _source_archive(self.workspace, source) as archive:
-            data = jsonpatch.JsonPatch(deepcopy(operations)).apply(self._read_archive(archive), in_place=False)
-            return self._write_archive(archive, data, output_name)
+            data = self._read_archive(archive)
+            count = archive.namelist().count(PHONEME_VALIDITY_MEMBER)
+            if count > 1:
+                raise ValueError("VPR has duplicate phoneme-validity metadata")
+            validity = archive.read(PHONEME_VALIDITY_MEMBER) if count else None
+            data, updated = _patch_validity(data, validity, operations)
+            return self._write_archive(archive, data, output_name, validity_override=updated)
 
     def _read_note_edit_archive(self, archive: zipfile.ZipFile) -> dict:
         data = self._read_archive(archive)

@@ -109,7 +109,12 @@ sets the target note's phoneme-protection flag when explicitly supplied.
 An empty candidate list is a legitimate native result, not proof that the lyric
 cannot be converted: the installed Japanese manager returns no alternatives for
 `U+3044`, while native English `hello` returns two candidates and applies across
-two notes. Use `lyrics_can_convert` or actual application to test convertibility.
+two notes. A false `lyrics_can_convert` result did not reliably cause an apply
+error: tested Chinese Han characters and numbered pinyin retained old phonemes,
+while one English emoji produced a different phoneme. In the same installed AI
+voice, unmarked Chinese pinyin `ni hao` produced two native syllables. Inspect
+native results and do not infer pronunciation correctness from the success or
+validity flags; see [conversion observations](lyrics-native-27.md).
 
 Without an explicit language, reset calls process the distinct valid native note
 and part languages, excluding unset (`-1`) part caches. If none is initialized,

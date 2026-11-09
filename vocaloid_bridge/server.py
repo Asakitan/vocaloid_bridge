@@ -324,7 +324,11 @@ def score_summary(path: str) -> dict[str, Any]:
 
 @mcp.tool()
 def score_patch(path: str, output_name: str, operations: list[dict[str, Any]]) -> dict[str, Any]:
-    """Create a separate VPR using RFC 6902 JSON Patch; preserve unknown fields and audio members."""
+    """Create a separate VPR using RFC 6902 JSON Patch and preserve audio members.
+    Tracked invalid-phoneme notes carry sidecar identity through moves and copies;
+    deleted or replaced notes lose their old sidecar entry. Lyric, phoneme and language
+    changes to tracked notes require native project_edit. Existing extension guards apply.
+    """
     return STORE.patch(path, operations, output_name)
 
 

@@ -20,6 +20,7 @@
 | `native/RpcServer.cs` | 单线程 JSON 行协议、原生对象发现与精确签名调用 | 已编译 |
 | `vocaloid_bridge/native_client.py` | 私有 desktop、Job Object、管道客户端与 DLL 快照 | 独立构建副本启动、关闭清理通过 |
 | `vocaloid_bridge/server.py` | 37 个 MCP 工具、资源、写歌提示 | 新 MIDI 工具在独立 stdio 连接实测；历史工具覆盖见历史回执 |
+| `vocaloid_bridge/compose.py` | AI 编曲缺省音素的原生 G2PA、临时会话和独占发布 | asa 日英中单音节及保存重开定向通过；其他声库、源选择器及发音质量待验 |
 | `vocaloid_bridge/operations.json` | 原生 dispatch 对照的随包操作索引 | 125 个操作均有精确契约行；区分入口发现与实测 |
 | `tools/generate_operation_catalog.py` | 操作目录生成及漂移检查 | 按源码与文档操作首列精确生成，缺契约行时检查失败 |
 | `vocaloid_bridge/projects.py` | VPR 结构化编排 | AI 音符按显式源快照保留；JSON Patch 的受测 sidecar 跟随移动/复制和删除；扩展边界及源句柄保护 |
@@ -58,6 +59,7 @@
 | `tools/check_file_notes_26.py`、`tools/probe_note_identity_26.py`、`tools/probe_ai_note_defaults_26.py`、`tools/probe_ai_lyrics_conversion_26.py`、`tools/probe_media_handle_26.py` | 文件音符身份、AI 默认/歌词转换和素材同句柄探针 | 显式身份及原生往返通过；空音素、转换错误及素材事务仍待处理 |
 | `tools/check_patch_sidecar_27.py`、`tools/check_patch_semantics_27.py`、`tools/probe_patch_sidecar_27.py`、`tools/probe_patch_copy_validity_27.py`、`tools/probe_lyrics_native_27.py`、`tools/probe_native_note_27.py` | JSON Patch sidecar 身份与 AI 转换观察 | 受测 sidecar 迁移和原生重开通过；自动转换及其他组合待验证 |
 | `tools/check_lyrics_staging_28.py` 及 `tools/probe_*28.py` | 歌词暂存边界与原生音素引导调查 | 一项暂存隔离用例通过；自动转换、原生失败恢复和其他声库仍待验证 |
+| `tools/check_compose_phonemes_29.py` | AI 编曲自动音素、发布及保存重开 | 一项三语言功能用例及清理通过；失败注入和其他声库未验 |
 | `tools/check_clipboard_ambiguity.py`、`tools/check_archive_export_limits.ps1`、`tools/check_tempo_array_helper.ps1` | 剪贴板候选、ZIP 导出限制和 tempo 数组原语回归 | 合成候选、缩小阈值 ZIP 和原语通过；完整 MCP 证据见 STATUS |
 | `tools/probe_appcontainer_pipe.cs`、`tools/probe_appcontainer_child.go` | 随机合成管道的后台进程隔离探针 | 受限令牌及单一默认权限管道拒绝访问已观察；非插件隔离证明 |
 | `tools/probe_appcontainer_server.cs`、`tools/probe_appcontainer_server_child.go`、`tools/probe_appcontainer_peer.cs`、`tools/probe_appcontainer_peer_child.go` | 随机合成管道受限服务端与同/异 profile 对端探针 | LOCAL 双向收发和负对照已观察；未证明真实插件隔离 |
@@ -116,3 +118,4 @@
 | 2026-11-10 | 升级 0.18.0：AI 文件音符显式源身份、干净新音符和 sidecar 索引保护定向通过；空音素及素材事务继续调查。 |
 | 2026-11-10 | 升级 0.19.0：JSON Patch 的受测无效音素 sidecar 随移动、复制和删除迁移；原生歌词转换边界补充实证。 |
 | 2026-11-10 | 升级 0.19.1：歌词与音素应用/重置先检查暂存变更，避免提交无关编辑；自动音素转换继续调查。 |
+| 2026-11-10 | 升级 0.20.0：`score_compose` 的 AI 单音节缺省音素通过原生 G2PA 与临时会话转换，受测 asa 三语言往返通过。 |

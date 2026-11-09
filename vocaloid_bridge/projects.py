@@ -508,8 +508,9 @@ class ProjectStore:
             _validate_phoneme_validity(data, archive.read(PHONEME_VALIDITY_MEMBER))
         return data
 
-    def compose(self, template: str, output_name: str, title: str, bpm: float, notes: list[dict],
-                track_index: int = 0, part_index: int = 0, voice_comp_id: str | None = None) -> dict:
+    @contextmanager
+    def prepare_compose(self, template: str, title: str, bpm: float, notes: list[dict],
+                        track_index: int = 0, part_index: int = 0, voice_comp_id: str | None = None):
         if not isinstance(title, str):
             raise ValueError("title must be a string")
         with _source_archive(self.workspace, template) as archive:
@@ -527,7 +528,12 @@ class ProjectStore:
             origins = _replace_notes(data, notes, track_index, part_index)
             _tempo_events(data, [{"start": 0, "bpm": bpm}])
             data["title"] = title
-            return self._write_archive(archive, data, output_name, (track_index, part_index, origins))
+            yield archive, data, (track_index, part_index, origins)
+
+    def compose(self, template: str, output_name: str, title: str, bpm: float, notes: list[dict],
+                track_index: int = 0, part_index: int = 0, voice_comp_id: str | None = None) -> dict:
+        with self.prepare_compose(template, title, bpm, notes, track_index, part_index, voice_comp_id) as (archive, data, origins):
+            return self._write_archive(archive, data, output_name, origins)
 
     def edit_notes(self, source: str, output_name: str, notes: list[dict], track_index: int = 0, part_index: int = 0) -> dict:
         with _source_archive(self.workspace, source) as archive:

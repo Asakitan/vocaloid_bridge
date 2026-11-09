@@ -15,6 +15,7 @@ import numpy as np
 import soundfile as sf
 
 from . import __version__
+from .compose import compose as compose_native
 from .music import _source, export_midi, import_midi
 from .native_client import NativeClient
 from .projects import ProjectStore
@@ -301,13 +302,23 @@ async def score_compose(output_name: str, title: str, bpm: float, notes: list[di
                         voice_comp_id: str | None = None) -> dict[str, Any]:
     """Author and open a vocal score. Notes use quarter-note start/duration, MIDI pitch, lyric,
     optional phoneme, lang_id (0 Japanese, 1 English, 4 Chinese) and native raw expression data.
+    Omitted AI-note phonemes use native G2PA for one complete syllable per note.
     AI notes may select one template note with source={index, expected}; unselected notes are new.
     Uses an editor-authored template, then verifies loading in the real native engine.
     """
-    result = STORE.compose(template or str(TEMPLATE), output_name, title, bpm, notes,
-                           track_index, part_index, voice_comp_id)
-    native = await _rpc("open", path=result["path"])
-    return {**result, "native_session": native}
+    task = asyncio.create_task(asyncio.to_thread(
+        compose_native, STORE, NATIVE, template or str(TEMPLATE), output_name, title, bpm,
+        notes, track_index, part_index, voice_comp_id))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            result = await task
+        except Exception:
+            pass
+        else:
+            await _rpc("close", session_id=result["native_session"]["session_id"], discard=True)
+        raise
 
 
 @mcp.tool()

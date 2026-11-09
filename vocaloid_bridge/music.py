@@ -130,8 +130,7 @@ def _source(workspace: Path, path: str | Path) -> Path:
     return resolved
 
 
-@contextmanager
-def _exclusive_output(workspace: Path, output_name: str, suffixes: tuple[str, ...]) -> Iterator[tuple[Path, BinaryIO]]:
+def _output_destination(workspace: Path, output_name: str, suffixes: tuple[str, ...]) -> Path:
     root = _workspace(workspace)
     if not isinstance(output_name, str) or not output_name:
         raise ValueError("output_name must be a nonempty relative filename")
@@ -155,6 +154,12 @@ def _exclusive_output(workspace: Path, output_name: str, suffixes: tuple[str, ..
     _reject_links(destination)
     if not destination.resolve().is_relative_to(output_root):
         raise ValueError("output_name escapes workspace/output")
+    return destination
+
+
+@contextmanager
+def _exclusive_output(workspace: Path, output_name: str, suffixes: tuple[str, ...]) -> Iterator[tuple[Path, BinaryIO]]:
+    destination = _output_destination(workspace, output_name, suffixes)
     handle = destination.open("xb")
     try:
         with handle:

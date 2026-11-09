@@ -33,7 +33,7 @@ powershell -NoProfile -File .\tools\setup.ps1
 
 这些条目均使用 `E:/VC/vocaloid_bridge/.venv/Scripts/python.exe -m vocaloid_bridge`，并显式设置 `VOCALOID_WORKSPACE`、`PYTHONPATH` 为 `E:/VC/vocaloid_bridge`，`PYTHONUTF8` 为 `1`。从其他目录启动时，输出仍写到本项目的 `output`。Codex 的 `tool_timeout_sec` 为 180。
 
-Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.19.1 提供 37 个工具和 125 个结构化操作，独立 stdio 客户端的定向测试已通过。本对话现有连接仍报告 Python MCP 0.4.0；其运行中的原生宿主此前经比对为 0.5.0 构建，尚未载入 0.19.1。重新连接后应核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
+Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.20.0 提供 37 个工具和 125 个结构化操作，独立 stdio 客户端的定向测试已通过。本对话现有连接此前报告 Python MCP 0.4.0；其运行中的原生宿主此前经比对为 0.5.0 构建，尚未载入 0.20.0。重新连接后应核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
 
 ## 工具
 
@@ -60,7 +60,7 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 
 完整清单见 [功能矩阵](docs/feature-matrix.md)，运行时也可读取 `vocaloid://features`。`vocaloid_operations` 返回全部结构化操作名及对应文档；用 `domain`、`operation` 定位接口，`include_documentation=true` 读取完整约定。参数见 [乐谱操作](docs/score-operations.md)、[音频操作](docs/audio-operations.md)、[MIDI 录制](docs/midi-recording.md)、[媒体与音素操作](docs/library-operations.md) 和 [原生协议](docs/native-protocol.md)。`native_api_catalog` 可以显示未开放成员及原因；接口可发现不等于功能已经通过验收。
 
-`score_compose` 使用编辑器生成的模板写入音符后，再让原生引擎打开生成的工程。音符时间单位是四分音符拍；`pitch` 可用 MIDI 数字或 `C4`。`lang_id` 为模板声明支持的语言编号。缺省模板引用本机 `asa` 声库，其他声库使用相应模板或原生声库设置接口。
+`score_compose` 使用编辑器生成的模板写入音符后，再让原生引擎打开生成的工程。音符时间单位是四分音符拍；`pitch` 可用 MIDI 数字或 `C4`。`lang_id` 为模板声明支持的语言编号。缺省模板引用本机 `asa` 声库，其他声库使用相应模板或原生声库设置接口。对省略音素的 AI 音符，入口用实际目标声库及原生 G2PA 在临时会话中转换完整单音节并检查结果；不接受的输入需调用者显式指定音素或使用原生歌词分配。已测范围和限制见 [自动音素转换](docs/compose-phonemes-29.md)。
 
 按当前 AI 工作流，`track.create` 未指定 `type` 时创建 `MidiAi` 轨道；它不会代替调用者挑选声库，新建片段合成前用 `voicebanks` 和 `voice.set` 显式选择已安装的 AI 声库。旧调用若需要传统轨，需显式传入 `type=Midi`；此默认值与 0.3.0 不同。
 
@@ -140,11 +140,13 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 
 0.17.3 对文件级工程编辑使用同一只读源句柄，避免受测并发替换导致乐谱和资源混合版本；轨道名称、颜色、静音、独奏和总线的同值组合保持原有脏状态。[定向回执](artifacts/feature-acceptance-3fc96299dad5/summary.json) 为 8 个功能用例及清理共 9 通过。音符原型字段错贴和普通素材属性未知字段丢失仍待处理，见 [STATUS](STATUS.md)。
 
-0.18.0 的 AI 文件音符支持 `source={index, expected}` 显式保留源音符，新音符不再复制首音符未知字段；省略选择器代表新建音符。[音符回执](artifacts/feature-acceptance-57ffec017ade/summary.json) 和 [生命周期回执](artifacts/feature-acceptance-4768f923d99b/summary.json) 分别记录定向用例。受测声库中新音符的空音素重开失败，仍需显式有效音素，详见 [音符契约](docs/note-identity-26.md)。
+0.18.0 的 AI 文件音符支持 `source={index, expected}` 显式保留源音符，新音符不再复制首音符未知字段；省略选择器代表新建音符。[音符回执](artifacts/feature-acceptance-57ffec017ade/summary.json) 和 [生命周期回执](artifacts/feature-acceptance-4768f923d99b/summary.json) 分别记录定向用例。该版本的空音素在受测声库中重开失败；0.20.0 的 `score_compose` 新增受限原生转换，`score_replace_notes` 的省略音素行为尚未改变，详见 [音符契约](docs/note-identity-26.md)。
 
 0.19.0 的 `score_patch` 在受测 AI 工程中让无效音素 sidecar 随音符及轨道移动和复制，删除或替换则移除旧归属；[定向回执](artifacts/feature-acceptance-840e52ca3977/summary.json) 验证了原生保存与重开。自动音素转换仍有输入覆盖和语义问题，见 [歌词观察](docs/lyrics-native-27.md)。
 
 0.19.1 在歌词/音素应用及重置前检查原生暂存状态，避免提交无关的未完成编辑；[定向回执](artifacts/feature-acceptance-c9c5f40275ad/summary.json) 验证暂存保留及正常保存重开。
+
+0.20.0 的 `score_compose` 使用原生单音节转换补全缺省音素，检查目标声库、原文、候选及相邻音符后以独占方式发布；[定向回执](artifacts/feature-acceptance-2dfe4fb88811/summary.json) 覆盖 asa 的日英中样例、保存重开、拒绝及清理，不代表任意声库或发音质量均已验收。
 
 原生混缩输出整工程或所选整轨，各分轨保留自己的时长；分轨不使用主效果和主音量自动化。`start_seconds`、`end_seconds` 和 `tail_seconds` 不受此原生入口支持，传入会明确报错。素材属性写入独立的 `property.json`；新建自有素材可在 `.vsclip` 中附加桥接元数据。
 

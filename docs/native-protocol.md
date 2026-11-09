@@ -105,6 +105,10 @@ excluded in favor of the complete structured operation.
 
 `midi_recording` allows session-free `devices`; other operations require the
 session. Input callbacks enqueue MIDI notes only, while tempo conversion and
+A name-only `track.update` whose name is unchanged retains the existing dirty
+state after verifying there are no pending native edits; other no-op field
+combinations retain their existing behavior.
+
 VSM writes occur on the owning STA. Synchronized recording uses an already
 playing transport from that same session and releases it before score commit.
 Recording blocks session mutations and session-scoped clipboard/library calls;

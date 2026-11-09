@@ -143,17 +143,22 @@ purported caches.
 `set_tempo` accepts `[{"start": 0, "bpm": 120}, {"start": 8, "bpm": 90}]`.
 The list must be nonempty, begin at beat zero, and have distinct quantized tick
 positions. BPM must be finite, positive, and representable in hundredths.
-Native event and tempo-container extras are retained. The stored global tempo
+For an existing selected tick, its unknown event fields are retained; a newly
+created tick does not inherit another event's fields, and removed ticks lose
+their fields. Existing duplicate positions are rejected before output creation.
+Tempo-container extras are retained. The stored global tempo
 value is synchronized with the first event, and global-tempo override is disabled
 so that the event map remains authoritative.
 
-No controller structure occurs in either supplied fixture. `set_curve` therefore
+No controller structure occurred in either original fixture. `set_curve` therefore
 does not invent lanes. It can replace a unique already-present entry under
 `part.controllers` with an exact matching `name` and a nonempty native `events`
 prototype containing numeric `pos`/`value` fields. Otherwise it fails explicitly.
 Events use `{"start": beats, "value": number}`; positions must be nonnegative and
 distinct after quantization, and values finite and consistent with the prototype's
-integer/float type. Native event extras and unrelated controller lanes remain.
+integer/float type. Unknown fields stay on their original selected tick; new
+ticks inherit no event fields, and removed ticks lose them. Duplicate existing
+positions are rejected before output creation. Unrelated controller lanes remain.
 Controller ranges, creation, and acceptance by VOCALOID are not asserted; use a
 real editor-authored controller template or explicit JSON Patch for unknown data.
 
@@ -196,5 +201,9 @@ They covered Unicode MIDI lyrics, 480 PPQ, simultaneous note-off ordering, chann
 separation, zero-velocity releases, note validation, exclusive files, VPR embedded
 member preservation, archive comments, unknown JSON, native note defaults, language
 retention, part extension, JSON Pointer/Patch, and tempo maps. Editor diagnostics
-reported no Python errors. These checks are not VOCALOID loading, synthesis,
-phoneme generation, controller acceptance, or audio-export verification.
+reported no Python errors. Those original checks are not VOCALOID loading, synthesis,
+phoneme generation, controller acceptance, or audio-export verification. A
+later focused synthetic tempo and Dynamics-controller event test opened and
+saved through the native engine in
+`artifacts/feature-acceptance-f4c4b6029e12/summary.json`; it does not establish
+all controller types or synthesis behavior.

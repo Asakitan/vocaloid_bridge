@@ -336,14 +336,18 @@ def score_replace_notes(path: str, output_name: str, notes: list[dict[str, Any]]
 
 @mcp.tool()
 def score_tempo(path: str, output_name: str, events: list[dict[str, Any]]) -> dict[str, Any]:
-    """Write tempo events [{start: BEAT, bpm: BPM}], beginning at beat zero, to a separate VPR."""
+    """Write tempo events [{start: BEAT, bpm: BPM}], beginning at beat zero, to a separate VPR.
+    Retained ticks keep their unknown event fields; new ticks inherit none.
+    """
     return STORE.set_tempo(path, output_name, events)
 
 
 @mcp.tool()
 def score_curve(path: str, output_name: str, controller: str, events: list[dict[str, Any]],
                 track_index: int = 0, part_index: int = 0) -> dict[str, Any]:
-    """Replace a native controller lane already present in the template; units match that lane."""
+    """Replace a native controller lane already present in the template; units match that lane.
+    Retained ticks keep their unknown event fields; new ticks inherit none.
+    """
     return STORE.set_curve(path, output_name, controller, events, track_index, part_index)
 
 

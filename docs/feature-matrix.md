@@ -14,7 +14,7 @@
 - **X**：会操作用户前台、全局设置或授权，不符合当前约束。
 - **E**：需要外部设备、DAW 或其他未提供的环境；不是已验证功能。
 
-V 不由工具数量或能够枚举签名推导。当前为 37 个工具、125 个结构化操作；[历史完整回执](../artifacts/feature-acceptance-012574702338/summary.json) 的 76 通过、5 失败、2 个缺样本项保留。会话 23 补齐 125 个结构化操作的参数契约并保留占用拍号碰撞守卫；其他复杂扩展格式、物理输入和实际宿主仍有缺口。当前证据汇总见 [STATUS](../STATUS.md)，不宣称本轮重跑了完整套件。
+V 不由工具数量或能够枚举签名推导。当前为 37 个工具、125 个结构化操作；[历史完整回执](../artifacts/feature-acceptance-012574702338/summary.json) 的 76 通过、5 失败、2 个缺样本项保留。会话 24 验证文件级 tempo/控制曲线事件字段归属及同名轨道更新脏状态；其他复杂扩展格式、物理输入和实际宿主仍有缺口。当前证据汇总见 [STATUS](../STATUS.md)，不宣称本轮重跑了完整套件。
 
 ## 工程与文件
 
@@ -79,7 +79,7 @@ V 不由工具数量或能够枚举签名推导。当前为 37 个工具、125 �
 
 | ID | 功能 | MCP / 原生入口 | 状态 | 手册页 |
 | --- | --- | --- | --- | --- |
-| M-01 | 速度事件读取、增加、修改、删除 | project_edit tempo.list / set / remove | V | 31 |
+| M-01 | 速度事件读取、增加、修改、删除 | project_edit tempo.list / set / remove；score_tempo 的受测文件事件字段按原 tick 保留 | V | 31 |
 | M-02 | 拍号读取、增加、修改、删除 | project_edit time_signature.list / set / remove | V | 31 |
 | M-03 | 全局速度开关与值 | project_edit sequence.update | V | 16,74 |
 | M-04 | tick、小节、秒和采样换算 | project_edit time.convert；原生时间映射 | V | 29-31 |
@@ -88,7 +88,7 @@ V 不由工具数量或能够枚举签名推导。当前为 37 个工具、125 �
 | M-07 | 循环区间起止标记 | project_edit loop.get / loop.set | V | 20,29-30 |
 | M-08 | 播放头与播放开始模式 | transport 的开始/停止/异步定位已验；用户编辑器的全局开始模式设置不接管 | I | 20,29-30 |
 | C-01 | 参数曲线读取与编辑 | project_edit controller.list / set / remove | V | 50-51 |
-| C-02 | 原有 VPR 曲线的文件级替换 | score_curve | V | 50-51 |
+| C-02 | 原有 VPR 曲线的文件级替换 | score_curve；受测既有事件字段按原 tick 保留，新点不继承 | V | 50-51 |
 | C-03 | 直接音高曲线写入、清除 | project_edit pitch.list / set / clear；半开边界、受测项未知字段、音符/片段/轨道复制及身份保持操作已验，拆合和删除等项扩展路径仍受保护 | V | 39,45 |
 | C-04 | 音高工具、铅笔与橡皮的语义 | pitch.set/clear 原生点写入与擦除；不是交互工具切换 | V | 39,45 |
 | C-05 | 颤音深度、频率、起止与开关 | vibrato.get/set；非空 depth/rate 事件和保存重开通过 | V | 40,59 |

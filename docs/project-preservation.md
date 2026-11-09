@@ -398,3 +398,15 @@ applied. Prospective cases remain red and standalone; the passing guard case and
 precise boundaries are in `docs/track-edits-22.md` and
 `docs/controller-notes-22.md`. Earlier controller cross-project, extended audio,
 archive-media and direct-pitch deletion guard decisions remain in force.
+
+### File-level event replacement
+
+The separate file-level `score_tempo` and `score_curve` operations now preserve
+unknown event fields at an existing selected tick, drop fields with removed
+points, and assign no fields from other events to new ticks. Duplicate existing
+positions are rejected before output creation. This policy is not native
+pointer identity or native history. The focused synthetic and native
+open/save cases passed in `artifacts/feature-acceptance-f4c4b6029e12/summary.json`;
+the former incorrect field copying remains recorded in
+`artifacts/feature-acceptance-da5678235623/summary.json`. Reviewed native
+transfer, audio, pitch, track and controller edit guards are unchanged.

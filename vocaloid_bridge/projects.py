@@ -131,8 +131,14 @@ def _tempo_events(data: dict, events: list[dict]) -> None:
     tempo = master.get("tempo") if isinstance(master, dict) else None
     if not isinstance(tempo, dict) or not isinstance(tempo.get("events"), list):
         raise ValueError("project has no native masterTrack.tempo.events structure")
-    existing = {event.get("pos"): event for event in tempo["events"] if isinstance(event, dict)}
-    prototype = next(iter(existing.values()), {})
+    existing = {}
+    for event in tempo["events"]:
+        if not isinstance(event, dict) or isinstance(event.get("pos"), bool) or not isinstance(event.get("pos"), int):
+            raise ValueError("existing tempo events must have integer positions")
+        position = event["pos"]
+        if position in existing:
+            raise ValueError("existing tempo event positions must be distinct")
+        existing[position] = event
     replacements = []
     positions = set()
     for event in events:
@@ -145,7 +151,9 @@ def _tempo_events(data: dict, events: list[dict]) -> None:
         if position in positions:
             raise ValueError("tempo events collide after tick quantization")
         positions.add(position)
-        native = deepcopy(existing.get(position, prototype))
+        # The selected tick is the file-level identity policy. A new event
+        # starts without another event's unknown fields.
+        native = deepcopy(existing.get(position, {}))
         native.update(pos=position, value=math.floor(scaled + 0.5))
         replacements.append(native)
     replacements.sort(key=lambda event: event["pos"])
@@ -275,6 +283,14 @@ class ProjectStore:
         prototype_value = prototype.get("value")
         if isinstance(prototype_value, bool) or not isinstance(prototype_value, (int, float)):
             raise ValueError("controller prototype value must be numeric")
+        existing = {}
+        for old in target["events"]:
+            if not isinstance(old, dict) or isinstance(old.get("pos"), bool) or not isinstance(old.get("pos"), int):
+                raise ValueError("existing controller events must have integer positions")
+            position = old["pos"]
+            if position in existing:
+                raise ValueError("existing controller event positions must be distinct")
+            existing[position] = old
         replacements = []
         positions = set()
         for event in events:
@@ -293,7 +309,8 @@ class ProjectStore:
             if position in positions:
                 raise ValueError("curve events collide after tick quantization")
             positions.add(position)
-            native = deepcopy(prototype)
+            # Keep unknown fields only on an event at the selected source tick.
+            native = deepcopy(existing.get(position, {}))
             native.update(pos=position, value=value)
             replacements.append(native)
         target["events"] = sorted(replacements, key=lambda event: event["pos"])

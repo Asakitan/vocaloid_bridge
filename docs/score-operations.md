@@ -83,6 +83,13 @@ Unchanged fields are skipped rather than treating native no-op setter results
 as failures. Changed color writes must succeed, and all requested fields must
 match freshly acquired native getters after commit.
 
+A `track.update` containing only the unchanged name returns the existing track
+summary without marking a clean session dirty or clearing an already dirty
+state. Pending native edits are still rejected. The focused AI project case in
+`artifacts/feature-acceptance-f4c4b6029e12/summary.json` also checks a real
+rename and saved-project reopen. Other no-op field combinations retain their
+existing behavior and have not been generalized by this change.
+
 For VPRs with supported entity extensions, note and part split/join also journal
 the opaque fields by native identity. Conflicting join fields or ambiguous
 child correspondence cause the native transaction to roll back; see

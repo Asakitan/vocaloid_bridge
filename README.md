@@ -33,7 +33,7 @@ powershell -NoProfile -File .\tools\setup.ps1
 
 这些条目均使用 `E:/VC/vocaloid_bridge/.venv/Scripts/python.exe -m vocaloid_bridge`，并显式设置 `VOCALOID_WORKSPACE`、`PYTHONPATH` 为 `E:/VC/vocaloid_bridge`，`PYTHONUTF8` 为 `1`。从其他目录启动时，输出仍写到本项目的 `output`。Codex 的 `tool_timeout_sec` 为 180。
 
-Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.17.1 提供 37 个工具和 125 个结构化操作，独立 stdio 客户端的定向测试已通过。本对话现有连接仍报告 Python MCP 0.4.0；其运行中的原生宿主此前经比对为 0.5.0 构建，尚未载入 0.17.1。重新连接后应核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
+Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.17.2 提供 37 个工具和 125 个结构化操作，独立 stdio 客户端的定向测试已通过。本对话现有连接仍报告 Python MCP 0.4.0；其运行中的原生宿主此前经比对为 0.5.0 构建，尚未载入 0.17.2。重新连接后应核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
 
 ## 工具
 
@@ -135,6 +135,8 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 0.17.0 的 [定向回执](artifacts/feature-acceptance-80b1c4779514/summary.json) 为 12 个功能用例及清理共 13 通过，覆盖受测未占用位置生成拍号、双 tempo 选项、历史和已有守卫；[独立生命周期](artifacts/mcp-smoke-cf2c42db8233.json) 通过且前台句柄不变。轨道自动化/控制器扩展的普通编辑守卫放宽被自动审查拦截，素材事务探针发现实际竞争与静默不完整刷新，见 [STATUS](STATUS.md)。
 
 0.17.1 补齐此前 18 个空缺的操作参数契约；125 个操作均有对应首列契约，目录、私有剪贴板及工程生命周期的 [定向回执](artifacts/feature-acceptance-95209afa6b83/summary.json) 为 3 个功能用例及清理共 4 通过，选择器与默认值补齐后的 [目录复验](artifacts/feature-acceptance-dba5e14102fe/summary.json) 通过。拍号占用碰撞守卫的放宽被自动审查拦截，原因是未知字段往返和原生失败回滚尚缺证据；详见 [STATUS](STATUS.md)。
+
+0.17.2 修正文件级速度和控制曲线事件未知字段被错误复制的问题，并使单独的同名轨道更新保持原有脏状态。[定向回执](artifacts/feature-acceptance-f4c4b6029e12/summary.json) 为 9 个功能用例及清理共 10 通过；重复位置、原生保存重开和既有守卫均有受测证据，完整目标仍在继续。
 
 原生混缩输出整工程或所选整轨，各分轨保留自己的时长；分轨不使用主效果和主音量自动化。`start_seconds`、`end_seconds` 和 `tail_seconds` 不受此原生入口支持，传入会明确报错。素材属性写入独立的 `property.json`；新建自有素材可在 `.vsclip` 中附加桥接元数据。
 

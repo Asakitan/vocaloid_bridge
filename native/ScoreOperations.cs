@@ -164,6 +164,13 @@ internal sealed partial class EngineHost
             throw new ArgumentException("midi_recording requires a MIDI track.");
         if (newName is null && color is null && mute is null && solo is null && bus is null && recording is null)
             throw new ArgumentException("track.update requires a track field to update.");
+        // A name-only update with the current name performs no native setter at all.
+        if (newName is not null && track.Name == newName && color is null && mute is null &&
+            solo is null && bus is null && recording is null)
+        {
+            ScoreRequireUnstaged(sequence);
+            return ScoreTrackSummary(track, trackIndex);
+        }
         return ScoreMutate(session, operation, () =>
         {
             if (bus is not null && track.GetBusNo() != (uint)bus.Value)

@@ -5,7 +5,7 @@
 | `native/Program.cs` | 原生宿主入口、安装库解析、私有 desktop 检查 | 已编译 |
 | `native/EngineSession.cs` | VSM 会话、工程生命周期、声库、片段渲染和归档校验钩子 | 独立命名空间、零结果缓存；保存前 ZIP 及控制器事务校验有定向测试 |
 | `native/ProjectIntegrity.cs` | 原生打开与发布前的结构和声库身份检查 | 缺经典声库预检、丢失身份阻止覆盖、AI 正例通过；不代替经典声库 |
-| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 68 操作；受限扩展时间编辑、音高半开清除和音高项事务通过 |
+| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 68 操作；受限扩展时间编辑、音高事务及同名轨道 no-op 脏状态通过 |
 | `native/AudioOperations.cs` | 原生离线音频、效果与整轨混缩 | 16 个音频操作含传输；普通导入/编辑及效果编辑的原生撤销重做通过，扩展工程写入仍受保护 |
 | `native/TransportOperations.cs` | 原生设备枚举与私有会话播放、停止、定位、释放 | 普通及扩展工程快照的 DirectSound 静音闭环通过；定位区分异步请求与观测 |
 | `native/TrackFreezeOperations.cs` | 会话自有冻结缓存、时基物化和作者态保存 | 多片段/非零起点/效果/自动化与正式 MCP 通过；不持久化冻结标志 |
@@ -22,7 +22,7 @@
 | `vocaloid_bridge/server.py` | 37 个 MCP 工具、资源、写歌提示 | 新 MIDI 工具在独立 stdio 连接实测；历史工具覆盖见历史回执 |
 | `vocaloid_bridge/operations.json` | 原生 dispatch 对照的随包操作索引 | 125 个操作均有精确契约行；区分入口发现与实测 |
 | `tools/generate_operation_catalog.py` | 操作目录生成及漂移检查 | 按源码与文档操作首列精确生成，缺契约行时检查失败 |
-| `vocaloid_bridge/projects.py` | VPR 结构化编排 | 音素扩展冲突写入被拒绝，无关修改及重开通过 |
+| `vocaloid_bridge/projects.py` | VPR 结构化编排 | 音素扩展冲突拒绝；受测文件 tempo/曲线事件按源 tick 保留未知字段，新点不继承 |
 | `vocaloid_bridge/music.py` | MIDI、音符与路径校验 | 定向检查通过 |
 | `vocaloid_bridge/templates/ai-starter.vpr` | 原生编辑器生成的 AI 片段模板 | 本机样本 |
 | `vocaloid_bridge/desktop.py` | 旧 UI 模块退役标记 | 不包含可调用后端 |
@@ -53,6 +53,7 @@
 | `tools/check_track_automation_21.py`、`tools/check_timeline_delete_21.py`、`tools/check_note_delete_guards_21.py`、`tools/check_media_process_21.py` | 轨道自动化项、时间删除、音高删除守卫与素材暂存定向验证 | 轨道项及部分时间删除通过；音高删除守卫保持，素材仅合成夹具手工恢复字段 |
 | `tools/check_timeline_meter_22.py`、`tools/check_extension_edit_guards_22.py`、`tools/check_track_edits_22.py`、`tools/check_controller_notes_22.py` | 拍号生成边界、现有守卫与潜在普通编辑正例 | 受测空位拍号生成及守卫通过；普通编辑候选为红基线，审查守卫未变 |
 | `tools/check_timeline_meter_collision_23.py`、`tools/probe_media_atomic_23.py` | 占用拍号碰撞预期正例和自有文件共享探针 | 拍号正例为守卫红基线，解除被审查拦截；文件共享观察不构成完整事务 |
+| `tools/check_file_event_identity_24.py`、`tools/check_score_noop_24.py`、`tools/probe_media_transaction_24.py` | 文件事件字段归属、轨道 no-op 和合成文件锁定探针 | 文件事件/轨道 no-op 定向通过；文件锁观察不构成生产事务 |
 | `tools/check_clipboard_ambiguity.py`、`tools/check_archive_export_limits.ps1`、`tools/check_tempo_array_helper.ps1` | 剪贴板候选、ZIP 导出限制和 tempo 数组原语回归 | 合成候选、缩小阈值 ZIP 和原语通过；完整 MCP 证据见 STATUS |
 | `tools/probe_appcontainer_pipe.cs`、`tools/probe_appcontainer_child.go` | 随机合成管道的后台进程隔离探针 | 受限令牌及单一默认权限管道拒绝访问已观察；非插件隔离证明 |
 | `tools/probe_appcontainer_server.cs`、`tools/probe_appcontainer_server_child.go`、`tools/probe_appcontainer_peer.cs`、`tools/probe_appcontainer_peer_child.go` | 随机合成管道受限服务端与同/异 profile 对端探针 | LOCAL 双向收发和负对照已观察；未证明真实插件隔离 |
@@ -106,3 +107,4 @@
 | 2026-11-10 | 升级 0.16.0：轨道音量/声像项和部分时间删除的受测元数据事务通过；音高删除守卫及素材未知字段风险保持。 |
 | 2026-11-10 | 升级 0.17.0：受测空位拍号边界生成及原生身份通过；普通编辑守卫放宽被自动审查拦截，素材刷新竞争有新证据。 |
 | 2026-11-10 | 升级 0.17.1：125 个操作均有精确参数契约；拍号碰撞守卫放宽被自动审查拦截，主音量与文件共享仅有有限原生/系统观察。 |
+| 2026-11-10 | 升级 0.17.2：文件 tempo/控制曲线未知字段按受测 tick 保留，同名轨道更新保持脏状态；受审查守卫保持不变。 |

@@ -88,6 +88,12 @@
           ]
         },
         {
+          "operation": "note.expression_bounds",
+          "contract_rows": [
+            "| `note.expression_bounds` | Target part | Current native part's minimum, maximum and default dictionaries for `expression` and `ai_expression` |"
+          ]
+        },
+        {
           "operation": "note.join",
           "contract_rows": [
             "| `note.join` | Distinct `note_indices` containing at least two indices | `notes`: the containing part's post-join note list |"
@@ -230,13 +236,13 @@
         {
           "operation": "sequence.get",
           "contract_rows": [
-            "| `sequence.get` | None | Title, track count, sample rate, global tempo settings, current tick |"
+            "| `sequence.get` | None | Title, track count, sample rate, read-only `presend_time_sec`, global tempo settings, current tick |"
           ]
         },
         {
           "operation": "sequence.update",
           "contract_rows": [
-            "| `sequence.update` | One or more of `title`, `global_bpm`, `global_tempo_enabled` | Sequence summary |"
+            "| `sequence.update` | One or more of `title`, `sample_rate`, `global_bpm`, `global_tempo_enabled` | Sequence summary |"
           ]
         },
         {
@@ -324,7 +330,7 @@
         {
           "operation": "track.update",
           "contract_rows": [
-            "| `track.update` | `track_index`; one or more of `name`, native palette `color` (0..15), `mute`, `solo` | Updated track summary |"
+            "| `track.update` | `track_index`; one or more of `name`, native palette `color` (0..15), `mute`, `solo`, `bus_no`, MIDI-only `midi_recording` | Updated track summary |"
           ]
         },
         {

@@ -20,11 +20,15 @@ internal sealed partial class EngineHost
             if (!source.Sequence.Save(directory, false))
                 throw new InvalidOperationException("Native snapshot save failed: " + source.Sequence.LastError);
             string project = Path.Combine(directory, "Project");
-            sequence = manager.OpenSequence(Path.Combine(project, "sequence.json"),
+            string json = Path.Combine(project, "sequence.json");
+            ValidateNativeSnapshot(source.Sequence, json);
+            ValidateOpenRequirements(json);
+            sequence = manager.OpenSequence(json,
                 Path.GetDirectoryName(typeof(WVSMModuleIF).Assembly.Location)!,
                 new VSMSequenceData(source.Sequence.GetSamplingRate(), 32, 100))
                 ?? throw new InvalidOperationException("Native clone open failed: " + manager.LastError);
             ownedSequences.Add(sequence);
+            ValidateLoadedTrackKinds(sequence, json);
             ApplyProjectValidity(sequence, validity);
             if (title is not null)
                 sequence.Title = title;

@@ -945,13 +945,53 @@ async def interchange_ppsf3(check: Acceptance) -> None:
             "Native PPSF V3 import changed the NT track or note count",
             {"source_tracks": len(source_tracks), "native_tracks": len(tracks),
              "source_notes": source_notes, "native_notes": len(notes)})
+    # PPSF event positions are project-absolute; native note positions are
+    # relative to the containing part. NT symbols and bank IDs belong to a
+    # different engine and are deliberately not asserted as VOCALOID identity.
+    for track, source_track in zip(tracks, source_tracks, strict=True):
+        expected_notes = sorted((int(note["pos"]), int(note["length"]), int(note["note_number"]), note["lyric"])
+                                for note in source_track["events"])
+        actual_notes = []
+        parts = (await check.edit(identifier, "part.list", track_index=track["track_index"]))["parts"]
+        for part in parts:
+            entries = (await check.edit(identifier, "note.list", track_index=track["track_index"],
+                                        part_index=part["part_index"]))["notes"]
+            actual_notes.extend((part["start_tick"] + note["start_tick"], note["duration_tick"],
+                                 note["number"], note["lyric"]) for note in entries)
+        require(sorted(actual_notes) == expected_notes, "PPSF V3 source/native note fields differ")
+    tempo_source = project["project"]["tempo"]
+    meter_source = project["project"]["meter"]
+    source_tempos = [(int(item["tick"]), item["value"] / 10000.0)
+                     for item in tempo_source.get("sequence", [])] if tempo_source["use_sequence"] else []
+    if not any(tick == 0 for tick, _ in source_tempos):
+        source_tempos.append((0, tempo_source["const"] / 10000.0))
+    source_meters = [(int(item["measure"]), int(item["nume"]), int(item["denomi"]))
+                     for item in meter_source.get("sequence", [])] if meter_source["use_sequence"] else []
+    if not any(bar == 0 for bar, _, _ in source_meters):
+        source_meters.append((0, int(meter_source["const"]["nume"]), int(meter_source["const"]["denomi"])))
+    async def timing(session):
+        tempos = (await check.edit(session, "tempo.list"))["tempos"]
+        meters = (await check.edit(session, "time_signature.list"))["time_signatures"]
+        return (sorted((item["start_tick"], item["bpm"]) for item in tempos),
+                sorted((item["bar"], item["numerator"], item["denominator"]) for item in meters))
+    native_tempos, native_meters = await timing(identifier)
+    source_tempos.sort()
+    require(len(native_tempos) == len(source_tempos) and all(
+        actual_tick == expected_tick and abs(actual_bpm - expected_bpm) <= 0.0051
+        for (actual_tick, actual_bpm), (expected_tick, expected_bpm) in zip(native_tempos, source_tempos)),
+        "PPSF V3 source/native tempo differs", {"source": source_tempos, "native": native_tempos})
+    require(native_meters == sorted(source_meters), "PPSF V3 source/native meter differs",
+            {"source": source_meters, "native": native_meters})
     _, path = await check.save(identifier, "ppsf3-import")
     reopened = (await check.call("project_open", path=str(path)))["session_id"]
     reopened_tracks, reopened_notes = await vsqx_native_notes(check, reopened)
     require(reopened_tracks == tracks and reopened_notes == notes, "PPSF V3 import did not survive save/reopen")
+    require(await timing(reopened) == (native_tempos, native_meters), "PPSF V3 tempo/meter did not survive reopen")
     await check.close(reopened)
     require(source.read_bytes() == original, "Native PPSF V3 import modified its source file")
-    check.evidence("ppsf3_import", {"source": str(source), "vpr": str(path), "notes": len(notes)})
+    check.evidence("ppsf3_import", {"source": str(source), "vpr": str(path), "notes": len(notes),
+                                   "tempos": native_tempos, "meters": native_meters,
+                                   "not_compared": ["NT symbols versus VOCALOID phonemes", "NT singer versus VOCALOID voicebank identity"]})
 
 
 @feature("interchange.native_midi", "interchange", "midi_write", "midi_read", "project_import", "project_export_midi", "project_save")

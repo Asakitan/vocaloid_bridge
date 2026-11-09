@@ -115,6 +115,32 @@ hardcoding that path, changing voice, copying packages, or changing authorizatio
   native part-render timeout.
 - `overwrite=false`.
 
+The mix output rate is distinct from the project sequence's internal synthesis
+rate. On the installed editor, managed sequence-creation paths use 44100 Hz;
+the decompiled managed code has no `SetSamplingRate` call site, and its memory
+placement length also assumes 44100 Hz. The automatically extracted source
+observations are in `artifacts/audio-routing-static-acda7649870c.json`; they
+do not prove that the underlying native DSE supports no other rate. A sequence
+changed to 48000 Hz with `bus_no=0` produced native
+`FailedToCreateDseWaveBuffer` on part render in the session 07 probe. The host
+now returns a fast, explicit error for non-44100 internal part rendering while
+leaving project rate metadata editable; 48000 and 96000 readback and rejection
+are recorded in `artifacts/audio-routing-guard-9f833b494596.json`. This does
+not prove that 96000 Hz DSE rendering itself was exercised. The guard does not apply to output-only rate
+selection: native 44100 Hz singing mixed at 44100/48000/96000 Hz with bus 0
+and bus 1 produced nonzero WAVs with the requested output rates in
+`artifacts/audio-routing-acda7649870c.json`.
+
+`bus_no` is a persisted external-output assignment, not the VAE input index.
+The installed placement builder uses the sequence track index for its mixer
+input; the installed editor maps that index to `GetBusNo()` in `ExtBus` for
+non-standalone connections. This offline Manual mix intentionally uses no
+external host bus mapping (`ExtBusCount=0`), sums the selected tracks and does
+not validate or route to a DAW output. The six output files above were
+sample-identical between bus settings at each output rate, as measured in
+`artifacts/audio-routing-comparison-acda7649870c.json`; that is evidence for
+the current offline sum, not proof of external DAW routing.
+
 The route commits even an otherwise clean sequence before each required native
 voice render. Frozen MIDI tracks use their native frozen track asset. Other
 parts use `AudioPlacementBuilder` and `VEAudioPlacement`, preserving region

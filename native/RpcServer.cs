@@ -67,7 +67,7 @@ internal sealed class RpcServer(EngineHost host, string desktop)
     internal object Dispatch(string method, JsonElement parameters)
     {
         if (method == "ping")
-            return new { backend = "native-vsm", pid = Environment.ProcessId, version = EngineHost.EngineVersion, sessions = host.SessionCount, desktop, cache_namespace = host.CacheNamespace };
+            return new { backend = "native-vsm", pid = Environment.ProcessId, version = EngineHost.EngineVersion, sessions = host.SessionCount, desktop, cache_namespace = host.CacheNamespace, render_cache_bytes = host.RenderCacheBytes };
         if (method == "api_catalog")
             return ApiCatalog(parameters);
         if (method == "create")

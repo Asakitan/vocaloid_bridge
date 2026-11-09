@@ -12,7 +12,7 @@
 - **X**：会操作用户前台、全局设置或授权，不符合当前约束。
 - **E**：需要外部设备、DAW 或其他未提供的环境；不是已验证功能。
 
-V 不由工具数量或能够枚举签名推导。本轮 [完整回执](../artifacts/feature-acceptance-012574702338/summary.json) 为 76 通过、5 失败、2 个缺样本项；之后 [定向回执](../artifacts/feature-acceptance-6d7fb89e808b/summary.json) 修正音频区域测试并确认经典 Singing Skill 重开失败。36 个工具、108 个结构化操作有成功调用，仍不等于所有功能验收完成。旧 60/1 与 45/45 只作为历史记录。
+V 不由工具数量或能够枚举签名推导。当前为 36 个工具、109 个结构化操作；上轮 [完整回执](../artifacts/feature-acceptance-012574702338/summary.json) 的 76 通过、5 失败、2 个缺样本项保留作历史。会话 07 已补真实 PPSF3、Robot 缓存修复、完整表现参数、Take 和 VoiceColor 定向证据；经典声库及设备环境仍有缺口。当前证据汇总见 [STATUS](../STATUS.md)，不宣称本轮重跑了完整套件。
 
 ## 工程与文件
 
@@ -23,22 +23,24 @@ V 不由工具数量或能够枚举签名推导。本轮 [完整回执](../artif
 | P-03 | 保存、另存为 VPR | project_save | V | 14 |
 | P-04 | 关闭及显式丢弃修改 | project_close | V | 14 |
 | P-05 | 工程名称、轨道数、脏状态 | project_status / project_edit sequence.get | V | 16 |
-| P-06 | 工程采样率、预送及调音设置 | sequence.update / tuning.set 已验；presend_time_sec 为只读原生计算值 | I | 16 |
+| P-06 | 工程调音设置 | tuning.get/set；手册项目设置的单位为 Hz，原生值直接传递 | V | 16 |
 | P-07 | 撤销、重做及历史 | project_edit history.status / undo / redo | V | 17 |
 | P-08 | 丢弃未提交的原生编辑 | project_edit history.rollback；真实 staged tempo 回滚 | V | 17 |
 | P-09 | 恢复到上次保存状态 | project_revert | V | 14 |
 | P-10 | 原生工程副本 | project_clone；音频源关闭后独立导出已验，非所有素材组合保证 | V | 17 |
 | P-11 | 用户编辑器最近文件列表 | 不改用户全局偏好 | X | 14 |
 | P-12 | 用户编辑器自动保存设置 | 不改用户全局偏好 | X | 24 |
-| F-01 | VPR 导入 | project_import | I | 15 |
-| F-02 | VOCALOID3/4 VSQX 导入 | project_import；两份样本的音符、歌词、音素及保存重开已验，源轨道与声库身份未完整验证 | I | 14-15 |
-| F-03 | PPSF V2/V3 导入 | project_import；V2 样本 497 个音符保留，但保存重开后传统轨变成 AI 轨且声库 ID 丢失；V3 未验 | I | 14-15 |
+| P-13 | 原生内部采样率与预送信息 | sequence.update 的采样率读写已验；presend_time_sec 原生只读；声乐合成限定 44100，输出率另见 X-03 | I | 原生 API |
+| F-01 | VPR 导入 | project_import；修改、保存、重开和源文件保护已验 | V | 15 |
+| F-02 | VOCALOID3/4 VSQX 导入 | project_import；两份样本音符数据已验，经典身份往返需 DSE 声库；丢失身份时保存前报错 | E | 14-15 |
+| F-03 | PPSF V2 导入 | project_import；497 个音符保留，经典完整往返需 DSE 声库；类型转换与身份丢失已有显式保护 | E | 14-15 |
 | F-04 | MIDI/SMF 原生导入及编码选择 | project_import；UTF-8 样本往返 | V | 15 |
 | F-05 | 原生 SMF 导出及歌词编码 | project_export_midi；UTF-8 歌词与时序往返 | V | 15 |
 | F-06 | 文件级 MIDI 读写 | midi_read / midi_write | V | 15 |
 | F-07 | 导入到已有工程而非新会话 | project_merge；MIDI 片段样本 | V | 15 |
 | F-08 | 仅导入速度与拍号 | project_merge include_tracks=false / replace_tempo=true | V | 15 |
 | F-09 | 独立输出、默认不覆盖、原件保护 | 原生路径与文件保护 | V | 14-15 |
+| F-10 | PPSF V3 导入 | 作者公开 Monologue.ppsf，PPSF3.2、1 条 NT 轨和 190 音符的原生导入、VPR 保存重开已验；不等于 NT 声库可用于 VOCALOID 合成 | V | 14-15 |
 
 ## 轨道、片段与事件编辑
 
@@ -50,7 +52,7 @@ V 不由工具数量或能够枚举签名推导。本轮 [完整回执](../artif
 | T-04 | 轨道删除、重排、复制 | project_edit track.remove / reorder / duplicate | V | 17-18,33 |
 | T-05 | 轨道静音、独奏 | project_edit track.update | V | 30-31,73 |
 | T-06 | 轨道音量、声像与自动化 | project_edit automation.list / set / remove；真实混音与工程往返已验 | V | 32,37,72-73 |
-| T-07 | 轨道输出总线路由 | track.update bus_no 参数和保存重开通过；改变路由后的组合渲染待修 | I | 72 |
+| T-07 | 轨道输出总线路由 | bus_no 参数持久化、bus 0/1 离线混缩已验；实际外部总线路由需要 DAW | E | 72 |
 | T-08 | 轨道 MIDI 录音开关 | track.update midi_recording；会话内有效，重开恢复关闭 | V | 32,73 |
 | R-01 | MIDI 片段枚举、新建 | project_edit part.list / create | V | 32-37 |
 | R-02 | MIDI 片段名称与位置 | project_edit part.update / move | V | 33-37 |
@@ -86,18 +88,19 @@ V 不由工具数量或能够枚举签名推导。本轮 [完整回执](../artif
 | C-03 | 直接音高曲线写入、清除 | project_edit pitch.list / set / clear；保存重开后回读 | V | 39,45 |
 | C-04 | 音高工具、铅笔与橡皮的语义 | pitch.set/clear 原生点写入与擦除；不是交互工具切换 | V | 39,45 |
 | C-05 | 颤音深度、频率、起止与开关 | vibrato.get/set；非空 depth/rate 事件和保存重开通过 | V | 40,59 |
-| C-06 | 常规人声与 AI 表现参数 | project_edit note.add / update；受测字段见 score.notes_voice | V | 40-43,59 |
-| C-07 | Emotion、Timing 表现 | 原生 AI 参数与音素位置接口 | I | 40-43 |
+| C-06 | 常规人声与 AI 表现参数 | note.expression_bounds / note.add / update；7 个传统及 12 个 AI 字段读写、保存重开已验，不等于各字段声音效果 | V | 40-43,59 |
+| C-07 | 经典 Emotion 表现 | note.update expression.Accent、velocity 和 vibrato；真实经典声音与往返需 DSE 声库 | E | 41-43 |
 | C-08 | 声库列表与可用性 | voicebanks | V | 43,53 |
-| C-09 | 主、副声库与 AI 声库选择 | project_edit voice.get / set；双 AI 声库素材往返已验，传统声库待验 | I | 43,53 |
+| C-09 | 主、副声库与 AI 声库选择 | voice.get/set；双 AI 声库素材往返已验，传统声库需对应 DSE 资源 | I | 43,53 |
 | C-10 | 样式预设查询及应用 | project_library；含音频效果链的样式保存重开 | V | 43,54-55 |
-| C-11 | Singing Skill、Attack、Release | singing_skill_catalog/get/set 与 note_skill_get/set/reset；参数可写，经典工程重开失败，实际经典发声待验 | I | 55,58 |
-| C-12 | Robot Voice | performance.get/set 参数通过；本轮启用前后 PCM 相同，声音差异失败 | I | 43 |
-| C-13 | Breath 模式、类型与呼气量 | project_edit performance.get / set；参数保存重开已验，听感待验 | V | 44 |
-| C-14 | Take 车道选择 | project_edit performance.get / set；参数保存重开已验 | V | 44 |
-| C-15 | MIDI 效果旁路及 Exciter VoiceColor | project_edit performance.get / set；参数保存重开已验 | V | 43-44,55 |
-| C-16 | 其他 VoiceColor 参数及听感 | project_edit performance.get / set；逐参数和音频效果待验 | I | 43-44,55 |
-| C-17 | Take 的其他车道参数 | 需要进一步核对原生效果参数和样本 | I | 44 |
+| C-11 | Singing Skill、Attack、Release | singing_skill_catalog/get/set 与 note_skill_get/set/reset；目录及参数可调，经典声音和完整往返需 DSE 声库 | I | 55,58 |
+| C-12 | Robot Voice | performance.get/set；禁用原生结果缓存后 Hard 声音差异、保存重开和混缩通过，同宿主另一会话音频保持 | V | 43 |
+| C-13 | Breath 模式、类型与呼气量 | 参数保存重开通过；启用、频率和呼气量有 PCM 差异，受测 AI 中 Male/Female 声音相同，不声称类型听感差异 | V | 44 |
+| C-14 | Take 车道选择 | performance.get/set；0 与 9 车道声音差异及保存重开通过 | V | 44 |
+| C-15 | MIDI 效果旁路 | performance.get/set；Robot、Breath、Take 与 AI VoiceColor 旁路/状态已有定向证据；Exciter 归入经典 VoiceColor | V | 43-44,55 |
+| C-16 | VoiceColor 参数与声音 | 全 9 参数持久化；AI 的 S5Expression/S5Air/S5Character 及旁路声音差异通过，另 6 个经典参数声音需 DSE 声库 | I | 43-44,55 |
+| C-17 | Take 原生参数与旁路 | 包装接口专属值为 Lane，另有通用 bypass；现有 performance 入口已覆盖，没有已发现的其他专属参数 | V | 44 |
+| C-18 | AI Timing 表现 | phoneme_timing.get/set/reset；改动、保存重开、再渲染读回及重置通过 | V | 40 |
 
 ## 音频、混音与效果
 
@@ -133,7 +136,7 @@ V 不由工具数量或能够枚举签名推导。本轮 [完整回执](../artif
 | L-03 | 将 MIDI 媒体粘贴到工程 | project_library media_import | V | 69 |
 | L-04 | 保存 MIDI 片段为媒体、修改属性 | project_library media_capture / media_update；仅工作区自有媒体 | V | 19,71 |
 | L-05 | 删除工作区自有媒体 | project_library media_delete；禁止删除用户原有素材 | V | 71 |
-| L-06 | 预设库及音素语言信息 | project_library | I | 53-58,77-91 |
+| L-06 | 预设目录及音素语言信息 | project_library 目录查询已有原生返回值；具体经典效果的声音边界另见 C-11 | V | 53-58,77-91 |
 | L-07 | 五种语言静态音素符号表 | project_library phoneme_table；手册参考数据，非原生动态枚举 | V | 77-91 |
 | L-08 | 特殊表现素材的无损捕获 | 已验传统与 AI Attack/Release、无效音素标志；部分字段使用桥接扩展，其他特殊素材及组合待验 | I | 19,71 |
 | L-09 | 非零起点的音频裁剪素材捕获 | project_library media_capture / media_import；PCM16 单声道样本跨速度变化逐帧验证 | V | 19,71 |
@@ -153,6 +156,6 @@ V 不由工具数量或能够枚举签名推导。本轮 [完整回执](../artif
 
 所有可在当前约束内独立完成的功能都必须有实际入口和验收证据；M/I 行不能算作 V。E/X 不是成功，也不是静默回退。完整覆盖率以本文件及实际程序集目录共同核对，不以新增工具数量判断。
 
-仍待完成：PPSF/VSQX 经典轨道与声库身份、PPSF V3 实际样本、Robot 的真实效果、变更采样率/总线后的组合渲染及其他高级表现组合。静态音素表不是具体声库能力枚举。源关闭后音频复制、非空颤音与音素时序、私有样式和 HMM 素材有新证据，详见会话 06。任意秒区间和尾长不属于当前原生混缩入口，相关参数明确报错。前台窗口从未加入调用面。
+仍待完成：对应 DSE 声库下的经典身份、Emotion、Singing Skill、六个经典 VoiceColor 参数，以及特定特殊素材组合和设备/DAW 环境。真实 PPSF3、Robot、Take 和三项 AI VoiceColor 已取得本轮定向证据；内部合成率与输出率、离线求和与外部路由的界限现已明确。静态音素表不是具体声库能力枚举，任意秒区间和尾长也不是当前原生混缩入口。前台窗口从未加入调用面。
 
 官方来源：`https://rsc-net.vocaloid.com/assets/pdf_files/bb/VOCALOID6_Reference_Manual_6130_ENG.pdf`。本机原文缓存和抽取文本只保存在被忽略的 `.runtime` 中。

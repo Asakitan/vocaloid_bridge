@@ -10,6 +10,8 @@ The Python launcher copies the built DLL, dependency manifest and runtime config
 to a private `.runtime/hosts/<id>` directory before starting it, preventing CLR
 assembly locks on the build output. Each native manager also has an independent
 cache namespace reported by `ping.cache_namespace`.
+The native render cache capacity is zero, reported by `ping.render_cache_bytes`,
+so changed MIDI effects are not served from a prior project's synthesis cache.
 No WPF Application, App startup, main window, input injection, UI automation,
 foreground activation, or frontend fallback is used. The host itself does not
 create or switch Windows desktops.
@@ -55,12 +57,12 @@ automatic retry are implemented. Startup failures go to stderr and exit nonzero.
 
 | Method | Parameters | Result |
 | --- | --- | --- |
-| `ping` | `{}` | backend, pid, version, sessions, actual desktop |
+| `ping` | `{}` | backend, pid, version, sessions, actual desktop, cache_namespace, render_cache_bytes |
 | `create` | title; bpm=120; sample_rate=44100 | session summary |
 | `open` | absolute VPR path | session summary |
 | `session` | session_id | session summary |
 | `save` | session_id; output_name; overwrite=false | session_id, path, saved=true, native=true |
-| `render_part` | session_id; track_index=0; part_index=0; output_name; overwrite=false | session_id, path, native=true, result, bytes, channels, sample_rate, bits_per_sample, frames |
+| `render_part` | session_id; track_index=0; part_index=0; output_name; overwrite=false | session_id, path, native=true, result, lua_result, render_observation, bytes, channels, sample_rate, bits_per_sample, frames |
 | `close` | session_id; discard=false | session_id, closed=true |
 | `voices` | `{}` | voices array from the real DatabaseManager |
 | `api_catalog` | optional exact type/namespace; include_excluded=true; offset=0; limit=25 | installed type/member metadata and exclusion reasons |
@@ -78,10 +80,16 @@ The MCP `vocaloid_status` wrapper also returns `server_pid` for the Python proce
 separate from the native host's `pid`. Verification attributes foreground windows
 to these PIDs without activating or restoring any window.
 
-The final real-MCP acceptance receipt is
+The historical real-MCP acceptance receipt is
 `artifacts/feature-acceptance-19d5e92a5f26/summary.json`: 44 feature cases plus
 cleanup pass, covering all 35 advertised tools and the 81 structured operations.
 This does not certify every raw native member, voice, effect, or file format.
+The current 36-tool, 109-operation surface and subsequent focused receipts are
+listed in `STATUS.md`. Open/load and save/clone now check native track and voice
+identity. The known no-classic-bank condition reports `missing_classic_bank`
+before loading a classic VPR; a lossy native snapshot reports
+`project_integrity` before publication. These checks preserve existing files,
+not add a missing voice model or promise classic synthesis.
 
 Summaries contain `session_id`, native `title`, native `track_count`, host `dirty`,
 `root_ref`, and nullable `last_saved_path`. Creation uses the real VSM manager,

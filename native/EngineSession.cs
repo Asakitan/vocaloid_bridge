@@ -134,7 +134,13 @@ internal sealed partial class EngineHost : IDisposable
         PathGuard.CreateDirectory(OutputRoot);
         manager = WVSMModuleIF.CreateManager(CacheNamespace, EngineVersion)
             ?? throw new InvalidOperationException("VSM manager creation failed: " + WVSMModuleIF.LastError());
-        try { EnsureDatabase(); }
+        try
+        {
+            manager.CacheCapacity = 0;
+            if (manager.CacheCapacity != 0)
+                throw new InvalidOperationException("Native render cache policy was not applied.");
+            EnsureDatabase();
+        }
         catch
         {
             manager.Dispose();
@@ -145,6 +151,7 @@ internal sealed partial class EngineHost : IDisposable
 
     internal string Workspace { get; }
     internal string CacheNamespace { get; } = "VocaloidBridge-" + Guid.NewGuid().ToString("N");
+    internal long RenderCacheBytes => manager.CacheCapacity;
     internal string RuntimeRoot { get; }
     internal string OutputRoot { get; }
     internal int SessionCount { get { CheckThread(); return sessions.Count; } }
@@ -210,9 +217,12 @@ internal sealed partial class EngineHost : IDisposable
             string json = Path.Combine(project, "sequence.json");
             if (!File.Exists(json))
                 throw new InvalidDataException("VPR must contain Project/sequence.json.");
-            sequence = manager.OpenSequence(json, project, new VSMSequenceData(VSMSamplingRate._44100, 32, 100))
+            ValidateOpenRequirements(json);
+            sequence = manager.OpenSequence(json, Path.GetDirectoryName(typeof(WVSMModuleIF).Assembly.Location)!,
+                new VSMSequenceData(VSMSamplingRate._44100, 32, 100))
                 ?? throw new InvalidOperationException("Native open failed: " + manager.LastError);
             ownedSequences.Add(sequence);
+            ValidateLoadedTrackKinds(sequence, json);
             RestoreProjectValidity(sequence, directory);
             EngineSession session = new(id, directory, sequence, path, false);
             sessions.Add(id, session);
@@ -240,6 +250,7 @@ internal sealed partial class EngineHost : IDisposable
         if (!File.Exists(Path.Combine(project, "sequence.json")))
             throw new InvalidDataException("Native Save did not produce Project/sequence.json.");
         PathGuard.TreeNoLinks(project);
+        ValidateNativeSnapshot(session.Sequence, Path.Combine(project, "sequence.json"));
         string archive = Path.Combine(stage, "saved.vpr");
         ZipFile.CreateFromDirectory(project, archive, CompressionLevel.Optimal, true);
         if (validity.Notes.Count != 0)
@@ -378,7 +389,7 @@ internal sealed partial class EngineHost : IDisposable
             throw new InvalidOperationException("Native pre-render commit failed: " + session.Sequence.LastError);
         PathGuard.NoLinks(session.Directory);
         string temporary = Path.Combine(session.Directory, "render-" + Guid.NewGuid().ToString("N") + ".wav");
-        VLCResult luaResult = RenderNativePart(session.Sequence, part, temporary);
+        var render = RenderNativePart(session.Sequence, part, temporary);
         PathGuard.NoLinks(temporary);
         var wave = InspectWave(temporary);
         PathGuard.NoLinks(destination);
@@ -388,7 +399,8 @@ internal sealed partial class EngineHost : IDisposable
             session_id = id,
             path = destination,
             native = true,
-            lua_result = luaResult.ToString(),
+            lua_result = render.LuaResult.ToString(),
+            render_observation = render.Observation,
             result = "AsyncRenderingCompleted",
             bytes = wave.Bytes,
             channels = wave.Channels,
@@ -398,14 +410,20 @@ internal sealed partial class EngineHost : IDisposable
         };
     }
 
-    private static VLCResult RenderNativePart(WIVSMSequence sequence, WIVSMMidiPart part, string output)
+    private static (VLCResult LuaResult, object Observation) RenderNativePart(WIVSMSequence sequence, WIVSMMidiPart part, string output)
     {
+        if (sequence.GetSamplingRate() != VSMSamplingRate._44100)
+            throw new NotSupportedException("Native vocal-part synthesis requires a 44100 Hz project; mixdown output sample_rate is independent.");
         Stopwatch elapsed = Stopwatch.StartNew();
         nint controller = LuaControllerIF.CreateController();
         if (controller == nint.Zero)
             throw new InvalidOperationException("Native MIDI controller initialization failed: " + LuaControllerIF.LastError);
         using WIVSMRendererObserver observer = new();
         string? cancellation = null;
+        bool started = false, completed = false;
+        bool beforeValid = part.HasValidRenderedWave, beforeFinished = sequence.IsFinishedRendering;
+        observer.Started += (_, details) => { if (details.MidiPart.Equals(part)) started = true; };
+        observer.Completed += (_, details) => { if (details.MidiPart.Equals(part)) completed = true; };
         observer.Canceled += (_, details) =>
         {
             if (details.MidiPart.Equals(part))
@@ -418,16 +436,20 @@ internal sealed partial class EngineHost : IDisposable
             sequence.BlockRenderingEnabled = WIVSMSequence.DefaultBlockRenderingEnabled;
             sequence.BlockRenderingLengthMsec = WIVSMSequence.DefaultBlockRenderingBlockSize;
             sequence.BlockRenderingPartDurationThresholdMsec = WIVSMSequence.DefaultBlockRenderingPartDurationThresholdMsec;
+            while (sequence.InvokeRendererObserver()) { }
             attached = sequence.AddRendererObserver(observer);
             if (!attached)
                 throw new InvalidOperationException("Native renderer observer could not be attached: " + sequence.LastError);
             sequence.SetActivePart(part);
             sequence.StartAsyncRendering();
-            while (!part.HasValidRenderedWave)
+            bool afterStartFinished = sequence.IsFinishedRendering;
+            while (true)
             {
                 for (int notification = 0; notification < 64 && sequence.InvokeRendererObserver(); notification++) { }
                 if (cancellation is not null)
                     throw new InvalidOperationException("Native rendering cancelled: " + cancellation);
+                if (part.HasValidRenderedWave && (completed || sequence.IsFinishedRendering))
+                    break;
                 if (elapsed.Elapsed > TimeSpan.FromMinutes(2))
                 {
                     VSMRendererProgress progress = part.RendererProgress;
@@ -439,7 +461,13 @@ internal sealed partial class EngineHost : IDisposable
             if (string.IsNullOrEmpty(rendered) || !File.Exists(rendered))
                 throw new InvalidDataException("Native renderer reported completion without a WAV file.");
             File.Copy(rendered, output, false);
-            return LuaControllerIF.LastError;
+            VSMRendererProgress finishedProgress = part.RendererProgress;
+            return (LuaControllerIF.LastError, new
+            {
+                before_valid_wave = beforeValid, before_finished = beforeFinished, after_start_finished = afterStartFinished,
+                started, completed, finished = sequence.IsFinishedRendering, first_end = finishedProgress.FirstEnd,
+                second_begin = finishedProgress.SecondBegin, second_end = finishedProgress.SecondEnd
+            });
         }
         finally
         {

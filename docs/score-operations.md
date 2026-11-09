@@ -61,7 +61,7 @@ made undoable by this wrapper. History is not a transaction journal for files.
 | --- | --- | --- |
 | `track.list` | None | `tracks`: track summaries |
 | `track.create` | Optional `type` (`Midi`, `MidiAi`, `Audio`; default `Midi`), `name` (default `Track`), insertion `index` (default append) | Created track summary |
-| `track.update` | `track_index`; one or more of `name`, native palette `color` (0..15), `mute`, `solo` | Updated track summary |
+| `track.update` | `track_index`; one or more of `name`, native palette `color` (0..15), `mute`, `solo`, `bus_no`, MIDI-only `midi_recording` | Updated track summary |
 | `track.remove` | `track_index` | `removed`, old `track_index` |
 | `track.reorder` | `track_index`, `to_index` in the existing list | Moved track summary |
 | `track.duplicate` | `track_index`; optional insertion `index` (default immediately after source), `name` | Native duplicate summary |
@@ -103,6 +103,7 @@ All note operations require `track_index` and `part_index`.
 | Operation | Additional Options | `result` |
 | --- | --- | --- |
 | `note.list` | None | `notes`: note summaries |
+| `note.expression_bounds` | Target part | Current native part's minimum, maximum and default dictionaries for `expression` and `ai_expression` |
 | `note.add` | `start_tick`, `duration_tick`; optional note fields below | Inserted note summary |
 | `note.update` | `note_index`; one or more note fields below | Updated note summary |
 | `note.remove` | `note_index` | `removed`, old `note_index` |
@@ -261,6 +262,30 @@ by native MIDI effect name. Unsupported effects, invalid enums and out-of-range
 values are rejected before mutation. Changes use native transaction/commit and
 post-commit readback.
 
+Each VoiceColor descriptor also includes `applies_to` (`Midi` or `MidiAi`)
+and `applicable_to_current_part`, following the installed editor's classic/AI
+parameter mapping. The three `S5` fields apply to AI parts; the other six to
+classic parts. Native storage of an inactive field is still supported, but is
+not advertised as an audible effect on the current part. Bypass remains a
+separate setting.
+
+`artifacts/feature-acceptance-f01a08f3680e/session.breath_audio.json` adds
+actual Breath audio evidence on a gapped AI phrase: enabled versus bypassed
+difference RMS about 0.01209, exhalation 0 versus 10 about 0.01205, and Rarely
+versus Often about 0.00721. Male and Female selections produced identical PCM
+in that fixture; their parameter storage is verified, not a gender-specific
+audio difference. The selected Breath state and bypass survive save/reopen.
+
+The installed `WIVSMTakeEffect` wrapper exposes one Take-specific value,
+`Lane`, with `LaneSetting` bounds and `SetLane`; Take bypass is exposed through
+the part's effect API. The 6.13 manual describes Take as pronunciation timing
+variation on VOCALOID:AI parts, not a separate collection of lane parameters.
+`artifacts/score-parameters-66761d50d26c.json` exercises native lanes 0 and 9
+through MCP with Take enabled, verifies lane 9 and bypass after save/reopen,
+and asserts different nonzero native PCM with equal formats (difference RMS
+about 0.01557). The script authors its own fixture through `score_compose`.
+This fixture does not establish the sound of every lane or voicebank.
+
 Robot mode uses the native effect setter and the installed Lua manager, avoiding
 the editor's `App` initializer. Script path and timing are runtime-only fields;
 the host restores them before part synthesis and mixdown after reopening a VPR.
@@ -289,8 +314,8 @@ stereo pan, and master-volume bypass on stems are measured from native PCM in
 
 | Operation | Options | `result` |
 | --- | --- | --- |
-| `sequence.get` | None | Title, track count, sample rate, global tempo settings, current tick |
-| `sequence.update` | One or more of `title`, `global_bpm`, `global_tempo_enabled` | Sequence summary |
+| `sequence.get` | None | Title, track count, sample rate, read-only `presend_time_sec`, global tempo settings, current tick |
+| `sequence.update` | One or more of `title`, `sample_rate`, `global_bpm`, `global_tempo_enabled` | Sequence summary |
 | `loop.get` | None | `enabled`, `start_tick`, `end_tick` |
 | `loop.set` | `enabled` and/or `start_tick`, `end_tick` | Loop summary |
 | `tuning.get` | None | Native `value`, `minimum`, `maximum`, `default_value` |
@@ -300,12 +325,29 @@ stereo pan, and master-volume bypass on stems are measured from native PCM in
 | `redo` | None | History status after native redo |
 
 Global tempo is distinct from tempo events. Loop changes do not start playback.
-Tuning is passed in the native API's value domain without an inferred unit.
+The manual describes project tuning in Hertz; this bridge passes the value
+directly to native `SetMainTuning`. The installed wrapper exposes
+`PresendTimeSec` as a getter only; this is not an editable pre-send setting.
+
+## Emotion and Timing Mapping
+
+The 6.13 reference manual's Emotion tool applies to classic VOCALOID parts:
+its note accent maps to `note.update` with `expression.Accent`, consonant
+velocity to the note's `velocity`, and its vibrato controls to the native
+`vibrato` operations. Its Timing tool applies to VOCALOID:AI parts and maps to
+`phoneme_timing.get/set/reset`, rather than to the AI expression fields.
+The AI phoneme edit/save/reopen/render/reset chain has a recorded native result
+in `artifacts/score-followup-receipt-208cabf8d914.json`. Classic Emotion audio
+and classic-track save/reopen remain unverified with this installation's voice
+assets; the field mapping does not imply a classic synthesis result.
 
 ## Verification and Remaining Work
 
-The Release host build and real MCP acceptance passed for all 51 operation names.
-The final receipt is `artifacts/feature-acceptance-19d5e92a5f26/summary.json`.
+The earlier Release host build and real MCP acceptance passed for the then-51
+operation names in `artifacts/feature-acceptance-19d5e92a5f26/summary.json`.
+The current dispatch has 65 operations; session 06 and 07 receipts below cover
+the additions, including `note.expression_bounds` and all 19 expression fields
+in `artifacts/feature-acceptance-9eec19449679/summary.json`.
 Track colors, native no-op handling, direct pitch anchors, clear operations,
 history, saved VPR readback, and child-reference invalidation are exercised.
 Every enum value, voice and parameter combination is not covered by this result.
@@ -317,8 +359,8 @@ The repeatable category check is:
 ```
 
 The separate `tools/check_score_operations.py` remains an additional native
-probe. The final MCP result above is the delivery gate; do not repeatedly run
-unchanged passing checks.
+probe. Historical counts are not the current complete-function gate; do not
+repeatedly run unchanged passing checks.
 
 ## Additional native operations
 
@@ -339,8 +381,12 @@ value staged through generic access was successfully rolled back. Using a clean
 311→312, saved, reopened and rendered, read back as 312, then reset to its
 original 311. Phoneme positions were empty immediately after reopening until
 rendering; use the per-host cache isolation build for this check. The combined
-changed-rate/changed-bus render failed with `FailedToCreateDseWaveBuffer`; its
-cause and audio behavior for changed routing/rate remain unverified.
+changed-rate/changed-bus render failed with `FailedToCreateDseWaveBuffer`.
+Session 07 isolated the same failure with a 48000 Hz internal rate and bus 0.
+Part synthesis now explicitly requires a 44100 Hz project; this is independent
+of the mixdown output rate. Bus 0/1 with 44100 Hz internal synthesis and
+44100/48000/96000 output passed. External host routing remains unverified;
+see `audio-operations.md` for the corresponding receipts.
 
 - `note.batch_update`: `track_index`, `part_index`, `note_indices`, and at least
   one of integer `transpose` or `lyrics` (one string per selected note). Lyrics

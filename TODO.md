@@ -1,25 +1,27 @@
 # 当前目标
 
-补齐 VOCALOID6 原生后台 MCP 的全部可调用功能；保留创建、打开、编辑、保存。无前台操作、无替代后端。目标仍在进行。
+补齐 VOCALOID6 原生后台 MCP 的全部可调用功能，保留创建、打开、编辑、保存；只使用原生后台路径。目标继续进行，环境相关能力不冒充完成。
 
-## 已完成增量
+## 当前进展
 
-- 0.2.0：36 个工具、108 个结构化操作的发现目录与原生调用；新增批量音符、颤音、时序、回滚、Singing Skill、HMM 权重、私有样式管理。
-- 私有构建快照与每宿主 VSM 缓存隔离；音频导入/克隆初始化修复。
-- 整合回执 `artifacts/feature-acceptance-012574702338/summary.json`，后续定向修正见 STATUS。
+- 0.2.1：36 工具、109 个结构化操作；原生表现范围、VoiceColor 适用性、Robot 缓存修复、项目完整性保护。
+- 真实 PPSF3.2 的 190 音符、80 BPM、4/4 和主生命周期、双 AI 声库、特殊音素往返通过。
+- Robot、Take、三项 AI VoiceColor、Breath 启用/频率/音量有实际 PCM 差异；公开 PPSF3 显式选声后产出非零原生音频，长音频另作流式复核。
+- 当前源码、文档、操作目录和定向回归已同步；证据与未验边界集中在 STATUS 和会话 07。
 
-## 当前问题及下一步
+## 下一步与环境依赖
 
-1. 修复经典 VPR/PPSF/VSQX 保存/重开后的 track type 与 voice ID 丢失；不要替换源声库，不要用 metadata 宣称原生修复。
-2. 定位 Robot 返回 NoError 但 PCM 相同的原因；核对 VLC 与唯一 VSM app ID 的真实关联，尚未证实关联就是根因。保持多宿主缓存隔离。
-3. 复核改变 sample_rate/bus_no 后的组合渲染；已验证参数持久化不等于该组合发声通过。
-4. 取得 PPSF V3 实际样本后运行其用例；设备/DAW 行为另需真实环境。
+1. 现有客户端重载 `vocaloid6-native` 后使用 0.2.1 和新增操作目录；本轮未重启客户端或用户编辑器。
+2. 经典 DSE 声库当前为零，用户暂不安装试用。待具备对应声库后验证经典身份、Singing Skill、Emotion 和六个经典 VoiceColor 的声音及完整往返；已加入显式完整性保护。
+3. 设备播放、实时录制及 DAW 同步需对应外部环境；不操作用户窗口、全局偏好或授权。
+4. 内部 48/96 kHz 声乐渲染尚无有效原生路径，保持明确报错；输出 44.1/48/96/192 kHz 由既有混缩入口提供。
 
-## 验证
+## 验证约定
 
-`tools/verify_all.py` 是整合入口；`tools/generate_operation_catalog.py --check` 检查操作目录。只针对新改动或具体失败运行必要验证，不重复已通过的未变用例。所有测试只在私有 desktop；保留实际失败证据。
+`tools/verify_all.py` 是整合入口；`tools/generate_operation_catalog.py --check` 检查目录。仅对改动、具体失败或必要发布门槛运行验证。保留历史失败、真实样本来源和环境依赖，不通过缩减断言制造成功。PPSF3 长音频原用例的 30 秒检查限制已修正，已有输出独立复核通过，不为改写旧失败记录而重渲。
 
 ## 历史索引
 
 - [会话 05](docs/session-log/session-05.md)：旧 60/1 基线。
-- [会话 06](docs/session-log/session-06.md)：本轮实现、通过、失败与接续。
+- [会话 06](docs/session-log/session-06.md)：36 工具、108 操作和上轮整合结果。
+- [会话 07](docs/session-log/session-07.md)：0.2.1、Robot、PPSF3、完整性保护与当前边界。

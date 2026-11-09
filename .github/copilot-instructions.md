@@ -18,5 +18,5 @@ Use the official MCP Python SDK v1 documentation at https://py.sdk.modelcontextp
 - [x] Reference repository comparison documented without importing a replacement backend.
 - [x] Native WAV synthesis through real MCP, including clean-project reopen and nonzero audio samples.
 - [x] User-level VS Code, Claude Code/Desktop, and Codex MCP registration; shared launch configuration verified outside the workspace.
-- [x] Expanded 36-tool interface and 108 structured operations have positive real-MCP calls; session 06 full run has 76 passed, 5 failed and 2 missing-fixture cases, followed by focused deltas. See STATUS.md for current failures.
+- [x] Expanded 36-tool interface and 109 structured operations; session 07 adds expression bounds, real PPSF3, Robot cache correction and native identity guards. Historical full runs and focused deltas are distinguished in STATUS.md.
 - [ ] Complete editor-feature coverage fully validated.

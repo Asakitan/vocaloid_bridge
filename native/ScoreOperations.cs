@@ -22,6 +22,7 @@ internal sealed partial class EngineHost
             "part.create" or "part.update" or "part.remove" or "part.move" or "part.resize" or "part.duplicate" or "part.split" or "part.join"
                 => ScorePartEdit(session, operation, options),
             "note.list" => ScoreNoteList(session, options),
+            "note.expression_bounds" => ScoreNoteExpressionBounds(session, options),
             "note.batch_update" => ScoreNoteBatchUpdate(session, options),
             "vibrato.get" or "vibrato.set" => ScoreVibrato(session, operation, options),
             "phoneme_timing.get" or "phoneme_timing.set" or "phoneme_timing.reset" => ScorePhonemeTiming(session, operation, options),
@@ -620,6 +621,26 @@ internal sealed partial class EngineHost
         return result;
     }
 
+    private static object ScoreNoteExpressionBounds(EngineSession session, JsonElement options)
+    {
+        WIVSMMidiPart part = ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options);
+        return new
+        {
+            expression = new
+            {
+                minimum = ScoreExpressionSummary(part.GetMinNoteExpression()),
+                maximum = ScoreExpressionSummary(part.GetMaxNoteExpression()),
+                defaults = ScoreExpressionSummary(part.GetDefaultNoteExpression())
+            },
+            ai_expression = new
+            {
+                minimum = ScoreExpressionSummary(part.GetMinAiNoteExpression()),
+                maximum = ScoreExpressionSummary(part.GetMaxAiNoteExpression()),
+                defaults = ScoreExpressionSummary(part.GetDefaultAiNoteExpression())
+            }
+        };
+    }
+
     private static T ScorePatchExpression<T>(JsonElement options, string name, T current, T minimum, T maximum) where T : struct
     {
         if (!options.TryGetProperty(name, out JsonElement patch))
@@ -1003,7 +1024,9 @@ internal sealed partial class EngineHost
             take = take is null ? null : new { lane = take.Lane, setting = take.LaneSetting },
             voice_colors = color is null ? null : Enum.GetValues<VSMVoiceColor>().Select(value => new
             {
-                name = value.ToString(), value = color.VoiceColorValue(value), setting = color.VoiceColorSetting(value)
+                name = value.ToString(), value = color.VoiceColorValue(value), setting = color.VoiceColorSetting(value),
+                applies_to = value is VSMVoiceColor.S5Expression or VSMVoiceColor.S5Air or VSMVoiceColor.S5Character ? "MidiAi" : "Midi",
+                applicable_to_current_part = part.IsAi == (value is VSMVoiceColor.S5Expression or VSMVoiceColor.S5Air or VSMVoiceColor.S5Character)
             }).ToArray(),
             bypass = Enum.GetValues<VSMMidiEffectType>().Select(value => new
             {

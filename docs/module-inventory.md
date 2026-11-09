@@ -3,11 +3,12 @@
 | 源文件 | 功能 | Status |
 | --- | --- | --- |
 | `native/Program.cs` | 原生宿主入口、安装库解析、私有 desktop 检查 | 已编译 |
-| `native/EngineSession.cs` | VSM 会话、工程生命周期、声库和片段渲染 | 生命周期、独立缓存与音频克隆通过；Robot 声音差异及经典格式仍失败 |
-| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 64 个操作有成功调用；批量、颤音、时序、回滚与换算通过，路由/采样率组合发声待修 |
+| `native/EngineSession.cs` | VSM 会话、工程生命周期、声库和片段渲染 | 独立命名空间、零结果缓存、完成观察；生命周期与 Robot 声音差异通过 |
+| `native/ProjectIntegrity.cs` | 原生打开与发布前的结构和声库身份检查 | 缺经典声库预检、丢失身份阻止覆盖、AI 正例通过；不代替经典声库 |
+| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 65 操作；19 表现字段、批量、颤音、时序、回滚、换算及 Take 通过 |
 | `native/AudioOperations.cs` | 原生离线音频、效果与整轨混缩 | 9 个操作、5 种离线处理、11 个内置效果及受测采样格式通过 |
 | `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 30 个操作有成功调用；样式及 HMM 通过，经典 Singing Skill 重开受身份问题影响 |
-| `native/ProjectInterchange.cs` | 原生格式交换、复制、恢复与合并 | VSQX 音符样本通过；PPSF V2 音符保留但轨道/声库往返失败 |
+| `native/ProjectInterchange.cs` | 原生格式交换、复制、恢复与合并 | 真实 PPSF3/音频克隆通过；PPSF2/VSQX 经典完整往返需 DSE 声库 |
 | `native/ProjectClipboard.cs` | 私有原生快照剪贴板 | 5 个操作及源关闭后的 MIDI 跨工程粘贴通过 |
 | `native/RpcServer.cs` | 单线程 JSON 行协议、原生对象发现与精确签名调用 | 已编译 |
 | `vocaloid_bridge/native_client.py` | 私有 desktop、Job Object、管道客户端与 DLL 快照 | 独立构建副本启动、关闭清理通过 |
@@ -20,9 +21,13 @@
 | `vocaloid_bridge/desktop.py` | 旧 UI 模块退役标记 | 不包含可调用后端 |
 | `tools/smoke_mcp.py` | 真实 stdio 原生生命周期验收 | 通过 |
 | `tools/render_demo.py` | MCP stdio 编曲、保存、重开、合成和 WAV 样本验收 | 通过：374849 帧，非零峰值与 RMS，关闭后 0 会话 |
-| `tools/verify_features.py`、`tools/verify_all.py` | 按功能分类的真实 MCP 验收 | 本轮整合 76 通过、5 失败、2 缺样本；定向差异见 STATUS |
+| `tools/verify_features.py`、`tools/verify_all.py` | 按功能分类的真实 MCP 验收 | 历史整合 76/5/2；本轮定向证据及环境边界见 STATUS |
 | `tools/check_host_isolation.py` | 双原生宿主缓存回归 | 修复前失败、每宿主命名空间后通过 |
 | `tools/check_*remaining*.py` | 乐谱、音频、素材、交换的定向验证 | 证据与限制分别记录在模块文档 |
+| `tools/check_session_features.py` | VPR 导入、完整表现、素材参数与 Breath 音频 | 参数往返及 Breath 启用/频率/音量差异通过，类型声音差异未成立 |
+| `tools/check_robot_runtime.py`、`tools/check_audio_routing.py` | Robot 时序/缓存和内部/输出率调查 | 原失败回归、双会话及六组合混音通过，非 44100 内部合成显式报错 |
+| `tools/check_voicecolor_audio.py`、`tools/check_score_parameters.py` | VoiceColor 和 Take 定向音频测量 | 三个 AI VoiceColor 及 Take 差异通过；六个经典 VoiceColor 待 DSE |
+| `tools/fetch_public_ppsf_fixture.py` | 公开样本获取及来源记录 | 作者原始 PPSF3 与最小格式夹具分开标识；歌曲不入 Git |
 | `docs/feature-matrix.md` | 官方手册与原生接口逐项覆盖 | 证据已回填，未验、缺失和受限项保留 |
 | `.vscode/mcp.json` | 工作区 stdio 服务配置 | 已配置 |
 | `.vscode/tasks.json` | 安装、工程验收和原生合成验收任务 | 原生合成任务已运行通过 |
@@ -51,3 +56,4 @@
 | 2026-11-10 | 原生 Attack/Release 目录为 36/42；传统和 AI 素材及无效音素扩展定向通过，文件级冲突拒绝；PPSF V2 真实样本暴露轨道/声库重开丢失。 |
 | 2026-11-10 | 含手册和 VSQX3/4、PPSF V2 样本的完整 MCP 验收 60 通过、1 失败；35 工具及 91 个结构化操作有成功调用。 |
 | 2026-11-10 | 升级 0.2.0：36 工具、108 操作有成功调用；新增样式、HMM、细化编辑、操作目录和独立缓存。整合仍有经典格式、Robot 及缺样本项。 |
+| 2026-11-10 | 升级 0.2.1：109 操作，Robot 零缓存修复、PPSF3 真实样本、项目完整性保护、全部表现参数及 Take/AI VoiceColor 定向验证；经典与外部环境边界保留。 |

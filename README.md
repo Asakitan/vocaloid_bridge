@@ -33,7 +33,7 @@ powershell -NoProfile -File .\tools\setup.ps1
 
 这些条目均使用 `E:/VC/vocaloid_bridge/.venv/Scripts/python.exe -m vocaloid_bridge`，并显式设置 `VOCALOID_WORKSPACE`、`PYTHONPATH` 为 `E:/VC/vocaloid_bridge`，`PYTHONUTF8` 为 `1`。从其他目录启动时，输出仍写到本项目的 `output`。Codex 的 `tool_timeout_sec` 为 180。
 
-Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。本轮工作区服务提供 36 个工具和 108 个结构化操作；既有客户端需要重新加载 MCP 服务才能发现新增工具。没有强制重启客户端或改变登录、模型与其他 MCP 服务。
+Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前 0.2.1 提供 36 个工具和 109 个结构化操作；既有客户端需要重新加载 MCP 服务才能发现新增工具。没有强制重启客户端或改变登录、模型与其他 MCP 服务。
 
 ## 工具
 
@@ -79,6 +79,12 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 
 ## 验证与范围
 
+公开 PPSF3 样本可通过下列命令保存到被忽略的运行目录；工具会记录作者页面和下载来源，不将歌曲纳入源码。
+
+```powershell
+.\.venv\Scripts\python.exe .\tools\fetch_public_ppsf_fixture.py --source monologue
+```
+
 ```powershell
 .\.venv\Scripts\python.exe .\tools\smoke_mcp.py
 .\.venv\Scripts\python.exe .\tools\render_demo.py
@@ -86,18 +92,19 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 	--phoneme-manual-text .\.runtime\VOCALOID6_Reference_Manual_6130_ENG.txt `
 	--vsqx-fixture .\.runtime\benben_01\cant_stop\cant_stop.vsqx `
 	--vsqx3-fixture .\.runtime\vsqx3-reference.vsqx `
-	--ppsf-fixture .\.runtime\radio-miku-gohan-20220311.ppsf
+	--ppsf-fixture .\.runtime\radio-miku-gohan-20220311.ppsf `
+	--ppsf3-fixture .\.runtime\public-ppsf3-javawock-download\Monologue.ppsf
 ```
 
-本轮 [完整验收回执](artifacts/feature-acceptance-012574702338/summary.json) 为 76 通过、5 失败、2 个缺样本项；36 个工具和 108 个结构化操作均出现过成功调用，但功能语义仍有失败。后续 [定向回执](artifacts/feature-acceptance-6d7fb89e808b/summary.json) 验证了含发声区域的 48/96 kHz 混缩，并确认经典 Singing Skill 重开受到经典轨道身份问题影响。Robot 的实际声音差异、PPSF/VSQX 经典身份往返仍待修复；PPSF V3 需要真实样本。具体逐项状态见 STATUS 和功能矩阵。
+上轮 [完整验收回执](artifacts/feature-acceptance-012574702338/summary.json) 为 76 通过、5 失败、2 个缺样本项。0.2.1 已取得 Robot 缓存修复、真实 PPSF3、Take、三个 AI VoiceColor 参数以及项目完整性保护的定向证据；[生命周期与素材回归](artifacts/feature-acceptance-983dee33baea/summary.json) 为 6 项通过。没有把历史套件改称本轮全部通过；结果与剩余环境依赖见 [STATUS](STATUS.md) 和 [功能矩阵](docs/feature-matrix.md)。
 
 原生混缩输出整工程或所选整轨，各分轨保留自己的时长；分轨不使用主效果和主音量自动化。`start_seconds`、`end_seconds` 和 `tail_seconds` 不受此原生入口支持，传入会明确报错。素材属性写入独立的 `property.json`；新建自有素材可在 `.vsclip` 中附加桥接元数据。
 
-当前实测状态见 [STATUS.md](STATUS.md)，未验和受限功能见 [功能矩阵](docs/feature-matrix.md)。PPSF 轨道/声库、高级表现及特殊素材组合仍有缺口；静态音素表不是逐声库能力清单，设备/DAW/界面和授权操作受既定约束限制。VPR 保存成功不等于 WAV 合成成功。
+当前本机 Dse=0、Dnn=21；经典 VPR 打开前检查已知类型转换条件，原生保存若丢失身份则在发布前报错，已有输出保持。用户选择暂不安装经典试用声库，相关经典声音与往返仍待具备资源后验收。静态音素表不是逐声库能力清单，设备/DAW 需要对应环境；VPR 保存成功不等于 WAV 合成成功。
 
 验收生成的工程、原生人声和混音保存在 `output/feature-012574702338-*` 等独立批次，路径及音频测量见逐项回执。每次运行使用独立名称，不覆盖已有工程或音频。无样本参数的 `VOCALOID6: full feature acceptance` 任务会将依赖样本的用例标为阻塞。
 
-操作目录修改后运行 `tools/generate_operation_catalog.py`，用 `--check` 检查它与原生 dispatch、文档是否一致。`tools/check_host_isolation.py` 是双后台宿主音频缓存隔离回归。宿主从私有构建副本运行，并使用独立 VSM 缓存命名空间，不加载用户前台编辑器的缓存目录。
+操作目录修改后运行 `tools/generate_operation_catalog.py`，用 `--check` 检查它与原生 dispatch、文档是否一致。`tools/check_host_isolation.py` 是双后台宿主音频缓存隔离回归。宿主从私有构建副本运行，使用独立 VSM 缓存命名空间和零合成结果缓存，不加载用户前台编辑器的缓存目录。渲染返回原生完成观察值；内部合成固定要求 44100 Hz，混缩输出率可独立选择。
 
 实现依据与调用约定见 `docs/native-protocol.md`、`docs/project-format.md` 和 `docs/architecture.md`。
 

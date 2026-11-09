@@ -1,0 +1,151 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "VOCALOID6: setup",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}/tools/setup.ps1"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "VOCALOID6: native MCP smoke",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/Scripts/python.exe",
+			"args": [
+				"${workspaceFolder}/tools/smoke_mcp.py"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "VOCALOID6: native render smoke",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/Scripts/python.exe",
+			"args": [
+				"${workspaceFolder}/tools/render_demo.py"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "VOCALOID6: build native",
+			"type": "shell",
+			"command": "dotnet",
+			"args": [
+				"build",
+				"${workspaceFolder}/native/VocaloidBridge.Host.csproj",
+				"-c",
+				"Release",
+				"--no-restore",
+				"--nologo"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "VOCALOID6: score feature smoke",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/Scripts/python.exe",
+			"args": [
+				"${workspaceFolder}/tools/check_score_operations.py"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "VOCALOID6: library feature smoke",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/Scripts/python.exe",
+			"args": [
+				"${workspaceFolder}/tools/verify_features.py",
+				"--category",
+				"library"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "VOCALOID6: full feature acceptance",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/Scripts/python.exe",
+			"args": [
+				"${workspaceFolder}/tools/verify_all.py"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "VOCALOID6: check Python syntax",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"compileall",
+				"-q",
+				"${workspaceFolder}/tools",
+				"${workspaceFolder}/vocaloid_bridge"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "VOCALOID6: verify direct pitch",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/Scripts/python.exe",
+			"args": [
+				"${workspaceFolder}/tools/verify_features.py",
+				"--case",
+				"score.curves_pitch"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "VOCALOID6: verify media",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/Scripts/python.exe",
+			"args": [
+				"${workspaceFolder}/tools/verify_features.py",
+				"--case",
+				"library.media_update"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "VOCALOID6: verify mixdown",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/Scripts/python.exe",
+			"args": [
+				"${workspaceFolder}/tools/verify_features.py",
+				"--case",
+				"mixdown.master_stems",
+				"--case",
+				"mixdown.master_effect"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		}
+	]
+}

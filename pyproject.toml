@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vocaloid6-mcp"
+version = "0.2.0"
+description = "Local VOCALOID6 project editing and Windows desktop MCP bridge"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=1.20,<2",
+  "pywin32>=306; sys_platform == 'win32'",
+  "mido>=1.3,<2",
+  "jsonpatch>=1.33,<2",
+  "soundfile>=0.12,<1",
+  "numpy>=1.24,<3",
+]
+
+[project.scripts]
+vocaloid6-mcp = "vocaloid_bridge.server:main"
+
+[tool.setuptools.packages.find]
+include = ["vocaloid_bridge*"]
+
+[tool.setuptools.package-data]
+vocaloid_bridge = ["templates/*.vpr", "operations.json"]

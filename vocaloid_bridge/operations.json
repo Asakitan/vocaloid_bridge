@@ -1,0 +1,646 @@
+{
+  "schema_version": 1,
+  "verification": "Discovery only; use vocaloid_features for acceptance evidence.",
+  "domains": {
+    "score": {
+      "tool": "project_edit",
+      "rpc": "score_edit",
+      "documentation": "docs/score-operations.md",
+      "operations": [
+        {
+          "operation": "automation.list",
+          "contract_rows": []
+        },
+        {
+          "operation": "automation.remove",
+          "contract_rows": []
+        },
+        {
+          "operation": "automation.set",
+          "contract_rows": []
+        },
+        {
+          "operation": "controller.list",
+          "contract_rows": [
+            "| `controller.list` | None | `type`, `points`, min/max/default values |"
+          ]
+        },
+        {
+          "operation": "controller.remove",
+          "contract_rows": [
+            "| `controller.remove` | `controller_index` | `removed`, old index |"
+          ]
+        },
+        {
+          "operation": "controller.set",
+          "contract_rows": [
+            "| `controller.set` | `points`: array of `{tick, value}`; optional `replace` (default false) | Updated controller list |"
+          ]
+        },
+        {
+          "operation": "controller.types",
+          "contract_rows": [
+            "| `controller.types` | None | `types`: native names and min/max/default values |"
+          ]
+        },
+        {
+          "operation": "history.rollback",
+          "contract_rows": []
+        },
+        {
+          "operation": "history.status",
+          "contract_rows": [
+            "| `history.status` | None | `can_undo`, `can_redo`, `max_undo_count`, `staged` |"
+          ]
+        },
+        {
+          "operation": "loop.get",
+          "contract_rows": [
+            "| `loop.get` | None | `enabled`, `start_tick`, `end_tick` |"
+          ]
+        },
+        {
+          "operation": "loop.set",
+          "contract_rows": [
+            "| `loop.set` | `enabled` and/or `start_tick`, `end_tick` | Loop summary |"
+          ]
+        },
+        {
+          "operation": "note.add",
+          "contract_rows": [
+            "| `note.add` | `start_tick`, `duration_tick`; optional note fields below | Inserted note summary |"
+          ]
+        },
+        {
+          "operation": "note.batch_update",
+          "contract_rows": []
+        },
+        {
+          "operation": "note.clear",
+          "contract_rows": [
+            "| `note.clear` | None | `removed`, remaining `note_count` |"
+          ]
+        },
+        {
+          "operation": "note.duplicate",
+          "contract_rows": [
+            "| `note.duplicate` | `note_index`, new `start_tick` | Native duplicate summary |"
+          ]
+        },
+        {
+          "operation": "note.join",
+          "contract_rows": [
+            "| `note.join` | Distinct `note_indices` containing at least two indices | `notes`: the containing part's post-join note list |"
+          ]
+        },
+        {
+          "operation": "note.list",
+          "contract_rows": [
+            "| `note.list` | None | `notes`: note summaries |"
+          ]
+        },
+        {
+          "operation": "note.remove",
+          "contract_rows": [
+            "| `note.remove` | `note_index` | `removed`, old `note_index` |"
+          ]
+        },
+        {
+          "operation": "note.split",
+          "contract_rows": [
+            "| `note.split` | `note_index`, `split_tick` relative to the part and strictly inside the note | `notes`: original and created note summaries |"
+          ]
+        },
+        {
+          "operation": "note.update",
+          "contract_rows": [
+            "| `note.update` | `note_index`; one or more note fields below | Updated note summary |"
+          ]
+        },
+        {
+          "operation": "part.create",
+          "contract_rows": [
+            "| `part.create` | `track_index`, `start_tick`, `duration_tick`; optional `name` (default `Part`) | Created part summary |"
+          ]
+        },
+        {
+          "operation": "part.duplicate",
+          "contract_rows": [
+            "| `part.duplicate` | `track_index`, `part_index`, `start_tick`; optional `to_track_index` | Native duplicate summary |"
+          ]
+        },
+        {
+          "operation": "part.join",
+          "contract_rows": [
+            "| `part.join` | `track_index`, distinct `part_indices` containing at least two indices | Native joined part summary |"
+          ]
+        },
+        {
+          "operation": "part.list",
+          "contract_rows": [
+            "| `part.list` | Optional `track_index`; without it, all MIDI/AI tracks | `parts`: part summaries |"
+          ]
+        },
+        {
+          "operation": "part.move",
+          "contract_rows": [
+            "| `part.move` | `track_index`, `part_index`, `start_tick`; optional `to_track_index` (default source) | Moved part summary |"
+          ]
+        },
+        {
+          "operation": "part.remove",
+          "contract_rows": [
+            "| `part.remove` | `track_index`, `part_index` | `removed`, old indices |"
+          ]
+        },
+        {
+          "operation": "part.resize",
+          "contract_rows": [
+            "| `part.resize` | `track_index`, `part_index`, `duration_tick`; optional `name` | Resized part summary |"
+          ]
+        },
+        {
+          "operation": "part.split",
+          "contract_rows": [
+            "| `part.split` | `track_index`, `part_index`, `split_tick` relative to the part, strictly inside it | `parts`: original and created part summaries |"
+          ]
+        },
+        {
+          "operation": "part.update",
+          "contract_rows": [
+            "| `part.update` | `track_index`, `part_index`; `name` and/or `duration_tick` | Updated part summary |"
+          ]
+        },
+        {
+          "operation": "performance.get",
+          "contract_rows": []
+        },
+        {
+          "operation": "performance.set",
+          "contract_rows": []
+        },
+        {
+          "operation": "phoneme_timing.get",
+          "contract_rows": []
+        },
+        {
+          "operation": "phoneme_timing.reset",
+          "contract_rows": []
+        },
+        {
+          "operation": "phoneme_timing.set",
+          "contract_rows": []
+        },
+        {
+          "operation": "pitch.clear",
+          "contract_rows": [
+            "| `pitch.clear` | `note_index`; optional `begin_tick` (default 0), exclusive `end_tick` (default note duration) | Updated pitch list |"
+          ]
+        },
+        {
+          "operation": "pitch.list",
+          "contract_rows": [
+            "| `pitch.list` | `note_index` | `points`: `{tick, value}` |"
+          ]
+        },
+        {
+          "operation": "pitch.set",
+          "contract_rows": [
+            "| `pitch.set` | `note_index`, `points`: array of `{tick, value}`; optional `replace` | Updated pitch list |"
+          ]
+        },
+        {
+          "operation": "redo",
+          "contract_rows": [
+            "| `redo` | None | History status after native redo |"
+          ]
+        },
+        {
+          "operation": "selection.get",
+          "contract_rows": [
+            "| `selection.get` | `target` plus scope below | `target`, `selected_indices` |"
+          ]
+        },
+        {
+          "operation": "selection.set",
+          "contract_rows": [
+            "| `selection.set` | Same scope, distinct `indices` (may be empty); optional `selected` (default true), `clear_existing` (default true) | Selection after native setters and readback |"
+          ]
+        },
+        {
+          "operation": "sequence.get",
+          "contract_rows": [
+            "| `sequence.get` | None | Title, track count, sample rate, global tempo settings, current tick |"
+          ]
+        },
+        {
+          "operation": "sequence.update",
+          "contract_rows": [
+            "| `sequence.update` | One or more of `title`, `global_bpm`, `global_tempo_enabled` | Sequence summary |"
+          ]
+        },
+        {
+          "operation": "tempo.list",
+          "contract_rows": [
+            "| `tempo.list` | None | `tempos`, `min_bpm`, `max_bpm` |"
+          ]
+        },
+        {
+          "operation": "tempo.remove",
+          "contract_rows": [
+            "| `tempo.remove` | `tempo_index` | `removed` |"
+          ]
+        },
+        {
+          "operation": "tempo.set",
+          "contract_rows": [
+            "| `tempo.set` | `bpm`; optional `tempo_index`, `start_tick` | Tempo summary |"
+          ]
+        },
+        {
+          "operation": "time.convert",
+          "contract_rows": []
+        },
+        {
+          "operation": "time.delete",
+          "contract_rows": [
+            "| `time.delete` | `start_tick`, positive `duration_tick`; optional `include_tempo` (default true) | Applied range, `include_tempo`, `track_count` |"
+          ]
+        },
+        {
+          "operation": "time.insert",
+          "contract_rows": [
+            "| `time.insert` | `start_tick`, positive `duration_tick`; optional `include_tempo` (default true) | Applied range, `include_tempo`, `track_count` |"
+          ]
+        },
+        {
+          "operation": "time_signature.list",
+          "contract_rows": [
+            "| `time_signature.list` | None | `time_signatures` |"
+          ]
+        },
+        {
+          "operation": "time_signature.remove",
+          "contract_rows": [
+            "| `time_signature.remove` | `time_signature_index` | `removed` |"
+          ]
+        },
+        {
+          "operation": "time_signature.set",
+          "contract_rows": [
+            "| `time_signature.set` | `numerator`, `denominator`; optional `time_signature_index`, `bar` | Time-signature summary |"
+          ]
+        },
+        {
+          "operation": "track.create",
+          "contract_rows": [
+            "| `track.create` | Optional `type` (`Midi`, `MidiAi`, `Audio`; default `Midi`), `name` (default `Track`), insertion `index` (default append) | Created track summary |"
+          ]
+        },
+        {
+          "operation": "track.duplicate",
+          "contract_rows": [
+            "| `track.duplicate` | `track_index`; optional insertion `index` (default immediately after source), `name` | Native duplicate summary |"
+          ]
+        },
+        {
+          "operation": "track.list",
+          "contract_rows": [
+            "| `track.list` | None | `tracks`: track summaries |"
+          ]
+        },
+        {
+          "operation": "track.remove",
+          "contract_rows": [
+            "| `track.remove` | `track_index` | `removed`, old `track_index` |"
+          ]
+        },
+        {
+          "operation": "track.reorder",
+          "contract_rows": [
+            "| `track.reorder` | `track_index`, `to_index` in the existing list | Moved track summary |"
+          ]
+        },
+        {
+          "operation": "track.update",
+          "contract_rows": [
+            "| `track.update` | `track_index`; one or more of `name`, native palette `color` (0..15), `mute`, `solo` | Updated track summary |"
+          ]
+        },
+        {
+          "operation": "tuning.get",
+          "contract_rows": [
+            "| `tuning.get` | None | Native `value`, `minimum`, `maximum`, `default_value` |"
+          ]
+        },
+        {
+          "operation": "tuning.set",
+          "contract_rows": [
+            "| `tuning.set` | Finite native `value` | Tuning summary |"
+          ]
+        },
+        {
+          "operation": "undo",
+          "contract_rows": [
+            "| `undo` | None | History status after native undo |"
+          ]
+        },
+        {
+          "operation": "vibrato.get",
+          "contract_rows": []
+        },
+        {
+          "operation": "vibrato.set",
+          "contract_rows": []
+        },
+        {
+          "operation": "voice.get",
+          "contract_rows": [
+            "| `voice.get` | None | Voice summary |"
+          ]
+        },
+        {
+          "operation": "voice.set",
+          "contract_rows": [
+            "| `voice.set` | MIDI: `voice_bank_id` and/or `secondary_voice_bank_id`; AI: `ai_voice_bank_id` and/or `secondary_ai_voice_bank_id` | Voice summary after native setters and readback |"
+          ]
+        }
+      ]
+    },
+    "audio": {
+      "tool": "project_audio",
+      "rpc": "audio_op",
+      "documentation": "docs/audio-operations.md",
+      "operations": [
+        {
+          "operation": "edit_audio",
+          "contract_rows": [
+            "| `edit_audio` | `track_index`, `part_index`; optional `position_tick`, `begin_tick`, `end_tick`, `name` | Calls `SetRegion`, `MovePart`, and `SetName`; returns the new native sorted part index. Region tick offsets are relative to the underlying audio asset, not the project start. |"
+          ]
+        },
+        {
+          "operation": "effects",
+          "contract_rows": [
+            "| `effects` | optional `scope=catalog`, `effect_id`, `track_index`, `part_index` | Bundled VEM effect discovery or current master/track/part chain inspection. |"
+          ]
+        },
+        {
+          "operation": "export_audio",
+          "contract_rows": [
+            "| `export_audio` | `track_index`, `part_index`, `output_name`; optional `overwrite=false`, `original=false` | Copies the current native stored WAV, or original stored asset with `original=true`. This is **whole-asset export**, not region trimming, effects rendering, or resynthesis. |"
+          ]
+        },
+        {
+          "operation": "import_audio",
+          "contract_rows": [
+            "| `import_audio` | `path`; optional `track_index`, `position_tick=0`, `name=source stem` | Imports a WAV with `WIVSMAudioPart.SetOriginalWaveFile`. Omitting `track_index` creates an Audio track using `InsertTrackEx`; supplying it requires an existing Audio track. Returns the actual sorted part index, region, asset paths, and duration. |"
+          ]
+        },
+        {
+          "operation": "inspect_audio",
+          "contract_rows": [
+            "| `inspect_audio` | `path` | Reads actual WAV metadata using the host RIFF inspector; no synthesis claim. |"
+          ]
+        },
+        {
+          "operation": "mixdown",
+          "contract_rows": [
+            "| `mixdown` | `output_name`; optional fields below | Native VAE manual mixdown with VEM effects, file placements, and VSM-rendered vocal parts. |"
+          ]
+        },
+        {
+          "operation": "mixdown_stems",
+          "contract_rows": [
+            "| `mixdown_stems` | `output_prefix`; same optional mix fields | One native mix per selected track, named `PREFIX-track-INDEX.wav`. Existing destinations are preflighted before the first stem. Earlier completed stems remain if a later native render fails. |"
+          ]
+        },
+        {
+          "operation": "process_audio",
+          "contract_rows": [
+            "| `process_audio` | `path`, `action`, `output_name`; optional `overwrite=false`, `ratio=1`, `pitch_cents=0`, `voice_id` | Calls the installed WOR offline renderer directly; see action table below. Creates a separate WAV without changing the imported part. |"
+          ]
+        },
+        {
+          "operation": "set_effect",
+          "contract_rows": [
+            "| `set_effect` | `action=add\\|set\\|remove\\|move`; optional `scope=master`, `slot`, `track_index`, `part_index`, fields below | Edits the native persisted effect chain; no plugin editor is opened. |"
+          ]
+        }
+      ]
+    },
+    "library": {
+      "tool": "project_library",
+      "rpc": "library_op",
+      "documentation": "docs/library-operations.md",
+      "operations": [
+        {
+          "operation": "dvqm_catalog",
+          "contract_rows": [
+            "| `dvqm_catalog` | Optional | `is_attack=true`, `voice_id=\"\"`, `offset=0`, `limit=100` (1..256) | Installed native Attack/Release component IDs, numeric IDs, level names, capabilities and total |"
+          ]
+        },
+        {
+          "operation": "dvqm_clear",
+          "contract_rows": [
+            "| `dvqm_clear` | Required | Target note, `is_attack=true` | Cleared native selection readback |"
+          ]
+        },
+        {
+          "operation": "dvqm_get",
+          "contract_rows": [
+            "| `dvqm_get` | Required | Target note, `is_attack=true` | Native selection, component/level names, speed, top factor and protection |"
+          ]
+        },
+        {
+          "operation": "dvqm_set",
+          "contract_rows": [
+            "| `dvqm_set` | Required | Target note, `is_attack=true`, `db_id`, `name_id`, optional `speed`, `top_factor`, `is_protected` | Committed native selection readback |"
+          ]
+        },
+        {
+          "operation": "languages",
+          "contract_rows": [
+            "| `languages` | Optional | `{}` | Array of `{language_id,name,default_lyric}` from real native managers |"
+          ]
+        },
+        {
+          "operation": "lyrics_apply",
+          "contract_rows": [
+            "| `lyrics_apply` | Required | Target note, `lyrics`, optional `language_id`, `use_extension_dictionary=false`, `protect` | Mutation result below |"
+          ]
+        },
+        {
+          "operation": "lyrics_can_convert",
+          "contract_rows": [
+            "| `lyrics_can_convert` | Optional | `language_id=0, lyrics, is_ai=false, use_extension_dictionary=false` | `{language_id,lyrics,can_convert}` |"
+          ]
+        },
+        {
+          "operation": "lyrics_candidates",
+          "contract_rows": [
+            "| `lyrics_candidates` | Required | Target note, `lyrics`, optional `language_id` (default note language), `use_extension_dictionary=false` | `{language_id,lyrics,candidates:[[{lyric,phonemes}]]}` |"
+          ]
+        },
+        {
+          "operation": "lyrics_reset",
+          "contract_rows": [
+            "| `lyrics_reset` | Required | Target part, optional `language_id` | Mutation result below |"
+          ]
+        },
+        {
+          "operation": "media_capture",
+          "contract_rows": [
+            "| `media_capture` | Required | Target part, optional `name`, `tempo` (native hundredths of BPM), `genres=[]`, `types=[]` | `{session_id,clip:Clip,preview_audio_created:false}` |"
+          ]
+        },
+        {
+          "operation": "media_delete",
+          "contract_rows": [
+            "| `media_delete` | Required | `clip_id` | `{session_id,clip_id,deleted:true}` after native file/catalog removal |"
+          ]
+        },
+        {
+          "operation": "media_get",
+          "contract_rows": [
+            "| `media_get` | Optional | `clip_id` | Clip with native part properties |"
+          ]
+        },
+        {
+          "operation": "media_import",
+          "contract_rows": [
+            "| `media_import` | Required | `clip_id`, `track_index=0`, `position_tick=0`, optional `name` | MIDI: `{session_id,clip_id,track_index,position_tick,duration,notes}`; audio: `{session_id,clip_id,track_index,imported}` |"
+          ]
+        },
+        {
+          "operation": "media_list",
+          "contract_rows": [
+            "| `media_list` | Optional | `query=\"\"`, `genres=[]`, `types=[]` | `{total,clips:[Clip]}` |"
+          ]
+        },
+        {
+          "operation": "media_update",
+          "contract_rows": [
+            "| `media_update` | Required | `clip_id`, optional `name`, `tempo`, `add_genres=[]`, `add_types=[]` | `{session_id,clip:Clip}` |"
+          ]
+        },
+        {
+          "operation": "note_skill_get",
+          "contract_rows": [
+            "| `note_skill_get` | Required | Target note | `duration_tick`, `pre_weight`, `post_weight` |"
+          ]
+        },
+        {
+          "operation": "note_skill_reset",
+          "contract_rows": [
+            "| `note_skill_reset` | Required | Target note | Native default HMM weights |"
+          ]
+        },
+        {
+          "operation": "note_skill_set",
+          "contract_rows": [
+            "| `note_skill_set` | Required | Target note; optional `duration_tick`, `pre_weight`, `post_weight` (weights 0..127) | Committed note-level HMM weights |"
+          ]
+        },
+        {
+          "operation": "phoneme_table",
+          "contract_rows": [
+            "| `phoneme_table` | Optional | `language_id=0` | Manual symbol inventory, source pages, and documented Japanese AI restriction; `native_enumeration=false` |"
+          ]
+        },
+        {
+          "operation": "phonemes_apply",
+          "contract_rows": [
+            "| `phonemes_apply` | Required | Target note, `phonemes`, optional `language_id`, `protect` | Mutation result below |"
+          ]
+        },
+        {
+          "operation": "phonemes_reset",
+          "contract_rows": [
+            "| `phonemes_reset` | Required | Target part, optional `language_id` | Mutation result below |"
+          ]
+        },
+        {
+          "operation": "singing_skill_catalog",
+          "contract_rows": [
+            "| `singing_skill_catalog` | Optional | `{}` | Installed Singing Skill plugin IDs, names, tags, timing and script availability |"
+          ]
+        },
+        {
+          "operation": "singing_skill_get",
+          "contract_rows": [
+            "| `singing_skill_get` | Required | Target classic part | Skill, amount, plugin ID, bypass and native bounds |"
+          ]
+        },
+        {
+          "operation": "singing_skill_set",
+          "contract_rows": [
+            "| `singing_skill_set` | Required | Target classic part; optional `plugin_id`, `skill`, `amount`, `bypassed` | Committed Singing Skill readback |"
+          ]
+        },
+        {
+          "operation": "style_apply",
+          "contract_rows": [
+            "| `style_apply` | Required | Target part, `style_id`, `include_audio=true` | `{session_id,style_id,name,midi_effects_applied,audio_effects_applied,audio_effect_count,scope}` |"
+          ]
+        },
+        {
+          "operation": "style_capture",
+          "contract_rows": [
+            "| `style_capture` | Required | Target part, `name`; optional `sub_genres=[]`, `colors=[]`, `include_audio=true`, `overwrite_style_id` | Native private style snapshot and saved path |"
+          ]
+        },
+        {
+          "operation": "style_delete",
+          "contract_rows": [
+            "| `style_delete` | Required | Private `style_id` | Native removal, verified file and catalog absence |"
+          ]
+        },
+        {
+          "operation": "style_get",
+          "contract_rows": [
+            "| `style_get` | Optional | `style_id` | Style with native effect parameter arrays |"
+          ]
+        },
+        {
+          "operation": "style_list",
+          "contract_rows": [
+            "| `style_list` | Optional | `query=\"\"`, `sub_genres=[]`, `colors=[]` | `{total,styles:[Style]}` |"
+          ]
+        },
+        {
+          "operation": "style_update",
+          "contract_rows": [
+            "| `style_update` | Required | Private `style_id`; optional `name`, `add_sub_genres=[]`, `add_colors=[]` | Native saved property readback; existing tags preserved |"
+          ]
+        }
+      ]
+    },
+    "clipboard": {
+      "tool": "project_clipboard",
+      "rpc": "clipboard",
+      "documentation": "docs/native-protocol.md",
+      "operations": [
+        {
+          "operation": "clear",
+          "contract_rows": []
+        },
+        {
+          "operation": "copy",
+          "contract_rows": []
+        },
+        {
+          "operation": "cut",
+          "contract_rows": []
+        },
+        {
+          "operation": "list",
+          "contract_rows": []
+        },
+        {
+          "operation": "paste",
+          "contract_rows": []
+        }
+      ]
+    }
+  }
+}

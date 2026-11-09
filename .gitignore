@@ -1,0 +1,12 @@
+.venv/
+.runtime/
+.tools/.store/
+.tools/analysis/
+.tools/ilspycmd.cmd
+__pycache__/
+*.egg-info/
+native/bin/
+native/obj/
+output/
+artifacts/
+.vscode/handoff/

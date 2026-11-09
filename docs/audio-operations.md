@@ -1,0 +1,223 @@
+# Native Audio Operations
+
+`EngineHost.AudioOperation(session_id, operation, options)` implements the native
+`audio_op` request. All calls enter through the existing STA host on its private
+desktop. This module never instantiates `AudioPlayer`, editor windows, effect
+windows, or `App`, and never sends UI input.
+
+```json
+{
+  "session_id": "SESSION_ID",
+  "operation": "process_audio",
+  "options": {
+    "path": "E:/VC/vocaloid_bridge/output/background-demo-31c27fd842.wav",
+    "action": "normalize",
+    "output_name": "normalized.wav"
+  }
+}
+```
+
+## Output Rules
+
+- `output_name` is relative to the existing workspace `output` directory.
+- `overwrite` defaults to `false`; publication uses exclusive file movement.
+- Input paths must be absolute existing files and cannot traverse links.
+- Offline processing and asset export refuse to replace their own input even
+  when `overwrite` is true. The existing host protects the opened original VPR.
+- Temporary rendered WAV files also live under `output` and are removed on
+  normal completion or failure. No sound is generated in Python or NumPy.
+- Every published WAV is inspected for a complete RIFF/WAVE container, valid
+  format, and nonempty whole audio frames. This does not prove nonzero sample
+  amplitude; the external acceptance probe must measure that separately.
+- The installed writer can omit the padding byte after a final odd-sized DATA
+  chunk. The inspector accepts only a complete payload ending exactly at the
+  RIFF boundary in that case; partial payloads and truncated interior chunks fail.
+- Mutations mark the session dirty and commit native state. A failed native
+  mutation is reported as an error, not a successful empty result. It may leave
+  dirty native changes; no automatic project reload or silent retry occurs.
+
+## Operation Schema
+
+Indices are zero-based. Fields marked optional have the defaults shown.
+
+| Operation | Options | Result / native mapping |
+| --- | --- | --- |
+| `inspect_audio` | `path` | Reads actual WAV metadata using the host RIFF inspector; no synthesis claim. |
+| `import_audio` | `path`; optional `track_index`, `position_tick=0`, `name=source stem` | Imports a WAV with `WIVSMAudioPart.SetOriginalWaveFile`. Omitting `track_index` creates an Audio track using `InsertTrackEx`; supplying it requires an existing Audio track. Returns the actual sorted part index, region, asset paths, and duration. |
+| `edit_audio` | `track_index`, `part_index`; optional `position_tick`, `begin_tick`, `end_tick`, `name` | Calls `SetRegion`, `MovePart`, and `SetName`; returns the new native sorted part index. Region tick offsets are relative to the underlying audio asset, not the project start. |
+| `export_audio` | `track_index`, `part_index`, `output_name`; optional `overwrite=false`, `original=false` | Copies the current native stored WAV, or original stored asset with `original=true`. This is **whole-asset export**, not region trimming, effects rendering, or resynthesis. |
+| `process_audio` | `path`, `action`, `output_name`; optional `overwrite=false`, `ratio=1`, `pitch_cents=0`, `voice_id` | Calls the installed WOR offline renderer directly; see action table below. Creates a separate WAV without changing the imported part. |
+| `mixdown` | `output_name`; optional fields below | Native VAE manual mixdown with VEM effects, file placements, and VSM-rendered vocal parts. |
+| `mixdown_stems` | `output_prefix`; same optional mix fields | One native mix per selected track, named `PREFIX-track-INDEX.wav`. Existing destinations are preflighted before the first stem. Earlier completed stems remain if a later native render fails. |
+| `effects` | optional `scope=catalog`, `effect_id`, `track_index`, `part_index` | Bundled VEM effect discovery or current master/track/part chain inspection. |
+| `set_effect` | `action=add\|set\|remove\|move`; optional `scope=master`, `slot`, `track_index`, `part_index`, fields below | Edits the native persisted effect chain; no plugin editor is opened. |
+
+Audio import initializes the region before attaching the source file, matching
+the installed editor's import path. A previous run produced a saved track and
+embedded WAV without a serialized part in
+`artifacts/feature-acceptance-3390026d37e5/remaining.effect.gain.json` and its
+saved VPR. Database initialization was subsequently moved into host startup;
+the focused run below successfully saves, reopens and mixes ten imported audio
+projects, and an isolated Delay rerun also succeeds. This observation does not
+establish the internal native cause of the earlier omission. The end tick is calculated from the actual
+WAV frame count and sample rate with `WIVSMSequence.GetTickFromTime` at the
+requested position, so the sequence tempo map is respected. A zero-length or
+out-of-range native tick duration is rejected rather than creating an empty
+part. The corrected import, region edit, resource export and saved-project
+roundtrip pass the final actual MCP acceptance.
+
+### Offline Actions
+
+| `action` | Additional input | Native call |
+| --- | --- | --- |
+| `reverse` | None | `WOR.ReverseRenderer.RenderAudioFile(input, output, 0)` |
+| `normalize` | None | `WOR.NormalizeRenderer.RenderAudioFile(input, output)`; native normalization target is not overridden. |
+| `time_stretch` | `ratio=1`, `pitch_cents=0` | `WOR.TimeStretchRenderer.RenderAudioFile(input, output, ratio, pitch_cents)` |
+| `pitch_shift` | `pitch_cents=0` | Same renderer with native `bpmMag=1`. |
+| `voice_change` | Required `voice_id`; optional `pitch_cents=0` | `WOR.VoiceChangeRenderer.RenderAudioFile(input, output, model, NPIndex, pitch_cents)` |
+
+`ratio` is passed unchanged as native `bpmMag`; pitch is in cents, not semitones.
+Bounds come from the installed `TimeStretchRenderer.MinBpmMag`, `MaxBpmMag`,
+`MinPitchShift`, and `MaxPitchShift`. `WORError` values are included in failures,
+including no-op `HaveNoUseRenderer`; no no-op is disguised as a render.
+
+VOCALO CHANGER initializes the existing VDM/DSE services, resolves `voice_id`
+explicitly in `VDMVoiceBankType.Dnn`, requires `IsAvailableForVoiceChanger` and
+`IsSynthesizableVersion`, and requires
+`voice.DirectoryPath/voice.GroupName.vtb2` to exist.
+Missing models, unsupported banks, native loading errors, and licenses are not
+replaced by another voice or synthesis backend. A converted WAV can be imported
+separately; this operation does not fabricate or change a part's voice metadata.
+
+The installed native `WaveOfflineRenderer.dll` supports `.vtb2`; the managed
+`OfflineProcessor` still constructs a legacy `.vtbr` path. Read-only VDM
+inspection of the failed case's `BCLFDT43M6TL2CD5` returns NAOKI, group
+`VOCALOID6_Voicebanks_03`, `NPIndex=1542`, and both availability flags true. Its
+actual model is
+`C:/Program Files/Common Files/VOCALOID6/Model/VOCALOID6 Voicebanks/VOCALOID6_Voicebanks_03.vtb2`
+(7,467,025 bytes). The operation derives this from the selected bank rather than
+hardcoding that path, changing voice, copying packages, or changing authorization.
+
+### Mix Options
+
+- `track_indices`: optional array of native track indices. With no selection,
+  master export respects native mute and solo. An explicit selection, including
+  stem selection, overrides mute/solo for those tracks without editing them.
+- The native export covers complete selected tracks. `start_seconds`,
+  `end_seconds`, and `tail_seconds` are rejected: the native manual mixer ignores
+  playback-loop ranges, so this API does not advertise them as export controls.
+- `sample_rate=44100`: `44100`, `48000`, `96000`, or `192000`.
+- `bits_per_sample=24`: `16` or `24`, mapped to native bit-depth indices 0 or 1.
+- `channels=2`: `1` or `2`.
+- `bypass_effects=false`: bypasses all VEM effects for this mix only.
+- `timeout_seconds=120`: 1 through 600; covers placement acknowledgements and
+  final mix completion. Individual voice synthesis uses the existing host's
+  native part-render timeout.
+- `overwrite=false`.
+
+The route commits even an otherwise clean sequence before each required native
+voice render. Frozen MIDI tracks use their native frozen track asset. Other
+parts use `AudioPlacementBuilder` and `VEAudioPlacement`, preserving region
+offsets and native fades. VAE receives native master-volume, track-volume, and
+pan curves; VEM receives the native tempo map and saved master/track/part effects.
+The export calls `VEAudioEngine.MixdownToFile` in `VEMixdownMode.Manual`.
+Enabled Robot Voice runtime scripts are resolved from the installed Lua manager
+before rendering, without initializing the editor's `App`. The same pre-render
+path prepares installed Singing Skill scripts for reopened MIDI parts. This new
+Singing Skill mixdown path has not yet been validated independently. A reopened Robot
+project's actual nonzero master mix is verified in
+`artifacts/feature-acceptance-23de638ffae9/summary.json`.
+
+Stems retain their native individual lengths, track automation and part/track effects, but bypass master automation
+and master effects, matching the manual's multi-track export semantics. They are
+not a claim of bit-exact decomposition of a nonlinear master mix. Each result reports `backend: VAE.Manual+VEM` only after a
+native success callback and valid on-disk WAV.
+
+The mixer initializes VAE with no window handle, installs the rooted native
+context, then calls `StartEngine` with exactly `VEConnectMode.VST` before entering
+Manual mode. This requests the native externally clocked host route, not
+standalone DirectSound/ASIO output. The returned connection mode must be VST;
+another mode or an already-playing engine is rejected. No `PlayStart`, editor
+startup, device-selection UI, or fallback mode is invoked. Sample rate and VEM
+attachment are set after engine creation; effect attachment failure is reported.
+
+The installed managed API exposes only ASIO and DirectSound device types, not a
+null-device enum. `Initialize` alone did not create a running engine: the first
+acceptance run failed at `SetMixdownMode(Manual)` with `NoEngineRunning`. The
+explicit host-engine route passes actual native completion and nonzero-waveform
+checks in the final acceptance receipt.
+
+### Effects
+
+`effects` with `scope=catalog` lists the modules discovered by `WEffectManager`
+from the installed editor's `AudioEffects` directory. Supplying `effect_id`
+loads that bundled effect into a temporary native block and returns names,
+labels, default/current normalized values, plain-value bounds where available,
+and preset names. No arbitrary DLL search path or third-party VST scanner is
+implemented.
+
+`scope=master`, `scope=track` plus `track_index`, or `scope=part` plus both indices
+returns persisted effects and corresponding native controller metadata.
+
+`set_effect` fields:
+
+- `slot`: insertion index for `add` (defaults to end); existing index for other
+  actions (defaults to zero).
+- `effect_id`: required for `add`; must be a discovered non-virtual effect.
+- `parameters`: optional object mapping exact native parameter names to finite
+  normalized values in `[0, 1]`, for `add`/`set`.
+- `preset`: optional native preset name, applied before `parameters`.
+- `bypass`: optional Boolean persisted to the native effect.
+- `target_slot`: required destination in practice for `move`, default zero.
+
+The native VEM block addresses instances by effect GUID, so duplicate GUIDs in
+one chain are rejected. Virtual reverse/pitch UI effects are not hosted plugins;
+use the WOR offline actions instead. Edited parameters are persisted with
+`WIVSMEffect.ReplaceValueFloat` and reapplied through VEM synchronization before
+mixdown. Existing native values not explicitly edited are preserved.
+
+## Lifetime and Validation Boundary
+
+`DisposeAudioServices()` must run before `manager.Dispose()` in the host.
+It terminates any active VAE engine and disposes the lazy VEM manager. Native
+callback delegates remain rooted through termination. Callbacks touch managed
+completion state and an STA-captured tempo map only, never native VSM objects.
+File placements are disposed after native termination.
+
+The Release host and all audio/effect/mixdown cases pass in
+`artifacts/feature-acceptance-19d5e92a5f26/summary.json`. Actual files verify
+nonzero samples, reverse ordering, normalization, duration scaling, pitch/voice
+change, master/stem relationships, preset persistence, and a 192 kHz mono
+24-bit mix with an audible master-effect difference. This is not evidence for
+every effect or all available sample-rate combinations.
+
+`tools/check_audio_remaining.py` adds focused actual-MCP cases for both audio
+region boundaries and whole-original export, 48/96 kHz mixes, and each of the
+eleven discovered effects' parameters, presets (when present), bypass,
+save/reopen and nonzero offline mix. The first run's 48/96 kHz and boundary
+case passed in `artifacts/feature-acceptance-3390026d37e5/summary.json`.
+Its effect checks did not pass: ten assumed exact rather than native-quantized
+values, and Gain exposed the missing serialized part. With corrected quantized
+readback checks and the initialized host, ten effects, both rates and boundary
+case passed in `artifacts/feature-acceptance-3fac4de49264/summary.json`; Delay
+was blocked by a missing native temporary WAV in that run. Delay and cleanup
+passed in the isolated rerun `artifacts/feature-acceptance-22609728e8c0/summary.json`.
+The previous fixed VSM application ID allowed one host's cleanup to remove
+another host's native cache, reproduced separately in
+`artifacts/host-isolation-22aebb82b8c7.json`. Per-host VSM cache namespaces
+pass the same two-host regression in `artifacts/host-isolation-732451efccb9.json`;
+Delay also passes on the isolated-cache build in
+`artifacts/feature-acceptance-111643a4386e/summary.json`. This establishes the
+cross-host cleanup failure mode but does not prove the exact cause of the
+original Delay failure. These tests verify a
+nonzero reopened-project mix with each enabled effect, not that every effect
+produces an audible difference or that every preset is covered.
+
+Runtime prerequisites are the installed VDM/DSE services,
+the selected readable VTB2 model, native `WaveOfflineRenderer.dll`, VAE's accepted
+VST host connection and Manual mode, rooted callbacks, and a writable workspace
+output directory. No physical audio device should be required or selected.
+
+The suite uses actual native vocal synthesis as its input and closes all
+sessions without foreground activation. Existing source WAVs and user projects
+remain unchanged; no synthetic test tone or alternate backend is substituted.

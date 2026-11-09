@@ -9,15 +9,15 @@
 | `native/AudioOperations.cs` | 原生离线音频、效果与整轨混缩 | 16 操作；扩展工程音频导入/编辑及效果添加/撤销通过，复杂资源组合另列边界 |
 | `native/TransportOperations.cs` | 原生设备枚举与私有会话播放、停止、定位、释放 | 普通及扩展工程快照的 DirectSound 静音闭环通过；定位区分异步请求与观测 |
 | `native/TrackFreezeOperations.cs` | 会话自有冻结缓存、时基物化和作者态保存 | 多片段/非零起点/效果/自动化与正式 MCP 通过；不持久化冻结标志 |
-| `native/ProjectArchivePreservation.cs`、`native/ProjectArchiveArrays.cs` | 未知字段、实体身份、速度/拍号/控制器事件保留 | 普通曲线编辑、复制、跨工程迁移及历史通过；泛化数组仍有边界 |
-| `native/ProjectArchiveTimeline.cs`、`native/ProjectArchiveNoteArrays.cs`、`native/ProjectArchiveNoteIntegration.cs`、`native/ProjectArchiveMasterAutomation.cs`、`native/ProjectArchiveTrackAutomation.cs` | 扩展时间编辑、音高项及主/轨道自动化项身份、事务和覆盖 | 受测事件插入和部分删除、音高项复制及身份操作、主/轨道自动化项编辑与历史通过；0.24.0 增加占用拍号碰撞及音高项删除/拆合/跨工程证据；复杂时间编辑仍有限制 |
+| `native/ProjectArchivePreservation.cs`、`native/ProjectArchiveArrays.cs` | 实体身份、事件与未知字段 | 原生身份映射、音频 region 区分、元数据地图 no-op/历史通过 |
+| `native/ProjectArchiveTimeEdit.cs`、`native/ProjectArchiveNoteArrays.cs`、`native/ProjectArchiveNoteIntegration.cs`、`native/ProjectArchiveMasterAutomation.cs`、`native/ProjectArchiveTrackAutomation.cs` | 复杂时间编辑与曲线元数据 | MIDI/AI/音频跨边界、曲线迁移、起始 tempo 及历史的必要用例通过 |
 | `native/MidiRecordingOperations.cs`、`native/MidiRecordingGuards.cs` | 设备枚举、MIDI 事件队列、事务录制及会话保护 | 六操作、静音同步、回调保护及自有虚拟输入通过；物理设备和驱动错误路径未验 |
 | `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 32 操作；完整短语检查、三语言及 21 AI 首音符往返定向通过 |
 | `native/MediaPropertyOperations.cs`、`native/MediaPropertyJournal.cs` | 独立原生属性写入、独占发布及持久恢复 | 显式版本化冲突决策、决策中断恢复、普通与归档 clip 字节保持有定向证据 |
 | `native/ProjectInterchange.cs`、`native/ProjectArchiveTempoMerge.cs`、`native/ProjectArchiveTimeSigMerge.cs` | 原生格式交换、复制、恢复与合并 | 真实 PPSF3/音频克隆、受测纯元数据历史及空操作状态、tempo/拍号扩展合并和速度碰撞覆盖通过；其他音频组合受限 |
 | `native/ProjectClipboard.cs`、`native/ProjectArchiveTransfer.cs` | 私有原生剪贴板及扩展身份迁移 | 音高、控制器、轨道自动化复制/剪切/迁移及偏移有 0.24.0 定向证据 |
 | `native/ProjectArchiveOutput.cs` | 带扩展工程的独立原生快照输出 | 人声渲染、MIDI 导出、离线混缩/分轨及源会话历史保护定向通过 |
-| `native/ProjectArchiveLibrary.cs`、`native/ProjectArchiveMedia.cs` | 扩展工程私有素材、MIDI 实体元数据与候选预检 | 受测 AI 片段/音符未知字段、历史和重开通过；controller 及音频扩展写入仍受保护 |
+| `native/ProjectArchiveLibrary.cs`、`native/ProjectArchiveMedia.cs` | 素材元数据 v1/v2、音频绑定与候选核对 | 控制器/音高/其他数组/音频捕获导入、单次历史及重开通过 |
 | `native/RpcServer.cs` | 单线程 JSON 行协议、原生对象发现与精确签名调用 | 已编译 |
 | `vocaloid_bridge/native_client.py` | 私有 desktop、Job Object、管道客户端与 DLL 快照 | E 盘独占临时根、构建副本及关闭清理；自身缓存退出清理由原生宿主处理 |
 | `vocaloid_bridge/server.py` | 37 个 MCP 工具、资源、写歌提示 | 新 MIDI 工具在独立 stdio 连接实测；历史工具覆盖见历史回执 |
@@ -84,6 +84,9 @@
 | `native/ProjectArchiveDeletion.cs`、`native/ProjectArchivePitchMigration.cs` | 目标绑定删除与音高拆合来源校验 | 定向删除/撤销、拆合及来源冲突回滚通过 |
 | `tools/check_agent_completion_33.py`、`tools/media_resolution_child_33.ps1` | 0.24.0 Agent 调用、崩溃与扩展事务验证 | 五项契约分别通过；失败回执保留，不计作全量通过 |
 
+| `native/ProjectArchiveNestedArrays.cs` | 其他对象数组的自然键、已知投影与暂存核对 | voices/语言/效果参数/颤音等元数据编辑和往返定向通过；身份歧义报错 |
+| `tools/check_completion_34.py`、`tools/check_transaction_readback_34.ps1` | 剩余时间、素材、数组、提交前失败与纯元数据历史 | 三项必要契约最终通过；原失败回执保留 |
+
 ## 更新记录
 
 | 日期 | 更新 |
@@ -131,3 +134,4 @@
 | 2026-11-10 | 升级 0.22.0：受测 AI 首音符、歌词撤销事务、普通素材未知字段与锁定失败通过；临时根迁至 E 盘并清理已证实结束的 C 盘缓存。 |
 | 2026-11-10 | 升级 0.23.0：素材访问串行化、独占发布、持久日志和提交前/后进程中断恢复，外部文件抢占保留原数据。 |
 | 2026-11-10 | 0.24.0：显式素材冲突决策、21 AI 首音符、完整短语、扩展删除/拆合/迁移、占用拍号与扩展音频定向验证。 |
+| 2026-11-10 | 0.25.0：复杂时间事务、素材元数据 v2、其他数组与读回回滚/元数据 no-op，剩余实现收齐。 |

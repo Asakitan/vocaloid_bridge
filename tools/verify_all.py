@@ -46,6 +46,7 @@ import check_media_properties_31
 import check_media_recovery_32
 import check_agent_completion_33
 import check_timeline_meter_collision_23
+import check_completion_34
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining
@@ -62,6 +63,10 @@ experimental = {"preservation.audio_mutation", "preservation.controller_split_na
                 "preservation.note_pitch_delete_clear", "preservation.note_pitch_delete_part",
                 "preservation.note_pitch_delete_track", "preservation.timeline_delete_native_21",
                 "preservation.note_pitch_mixed_controller_guard"}
+# Guard-only historical cases are superseded by completion_34's positive native
+# time/media/array transactions; retain their original receipts and source.
+experimental |= {"preservation.media_entities", "preservation.master_volume_extensions",
+                 "preservation.timeline_delete_extensions_21"}
 v.CASES[:] = [case for case in v.CASES if case.identifier in baseline_ids | release_interchange
               and case.identifier not in experimental]
 

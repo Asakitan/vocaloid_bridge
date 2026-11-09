@@ -1215,6 +1215,7 @@ internal sealed partial class EngineHost
 
     private object LibraryCaptureMedia(EngineSession session, JsonElement options)
     {
+        ScoreRequireUnstaged(session.Sequence);
         WIVSMTrack track = session.Sequence.GetTrack(LibraryIndex(options, "track_index"))
             ?? throw new ArgumentException("track_index was not found.");
         WIVSMPart part = track.GetPart(LibraryIndex(options, "part_index"))
@@ -1275,7 +1276,8 @@ internal sealed partial class EngineHost
                     LibraryRequire(target.SetSecondaryVoiceBankID(midi.SecondaryVoiceBankID), "capture secondary voice");
                 if (midi.SecondaryAiVoiceBankID.Length != 0)
                     LibraryRequire(target.SetSecondaryAiVoiceBankID(midi.SecondaryAiVoiceBankID), "capture secondary AI voice");
-                foreach (int lang in midi.Notes.Select(note => note.LangID).Where(lang => lang >= 0).Append(language).Distinct())
+                foreach (int lang in midi.Notes.Select(note => note.LangID).Concat(midi.IsAi ? midi.AiLangIDs : [])
+                    .Where(lang => lang >= 0).Append(language).Distinct())
                 {
                     LibraryRequire(filter.AddLanguage(lang), "capture language filter");
                     if (midi.IsAi)
@@ -1581,27 +1583,30 @@ internal sealed partial class EngineHost
         EnsureVoiceServices();
         if (clip.PartType == VMMPartType.Audio)
         {
-            if (LibraryArchiveHasMetadata(clip))
-                throw new InvalidDataException("project_preservation: archive entity metadata is not valid on audio media.");
-            if (track.Type != VSMTrackType.Audio)
-                throw new ArgumentException("An audio clip requires an audio target track.");
-            Yamaha.VOCALOID.VMM.AudioPart source = clip.AudioPart
-                ?? throw new InvalidDataException("Native media audio part is absent.");
-            HashSet<nint> existingParts = track.Parts.Select(part => (nint)part).ToHashSet();
-            object imported = ImportAudio(session, JsonSerializer.SerializeToElement(new
+            if (track.Type != VSMTrackType.Audio) throw new ArgumentException("An audio clip requires an audio target track.");
+            var source = clip.AudioPart ?? throw new InvalidDataException("Native audio part is absent.");
+            PathGuard.NoLinks(source.WavFilePath);
+            using var waveGuard = new FileStream(source.WavFilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            LibraryArchiveClip? archive = LibraryArchiveReadAudio(clip);
+            if (preflight && (archive is not null || HasArchiveEntityExtensions(session)))
             {
+                using var guard = new FileStream(clip.ClipPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                LibraryArchivePreflight(session, options);
+                return LibraryImportMedia(session, options, false);
+            }
+            if (archive is not null) EnsureArchiveEntityTracking(session);
+            object imported = ImportAudio(session, JsonSerializer.SerializeToElement(new {
                 path = source.WavFilePath, track_index = trackIndex, position_tick = position,
                 name = LibraryText(options, "name", clip.Name)
-            }));
-            WIVSMPart target = track.Parts.FirstOrDefault(part => !existingParts.Contains((nint)part))
-                ?? throw new InvalidOperationException("Imported native audio part was not found.");
-            WIVSMEffectManager effects = target.EffectManager!;
-            for (ulong index = 0; index < source.NumAudioEffects; index++)
-            {
-                Yamaha.VOCALOID.VMM.AudioEffect effect = source.GetAudioEffect(index)!;
-                LibraryImportEffect(effect, effects.InsertAudioEffect(index, effect.ID)!);
-            }
-            LibraryCommit(session, "import audio media");
+            }), target => {
+                for (ulong index = 0; index < source.NumAudioEffects; index++)
+                {
+                    var effect = source.GetAudioEffect(index)!;
+                    LibraryImportEffect(effect, target.EffectManager!.InsertAudioEffect(index, effect.ID)!);
+                }
+                if (archive is not null)
+                    archiveStates[session.Id].Live[ArchiveKey(target)] = new ArchiveEntry((JsonObject)archive.PartExtra.DeepClone(), ArchiveKey(track));
+            }, "media_import");
             return new { session_id = session.Id, clip_id = clip.ID, track_index = trackIndex, imported };
         }
         VSMTrackType expected = clip.PartType == VMMPartType.MidiAi ? VSMTrackType.MidiAi : VSMTrackType.Midi;

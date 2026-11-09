@@ -978,70 +978,26 @@ internal sealed partial class EngineHost
 
     private object ScoreTimeEdit(EngineSession session, string operation, JsonElement options, bool preflight = true)
     {
-        WIVSMSequence sequence = session.Sequence;
         int start = ScoreInt(options, "start_tick", 0, int.MaxValue - 1);
         int duration = ScoreInt(options, "duration_tick", 1, int.MaxValue - start);
-        int end = checked(start + duration);
         bool includeTempo = ScoreBool(options, "include_tempo", true);
-        bool insert = operation == "time.insert";
-        for (int trackIndex = 0; trackIndex < ScoreCount(sequence.NumTrack); trackIndex++)
+        ScoreRequireUnstaged(session.Sequence);
+        if (preflight && HasArchiveEntityExtensions(session))
         {
-            WIVSMTrack track = ScoreTrack(session, trackIndex);
-            for (int partIndex = 0; partIndex < ScoreCount(track.NumParts); partIndex++)
+            EngineSession candidate = CloneProject(session.Id, null);
+            try
             {
-                WIVSMPart part = track.GetPart((ulong)partIndex)
-                    ?? throw new InvalidOperationException("Native part lookup failed.");
-                bool crossesStart = part.AbsBeginTick.Value < start && start < part.AbsEndTick.Value;
-                bool crossesEnd = !insert && part.AbsBeginTick.Value < end && end < part.AbsEndTick.Value;
-                if (track.Type is VSMTrackType.Midi or VSMTrackType.MidiAi && (crossesStart || crossesEnd))
-                    throw new NotSupportedException("Time edits crossing MIDI/AI parts require the editor-owned phoneme service. Split those parts with part.split first; no time edit was applied.");
-                if (insert && part.AbsEndTick.Value > int.MaxValue - duration)
-                    throw new ArgumentOutOfRangeException("duration_tick", "Inserted time would exceed the native part tick range.");
+                ScoreTimeEdit(candidate, operation, options, false);
+                EngineSession verified = CloneProject(candidate.Id, null);
+                Close(verified.Id, true);
             }
-            if (insert && (track.Volumes.Any(point => point.RelPosTick.Value > int.MaxValue - duration) ||
-                track.Panpots.Any(point => point.RelPosTick.Value > int.MaxValue - duration)))
-                throw new ArgumentOutOfRangeException("duration_tick", "Inserted time would exceed the native automation tick range.");
+            finally { Close(candidate.Id, true); }
         }
-        if (insert && (sequence.Tempos.Any(point => point.RelPosTick.Value > int.MaxValue - duration) ||
-            sequence.MasterVolumes.Any(point => point.RelPosTick.Value > int.MaxValue - duration) ||
-            sequence.TimeSigs.Any(point => point.PosBar > int.MaxValue - duration)))
-            throw new ArgumentOutOfRangeException("duration_tick", "Inserted time would exceed the native timeline range.");
-        bool trackedTimeline = HasArchiveEntityExtensions(session);
-        if (trackedTimeline)
-        {
-            // CloneProject otherwise commits staged edits while making a snapshot.
-            ScoreRequireUnstaged(sequence);
-            ArchiveTimelineGuard(session);
-            if (preflight)
-            {
-                EngineSession candidate = CloneProject(session.Id, null);
-                try
-                {
-                    ScoreTimeEdit(candidate, operation, options, false);
-                    EngineSession verified = CloneProject(candidate.Id, null);
-                    Close(verified.Id, true);
-                }
-                finally { Close(candidate.Id, true); }
-            }
-        }
-        var identities = trackedTimeline ? ArchiveTimelineCapture(session, start, end, insert, includeTempo) : null;
+        EnsureArchiveEntityTracking(session);
         return ScoreMutate(session, operation, () =>
         {
-            VSMTickRange range = new(start, end);
-            bool success = insert
-                ? Yamaha.VOCALOID.WIVSMSequenceExtension.InsertSilence(sequence, range, includeTempo)
-                : Yamaha.VOCALOID.WIVSMSequenceExtension.DeleteTime(sequence, range, includeTempo);
-            ScoreRequire(success, operation, sequence);
-            if (identities is not null)
-            {
-                ArchiveTimelineValidate(session, identities);
-                ArchiveTimelineApplyEvents(session, identities);
-            }
-            return new { start_tick = start, duration_tick = duration, include_tempo = includeTempo, track_count = sequence.NumTrack };
-        }, () =>
-        {
-            if (identities is not null) ArchiveTimelineValidate(session, identities);
-            return new { start_tick = start, duration_tick = duration, include_tempo = includeTempo, track_count = sequence.NumTrack };
+            ApplyNativeTimeEdit(session, start, checked(start + duration), operation == "time.insert", includeTempo);
+            return new { start_tick = start, duration_tick = duration, include_tempo = includeTempo, track_count = session.Sequence.NumTrack };
         });
     }
 
@@ -1837,16 +1793,19 @@ internal sealed partial class EngineHost
         try
         {
             object result = action();
+            // Read staged values while a real rollback is still available.
+            // A failed readback must not report failure after committing data.
+            object response = readback is null ? result : readback();
             session.ArchiveValidate?.Invoke();
             bool staged = sequence.IsStaged;
             if (staged && !sequence.Commit())
             {
-                End("invalid");
+                if (!sequence.IsStaged) End("invalid");
                 throw new InvalidOperationException("Native " + operation + " commit failed: " + sequence.LastError);
             }
             End(staged ? "commit" : "sync");
             session.Dirty = true;
-            return readback is null ? result : readback();
+            return response;
         }
         catch (Exception error)
         {

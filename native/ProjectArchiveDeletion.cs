@@ -6,15 +6,15 @@ internal sealed partial class EngineHost
     private static bool ArchiveDeletionOperation(string operation) =>
         operation is "track.remove" or "part.remove" or "note.remove" or "note.clear" or "clipboard.cut";
 
-    private sealed record ArchiveDeletionPlan(Dictionary<ArchiveEntity, ArchiveEntity?> Before, HashSet<ArchiveEntity> Dead);
+    private sealed record ArchiveDeletionPlan(Dictionary<ArchiveEntity, ArchiveEntity?> Before, HashSet<ArchiveEntity> Dead, Dictionary<ArchiveEntity, ArchiveEntry> Live);
 
     private ArchiveDeletionPlan? ArchiveDeletePrepare(EngineSession session, IEnumerable<object> targets)
     {
         if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state) || !state.HasEntityExtensions) return null;
-        if (state.Before is null || !ArchiveDeletionOperation(state.Action!))
+        if (state.Before is null || !ArchiveDeletionOperation(state.Action!) && state.Action is not ("time.insert" or "time.delete"))
             throw new InvalidOperationException("project_preservation: deletion outside tracked transaction.");
         Dictionary<ArchiveEntity, ArchiveEntity?> current = ArchiveNativeParents(session);
-        if (state.Before.Any(pair => !current.TryGetValue(pair.Key, out var parent) || pair.Value.Parent != parent))
+        if (state.Live.Any(pair => !current.TryGetValue(pair.Key, out var parent) || pair.Value.Parent != parent))
             throw new InvalidDataException("project_preservation: deletion preflight identity or parent mismatch.");
         ArchiveValidateNoteArrays(state);
         ArchiveValidateTrackAutomation(state);
@@ -32,7 +32,7 @@ internal sealed partial class EngineHost
             foreach ((ArchiveEntity key, ArchiveEntity? parent) in current)
                 if (parent is ArchiveEntity p && dead.Contains(p) && dead.Add(key)) changed = true;
         } while (changed);
-        return new(current, dead);
+        return new(current, dead, new(state.Live));
     }
 
     private void ArchiveDeleteStaged(EngineSession session, ArchiveDeletionPlan? plan)
@@ -45,8 +45,9 @@ internal sealed partial class EngineHost
         if (!current.Keys.ToHashSet().SetEquals(plan.Before.Keys.Where(key => !dead.Contains(key))) ||
             current.Any(pair => plan.Before[pair.Key] != pair.Value))
             throw new InvalidDataException("project_preservation: deletion changed an unselected identity or parent.");
-        state.Live = before.Where(pair => !dead.Contains(pair.Key)).ToDictionary(pair => pair.Key, pair => pair.Value);
-        state.Deleted = dead;
+        state.Live = plan.Live.Where(pair => !dead.Contains(pair.Key)).ToDictionary(pair => pair.Key, pair => pair.Value);
+        state.Deleted ??= [];
+        state.Deleted.UnionWith(dead);
         ArchiveValidateNoteArrays(state);
         ArchiveValidateTrackAutomation(state);
     }

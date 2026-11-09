@@ -276,3 +276,7 @@ capture/import also passed in `artifacts/feature-acceptance-6cc1fd525f8e/summary
 For extension-tracked projects, `process_audio` is available for an explicit
 external WAV because it changes no sequence data; the same receipt verifies
 native reverse samples, input protection, project history and saved fields.
+
+## Media metadata v2
+
+Captured audio carries part/region/effect extension metadata, bound to its materialized WAV by a digest. Import keeps the waveform read-locked and attaches all effects and metadata before one native commit. Complex timeline edits split audio regions and use the region in part identity. See [0.25.0 completion](completion-34.md).

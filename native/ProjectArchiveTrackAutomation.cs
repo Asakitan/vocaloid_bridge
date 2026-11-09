@@ -105,9 +105,9 @@ internal sealed partial class EngineHost
             if (!native.TryGetValue(pair.Key, out WIVSMTrack? track) ||
                 !state.Live.TryGetValue(pair.Key, out ArchiveEntry? current) || current.TrackAutomation is null)
                 throw new InvalidDataException("project_preservation: track automation owner disappeared before commit.");
-            var expected = state.Action is "automation.set" or "automation.remove"
+            var expected = state.Action is "automation.set" or "automation.remove" or "time.insert" or "time.delete"
                 ? current.TrackAutomation : pair.Value.TrackAutomation!;
-            if (state.Action is not ("automation.set" or "automation.remove") &&
+            if (state.Action is not ("automation.set" or "automation.remove" or "time.insert" or "time.delete") &&
                 !ReferenceEquals(expected, current.TrackAutomation))
                 throw new InvalidDataException("project_preservation: track automation payload changed before commit.");
             foreach (var lane in expected)

@@ -27,7 +27,7 @@ internal sealed partial class EngineHost
     {
         if (sources is null) return;
         var state = archiveStates[session.Id];
-        if (state.Before is null || state.Action is not ("note.split" or "note.join"))
+        if (state.Before is null || state.Action is not ("note.split" or "note.join" or "time.insert" or "time.delete"))
             throw new InvalidOperationException("project_preservation: pitch migration outside split/join transaction.");
         Dictionary<long, ProjectArchiveNoteArrays.Point> expected = [];
         foreach (var source in sources)

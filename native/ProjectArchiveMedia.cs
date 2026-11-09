@@ -19,11 +19,15 @@ internal sealed partial class EngineHost
         [JsonRequired] public int Language { get; set; }
         [JsonRequired] public bool Valid { get; set; }
         [JsonRequired] public JsonObject Extra { get; set; } = new();
+        public Dictionary<int, ProjectArchiveNoteArrays.Point>? DirectPitch { get; set; }
         internal ArchiveNoteSignature Signature => new(Position, Duration, Number, Velocity, Lyric, Phonemes, Language, Valid);
     }
     private sealed class LibraryArchiveClip
     {
         [JsonRequired] public int Version { get; set; }
+        public string Kind { get; set; } = "midi";
+        public string? AudioHash { get; set; }
+        public Dictionary<VSMControllerType, Dictionary<int, ProjectArchiveArrays.ControllerPoint>>? Controllers { get; set; }
         [JsonRequired] public string ClipId { get; set; } = "";
         [JsonRequired] public long Duration { get; set; }
         [JsonRequired] public JsonObject PartExtra { get; set; } = new();
@@ -36,40 +40,41 @@ internal sealed partial class EngineHost
         ArchiveCheck(state);
         if (!state.Live.TryGetValue(ArchiveKey(part), out ArchiveEntry? entry) || entry.Parent != ArchiveKey(track))
             throw new InvalidDataException("project_preservation: media source part identity is not tracked under its track.");
-        if (entry.Controller is not null)
-            throw new InvalidOperationException("project_preservation: selected media part has controller extensions.");
         if (track.Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi))
         {
-            if (entry.Extra.Count != 0) throw new InvalidOperationException("project_preservation: audio media extensions are unsupported.");
-            return null;
+            return entry.Extra.Count == 0 ? null : new LibraryArchiveClip { Version = 2, Kind = "audio", PartExtra = (JsonObject)entry.Extra.DeepClone() };
         }
         WIVSMMidiPart midi = part as WIVSMMidiPart ?? new WIVSMMidiPart(part);
-        LibraryArchiveClip result = new() { Version = 1, Duration = midi.DurationTick.Value, PartExtra = (JsonObject)entry.Extra.DeepClone() };
+        LibraryArchiveClip result = new() { Version = 2, Duration = midi.DurationTick.Value, PartExtra = (JsonObject)entry.Extra.DeepClone(), Controllers = entry.Controller };
         HashSet<(long, long, int, string, string)> seen = [];
         foreach (WIVSMNote note in midi.Notes)
         {
             ArchiveNoteSignature signature = ArchiveNoteKey(note);
-            if (!seen.Add((signature.Position, signature.Duration, signature.Number, signature.Lyric, signature.Phonemes)) || !state.Live.TryGetValue(ArchiveKey(note), out ArchiveEntry? source) || source.Parent != ArchiveKey(part))
+            if (!seen.Add((signature.Position, signature.Duration, signature.Number, signature.Lyric, signature.Phonemes)) || state.Live.TryGetValue(ArchiveKey(note), out var existing) && existing.Parent != ArchiveKey(part))
                 throw new InvalidDataException("project_preservation: ambiguous or untracked media source note.");
+            state.Live.TryGetValue(ArchiveKey(note), out var source);
             result.Notes.Add(new LibraryArchiveNote { Position = signature.Position, Duration = signature.Duration,
                 Number = signature.Number, Velocity = signature.Velocity, Lyric = signature.Lyric,
                 Phonemes = signature.Phonemes, Language = signature.Language, Valid = signature.Valid,
-                Extra = (JsonObject)source.Extra.DeepClone() });
+                Extra = source is null ? new() : (JsonObject)source.Extra.DeepClone(), DirectPitch = source?.DirectPitch });
         }
-        return result.PartExtra.Count != 0 || result.Notes.Any(note => note.Extra.Count != 0) ? result : null;
+        return result.PartExtra.Count != 0 || result.Controllers is not null || result.Notes.Any(note => note.Extra.Count != 0 || note.DirectPitch is not null) ? result : null;
     }
 
     private void LibraryArchiveWrite(UserClip clip, LibraryArchiveClip data)
     {
         data.ClipId = clip.ID;
+        LibraryRequire(clip.ReadPart(), "read captured media");
+        if (data.Kind == "audio") data.AudioHash = MediaAudioHash(clip.AudioPart!.WavFilePath);
         LibraryUpdateClip(clip, root =>
         {
             if (root.ContainsKey(LibraryArchiveKey)) throw new InvalidDataException("Reserved media archive metadata already exists.");
             root.Add(LibraryArchiveKey, JsonSerializer.SerializeToNode(data));
         });
         LibraryRequire(clip.ReadPart(), "read captured media archive");
-        MidiPart midi = clip.MidiPart ?? throw new InvalidDataException("Captured media MIDI part is missing.");
-        LibraryArchiveRead(clip, midi, LibraryReadValidity(clip, midi));
+        if (data.Kind == "audio") LibraryArchiveReadAudio(clip);
+        else { MidiPart midi = clip.MidiPart ?? throw new InvalidDataException("Captured media MIDI part is missing.");
+            LibraryArchiveRead(clip, midi, LibraryReadValidity(clip, midi)); }
     }
 
     private static bool LibraryArchiveHasMetadata(Clip clip)
@@ -85,8 +90,13 @@ internal sealed partial class EngineHost
     // the editable private clip before accepting its metadata as archive data.
     private static void LibraryArchiveValidateExtra(JsonObject extra, JsonObject ownerSchema)
     {
-        foreach ((string pointer, _) in extra)
+        foreach ((string pointer, JsonNode? value) in extra)
         {
+            if (pointer.StartsWith(ArrayPrefix, StringComparison.Ordinal))
+            {
+                ValidateArrayMetadata(pointer[ArrayPrefix.Length..], value, ownerSchema);
+                continue;
+            }
             if (!pointer.StartsWith("/", StringComparison.Ordinal))
                 throw new InvalidDataException("project_preservation: invalid media archive metadata path.");
             string[] segments = pointer[1..].Split('/');
@@ -121,7 +131,7 @@ internal sealed partial class EngineHost
         // Metadata is a bridge-owned contract, never silently ignored on a foreign clip.
         LibraryOwnedClip(clip.ID);
         LibraryArchiveClip data = value.Deserialize<LibraryArchiveClip>() ?? throw new InvalidDataException("Media archive metadata is empty.");
-        if (data.Version != 1 || !string.Equals(data.ClipId, clip.ID, StringComparison.Ordinal) || data.PartExtra is null ||
+        if (data.Version is not (1 or 2) || data.Kind != "midi" || !string.Equals(data.ClipId, clip.ID, StringComparison.Ordinal) || data.PartExtra is null ||
             data.Notes is null || data.Duration != midi.Duration || (ulong)data.Notes.Count != midi.NumNotes)
             throw new InvalidDataException("Media archive metadata does not match its clip.");
         JsonObject trackSchema = ArchiveItemSchema(ArchivePropertySchema(ArchiveSchema(), "tracks"));
@@ -140,6 +150,40 @@ internal sealed partial class EngineHost
                 throw new InvalidDataException("Media archive note identity is ambiguous or changed.");
             LibraryArchiveValidateExtra(saved.Extra, noteSchema);
         }
+        if (data.Controllers is not null)
+            foreach (var lane in data.Controllers)
+            {
+                var controller = midi.GetMidiController(LibraryMapEnum<VMMMidiControllerType>(lane.Key));
+                JsonArray events = new();
+                if (controller is not null)
+                    for (ulong i = 0; i < controller.NumEvents; i++) { var point = controller.GetEvent(i)!; events.Add(new JsonObject { ["pos"] = point.Position, ["value"] = point.Value }); }
+                ProjectArchiveArrays.ValidateController(lane.Value, events);
+            }
+        for (int i = 0; i < data.Notes.Count; i++)
+            if (data.Notes[i].DirectPitch is { } pitch)
+                ProjectArchiveNoteArrays.Validate(pitch, midi.GetNote((ulong)i)!.DirectPitches.Select(p => new VSMDirectPitchData(p.Tick, p.Value)));
+        return data;
+    }
+
+    private static string MediaAudioHash(string path)
+    {
+        PathGuard.NoLinks(path);
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream));
+    }
+
+    private LibraryArchiveClip? LibraryArchiveReadAudio(Clip clip)
+    {
+        using var file = File.OpenRead(clip.ClipPath);
+        using var doc = JsonDocument.Parse(file);
+        if (!doc.RootElement.TryGetProperty(LibraryArchiveKey, out var value)) return null;
+        LibraryOwnedClip(clip.ID);
+        var data = value.Deserialize<LibraryArchiveClip>() ?? throw new InvalidDataException("Empty audio metadata.");
+        if (data.Version != 2 || data.Kind != "audio" || data.ClipId != clip.ID || data.Notes.Count != 0 || data.Controllers is not null ||
+            data.AudioHash != MediaAudioHash(clip.AudioPart!.WavFilePath))
+            throw new InvalidDataException("Audio metadata does not match the captured waveform.");
+        var trackSchema = ArchiveItemSchema(ArchivePropertySchema(ArchiveSchema(), "tracks"));
+        LibraryArchiveValidateExtra(data.PartExtra, ArchiveItemSchema(ArchivePropertySchema(trackSchema, "parts")));
         return data;
     }
 
@@ -184,12 +228,22 @@ internal sealed partial class EngineHost
         if (track.Parts.Any(other => ArchiveKey(other) != ArchiveKey(part) && ArchivePartKey(other) == ArchivePartKey(part)))
             throw new InvalidDataException("project_preservation: media target part identity is ambiguous.");
         Attach(part, ArchiveKey(track), data.PartExtra);
+        if (data.Controllers is not null)
+        {
+            foreach (var lane in data.Controllers) ProjectArchiveArrays.ValidateController(lane.Value, ArchiveNativeControllers(part, lane.Key));
+            state.Live[ArchiveKey(part)] = state.Live[ArchiveKey(part)] with { Controller = data.Controllers };
+        }
         HashSet<ArchiveEntity> keys = [];
         for (int i = 0; i < notes.Count; i++)
         {
             if (!keys.Add(ArchiveKey(notes[i])) || ArchiveNoteKey(notes[i]) != data.Notes[i].Signature)
                 throw new InvalidDataException("project_preservation: media target note identity changed.");
             Attach(notes[i], ArchiveKey(part), data.Notes[i].Extra);
+            if (data.Notes[i].DirectPitch is { } pitch)
+            {
+                ProjectArchiveNoteArrays.Validate(pitch, ScorePitchPoints(notes[i]));
+                state.Live[ArchiveKey(notes[i])] = state.Live[ArchiveKey(notes[i])] with { DirectPitch = ProjectArchiveNoteArrays.Clone(pitch) };
+            }
         }
     }
 }

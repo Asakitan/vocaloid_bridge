@@ -1,3 +1,5 @@
+> Current 0.25.0 metadata v2 and array contracts: [completion](completion-34.md); older investigation sections remain historical evidence.
+
 > Current 0.24.0 contracts and evidence: [Agent completion](agent-completion-33.md). Recovery list/resolve are session-independent; archive-bearing property updates preserve the immutable clip byte stream.
 
 # Native Library Operations
@@ -176,9 +178,7 @@ On an extension-tracked project, `style_capture`, `style_update`, `style_delete`
 `media_update` and `media_delete` remain available because they read the source
 or update only bridge-owned library files. For MIDI parts, capture can embed
 unknown part and note fields in private, versioned bridge metadata, bound to the
-clip ID and unique native note signatures. Controller-event and selected-note
-direct-pitch-item extensions remain guarded for media capture; a target with
-tracked direct-pitch-item extensions is also guarded for media import. Import
+clip ID and unique native note signatures. Controller and direct-pitch metadata are captured and imported by the version-2 media payload. Extended targets use the same native identity transaction. Import
 validates the metadata and stages the corresponding target
 identities in one native history transaction. Before changing the target, the
 bridge repeats the import on an isolated native clone when the clip carries
@@ -189,9 +189,7 @@ candidate closes. Metadata pointers must end at unknown native-schema fields;
 native fields and paths through arrays are rejected. Clip property edits preserve this metadata through the immutable-byte journal protocol in 0.24.0. The AI fixture in
 `artifacts/feature-acceptance-39ed0d000904/summary.json` verifies source and
 target extensions, ordinary-target upgrade and prior undo history, redo,
-clone, reopen, conflicts and malformed metadata. Controller extensions and
-media-captured extension-audio import remains guarded; only the tested combinations
-are established.
+clone, reopen, conflicts and malformed metadata. 0.25.0 adds controller/pitch/array and audio metadata import, with waveform binding and one native history transaction; see the current contract above.
 
 MIDI capture writes both primary and secondary voice IDs through native VMM.
 The installed VMM reader returns an empty secondary ID even when its native

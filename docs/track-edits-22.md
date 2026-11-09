@@ -1,3 +1,5 @@
+> Historical record; 0.25.0 implements remaining time/media/nested-array paths. See [current completion](completion-34.md).
+
 > Historical investigation. The relevant deletion, ordinary-edit, split/join and transfer contracts were implemented with additional native validation in 0.24.0; see [current evidence and remaining limits](agent-completion-33.md). Earlier failed receipts below remain historical evidence.
 
 # Track automation with ordinary score edits — session 22

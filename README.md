@@ -33,7 +33,7 @@ powershell -NoProfile -File .\tools\setup.ps1
 
 这些条目均使用 `E:/VC/vocaloid_bridge/.venv/Scripts/python.exe -m vocaloid_bridge`，并显式设置 `VOCALOID_WORKSPACE`、`PYTHONPATH` 为 `E:/VC/vocaloid_bridge`，`PYTHONUTF8` 为 `1`。从其他目录启动时，输出仍写到本项目的 `output`。Codex 的 `tool_timeout_sec` 为 180。
 
-Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.24.0 提供 37 个工具和 127 个结构化操作，独立 stdio 客户端的定向测试已通过。本对话现有连接此前报告 Python MCP 0.4.0；其运行中的原生宿主此前经比对为 0.5.0 构建，尚未载入 0.24.0。重新连接后应核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
+Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.25.0 提供 37 个工具和 127 个结构化操作，独立 stdio 客户端的定向测试已通过。本对话现有连接此前报告 Python MCP 0.4.0；其运行中的原生宿主此前经比对为 0.5.0 构建，此前未载入新版本；0.25.0 已提交客户端重载请求。重新连接后应核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
 
 ## 工具
 
@@ -167,3 +167,5 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 用户提供的 AI-VOCALOID-MCP 参考实现及对应关系记录在 `docs/references.md`。
 
 0.24.0 的 127 操作、显式素材冲突决策、21 个 AI 声库与扩展编辑定向证据见 [会话 33](docs/session-log/session-33.md)；剩余复杂扩展与当前连接状态见 [TODO](TODO.md)。
+
+0.25.0 已实现剩余复杂时间编辑、素材元数据 v2、其他数组和事务边界；[契约与必要证据](docs/completion-34.md) 区分实现完成与当前聊天连接刷新。

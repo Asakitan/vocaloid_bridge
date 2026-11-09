@@ -663,7 +663,7 @@ internal sealed partial class EngineHost
         }
     }
 
-    private object ImportAudio(EngineSession session, JsonElement options)
+    private object ImportAudio(EngineSession session, JsonElement options, Action<WIVSMAudioPart>? configure = null, string operation = "part.create")
     {
         string source = AudioInputPath(options);
         var wave = InspectWave(source);
@@ -676,7 +676,7 @@ internal sealed partial class EngineHost
         ulong trackIndex = options.TryGetProperty("track_index", out JsonElement requested)
             ? requested.GetUInt64() : session.Sequence.NumTrack;
         bool createTrack = !options.TryGetProperty("track_index", out _);
-        return ScoreMutate(session, "part.create", () =>
+        return ScoreMutate(session, operation, () =>
         {
             WIVSMAudioTrack track;
             if (createTrack)
@@ -693,6 +693,7 @@ internal sealed partial class EngineHost
                 throw new InvalidOperationException("Native audio region initialization failed: " + part.LastError);
             if (!part.SetOriginalWaveFile(source, Path.GetFileName(source)))
                 throw new InvalidOperationException("Native audio import failed: " + part.LastError);
+            configure?.Invoke(part);
             return DescribeAudioPart(session, trackIndex, track.IndexOf(part), part);
         });
     }

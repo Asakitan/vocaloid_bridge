@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Yamaha.VOCALOID.VSM;
 
@@ -275,21 +276,18 @@ internal sealed partial class EngineHost
                 // An archive-only merge still needs one real native history
                 // entry, so its metadata and opaque resources can share undo.
                 // Keep the native tempo map unchanged at the transaction edge.
-                if (!target.Sequence.IsStaged && mergedTempo is null && mergedTimeSig is null &&
-                    (globalChange || resources.Count != 0))
+                if (!target.Sequence.IsStaged && (globalChange || resources.Count != 0 ||
+                    mergedTempo is not null && !JsonNode.DeepEquals(JsonSerializer.SerializeToNode(mergedTempo), JsonSerializer.SerializeToNode(archiveStates[target.Id].Tempo)) ||
+                    mergedTimeSig is not null && !JsonNode.DeepEquals(JsonSerializer.SerializeToNode(mergedTimeSig), JsonSerializer.SerializeToNode(archiveStates[target.Id].TimeSig))))
                     StageArchiveMetadataHistory(target.Sequence);
                 if (mergedTempo is not null)
                 {
                     ProjectArchiveArrays.ValidateTempo(mergedTempo, ArchiveNativeTempos(target.Sequence));
-                    if (!target.Sequence.IsStaged)
-                        throw new InvalidOperationException("project_preservation: tempo extension merge requires a native history entry.");
                     archiveStates[target.Id].Tempo = mergedTempo;
                 }
                 if (mergedTimeSig is not null)
                 {
                     ProjectArchiveArrays.ValidateTimeSig(mergedTimeSig, ArchiveNativeTimeSigs(target.Sequence));
-                    if (!target.Sequence.IsStaged)
-                        throw new InvalidOperationException("project_preservation: time signature extension merge requires a native history entry.");
                     archiveStates[target.Id].TimeSig = mergedTimeSig;
                 }
                 ArchiveAddResources(target, resources);

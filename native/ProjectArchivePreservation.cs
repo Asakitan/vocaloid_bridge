@@ -108,6 +108,11 @@ internal sealed partial class EngineHost
                     result.Add(childPointer, item?.DeepClone());
                 else if (item is JsonObject child && !(path == "" && pointer == "" && key == "masterTrack"))
                     Collect(child, childSchema, childPointer);
+                else if (item is JsonArray array && !DedicatedArray(path, childPointer))
+                {
+                    JsonObject? metadata = CaptureArray(array, childSchema, path + childPointer + "[]");
+                    if (metadata is not null) result.Add(ArrayPrefix + childPointer, metadata);
+                }
             }
         }
         Collect(value, schema, "");
@@ -170,14 +175,13 @@ internal sealed partial class EngineHost
         else if (node is JsonArray array)
         {
             if (resolved["items"] is JsonObject items)
-                foreach (JsonNode? child in array) ArchiveValidateNested(child, items, path + "[]", tempoExtensions: tempoExtensions, timeSigExtensions: timeSigExtensions, controllerExtensions: controllerExtensions, notePitchExtensions: notePitchExtensions, masterVolumeExtensions: masterVolumeExtensions, trackAutomationExtensions: trackAutomationExtensions);
+                foreach (JsonNode? child in array) ArchiveValidateNested(child, items, path + "[]", owner: true, tempoExtensions: tempoExtensions, timeSigExtensions: timeSigExtensions, controllerExtensions: controllerExtensions, notePitchExtensions: notePitchExtensions, masterVolumeExtensions: masterVolumeExtensions, trackAutomationExtensions: trackAutomationExtensions);
             else if (path.EndsWith("/langIDs", StringComparison.Ordinal) && resolved["langID"] is JsonObject)
             {
                 foreach (JsonNode? child in array)
                 {
                     JsonObject lang = ArchiveObject(child, path);
-                    if (lang.Any(pair => pair.Key != "langID"))
-                        throw new InvalidDataException("project_preservation: unsupported language metadata at " + path);
+                    if (lang["langID"] is null) throw new InvalidDataException("project_preservation: language ID is absent.");
                 }
             }
             else if (array.Count != 0 && array.Any(child => child is JsonObject or JsonArray))
@@ -472,6 +476,7 @@ internal sealed partial class EngineHost
             }
             foreach (string relative in state.ExtraFiles)
                 state.ResourcePaths.Add(relative, PathGuard.Under(session.Directory, relative));
+            state.HasEntityExtensions |= state.Root.Any(x => x.Key.StartsWith(ArrayPrefix, StringComparison.Ordinal)) || state.Master.Any(x => x.Key.StartsWith(ArrayPrefix, StringComparison.Ordinal));
             if (!state.HasEntityExtensions) state.Live.Clear();
             if (!state.HasEntityExtensions && state.Root.Count == 0 && state.Master.Count == 0 && state.ExtraFiles.Count == 0)
             {
@@ -496,6 +501,7 @@ internal sealed partial class EngineHost
             if (state.HasEntityExtensions) session.ArchiveCopy = (source, target) => ArchiveCopyDuplicate(session, source, target);
             if (state.HasEntityExtensions) session.ArchiveValidate = () =>
             {
+                ReconcileStagedArrays(session);
                 ValidateArchiveControllersBeforeCommit(session);
                 ValidateArchiveNoteArraysBeforeCommit(session);
                 ValidateArchiveMasterVolumeBeforeCommit(session);
@@ -563,6 +569,7 @@ internal sealed partial class EngineHost
             session.ArchiveCopy = (source, target) => ArchiveCopyDuplicate(session, source, target);
             session.ArchiveValidate = () =>
             {
+                ReconcileStagedArrays(session);
                 ValidateArchiveControllersBeforeCommit(session);
                 ValidateArchiveNoteArraysBeforeCommit(session);
                 ValidateArchiveMasterVolumeBeforeCommit(session);
@@ -652,7 +659,7 @@ internal sealed partial class EngineHost
             foreach (JsonNode? partNode in ArchiveArray(track["parts"], "parts"))
             {
                 JsonObject part = ArchiveObject(partNode, "parts[]");
-                if (!partKeys.Add(Key(part, "name", "pos", "duration")))
+                if (!partKeys.Add(Key(part, "name", "pos", "duration", "region", "wav")))
                     throw new InvalidDataException("project_preservation: ambiguous part identities in snapshot.");
                 trackShape.Add(Key(part, "name", "pos", "duration"));
                 if (part["wav"] is JsonObject wav) trackShape.Add(Key(wav, "name", "originalName", "processedName"));
@@ -738,7 +745,7 @@ internal sealed partial class EngineHost
 
     private readonly record struct ArchiveNoteSignature(long Position, long Duration, int Number, int Velocity,
         string Lyric, string Phonemes, int Language, bool Valid);
-    private readonly record struct ArchivePartSignature(long Position, long Duration, string Name);
+    private readonly record struct ArchivePartSignature(long Position, long Duration, string Name, string Region = "");
     private sealed record ArchivePartSnapshot(ArchiveEntity Key, ArchiveEntity Parent,
         (ArchiveEntity Key, ArchiveNoteSignature Signature)[] Notes, long Position,
         Dictionary<VSMControllerType, Dictionary<int, ProjectArchiveArrays.ControllerPoint>> Controllers);
@@ -766,14 +773,15 @@ internal sealed partial class EngineHost
             (ArchiveKey(note), ArchiveNoteKey(note) with { Position = checked(offset + note.RelPosTick.Value) })).ToArray(), offset, controllers);
     }
 
-    private void ArchiveMigrateParts(EngineSession session, ArchivePartSnapshot[] sources, WIVSMMidiPart[] targets, bool split)
+    private void ArchiveMigrateParts(EngineSession session, ArchivePartSnapshot[] sources, WIVSMMidiPart[] targets, bool split, Dictionary<ArchiveEntity, ArchiveEntry>? sourceEntries = null)
     {
         if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state) || !state.HasEntityExtensions) return;
-        if (state.Before is null || state.Action != (split ? "part.split" : "part.join"))
+        if (state.Before is null || state.Action != (split ? "part.split" : "part.join") && state.Action is not ("time.insert" or "time.delete"))
             throw new InvalidOperationException("project_preservation: part migration outside its tracked transaction.");
+        var before = sourceEntries ?? state.Before;
         JsonObject merged = new();
         foreach (ArchivePartSnapshot source in sources)
-            if (state.Before.TryGetValue(source.Key, out ArchiveEntry? entry))
+            if (before.TryGetValue(source.Key, out ArchiveEntry? entry))
                 foreach ((string key, JsonNode? value) in entry.Extra)
                 {
                     if (merged.ContainsKey(key))
@@ -798,10 +806,10 @@ internal sealed partial class EngineHost
             throw new InvalidDataException("project_preservation: part operation has conflicting native identities.");
         foreach (ArchivePartSnapshot source in sources)
         {
-            if (state.Before.TryGetValue(source.Key, out ArchiveEntry? partEntry) && partEntry.Parent != source.Parent)
+            if (before.TryGetValue(source.Key, out ArchiveEntry? partEntry) && partEntry.Parent != source.Parent)
                 throw new InvalidDataException("project_preservation: source part parent identity changed.");
             foreach (var note in source.Notes)
-                if (state.Before.TryGetValue(note.Key, out ArchiveEntry? noteEntry) && noteEntry.Parent != source.Key)
+                if (before.TryGetValue(note.Key, out ArchiveEntry? noteEntry) && noteEntry.Parent != source.Key)
                     throw new InvalidDataException("project_preservation: source note parent identity changed.");
         }
         if (original.Length != result.Length || original.Select(n => n.Signature).Distinct().Count() != original.Length ||
@@ -871,7 +879,7 @@ internal sealed partial class EngineHost
             state.Live[ArchiveKey(target)] = new ArchiveEntry((JsonObject)merged.DeepClone(), ArchiveKey(parent), hasControllerExtra ? lanes : null);
         }
         foreach (var note in original)
-            if (state.Before.TryGetValue(note.Key, out ArchiveEntry? entry))
+            if (before.TryGetValue(note.Key, out ArchiveEntry? entry))
             {
                 var destination = lookup[note.Signature];
                 if (entry.DirectPitch is not null)
@@ -889,7 +897,8 @@ internal sealed partial class EngineHost
         note.LangID, note.IsValidPhonemes);
 
     private static ArchivePartSignature ArchivePartKey(WIVSMPart part) =>
-        new(part.AbsPosTick.Value, part.DurationTick.Value, part.Name);
+        new(part.AbsPosTick.Value, part.DurationTick.Value, part.Name, part is WIVSMAudioPart audio
+            ? $"{audio.Region.TickBegin}:{audio.Region.TickEnd}" : "");
 
     // Called inside the corresponding ScoreMutate action, after the native
     // duplicate returned its new object and before Commit(true). Children are
@@ -1013,18 +1022,19 @@ internal sealed partial class EngineHost
 
     // Copy the opaque payload while the native split is staged; the normal
     // transaction journal then records both the old and new identities.
-    private void ArchiveCopySplitNote(EngineSession session, WIVSMNote source, WIVSMNote target)
+    private void ArchiveCopySplitNote(EngineSession session, WIVSMNote source, WIVSMNote target, ArchiveEntry? sourceEntry = null)
     {
         if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state) || !state.HasEntityExtensions) return;
-        if (state.Before is null || state.Action != "note.split")
+        if (state.Before is null || state.Action is not ("note.split" or "time.insert" or "time.delete"))
             throw new InvalidOperationException("project_preservation: note split outside its tracked transaction.");
         ArchiveEntity from = ArchiveKey(source), to = ArchiveKey(target);
         WIVSMMidiPart parent = target.Parent
             ?? throw new InvalidDataException("project_preservation: split note has no parent.");
         if (from.Pointer == nint.Zero || to.Pointer == nint.Zero || from == to || state.Live.ContainsKey(to))
             throw new InvalidDataException("project_preservation: invalid split note identity.");
-        if (state.Before.TryGetValue(from, out ArchiveEntry? entry))
+        if (sourceEntry is not null || state.Before.TryGetValue(from, out sourceEntry))
         {
+            ArchiveEntry entry = sourceEntry!;
             if (entry.Parent != ArchiveKey(parent) || !state.Live.ContainsKey(from))
                 throw new InvalidDataException("project_preservation: split note identity changed.");
             state.Live.Add(to, new ArchiveEntry((JsonObject)entry.Extra.DeepClone(), ArchiveKey(parent)));
@@ -1121,11 +1131,10 @@ internal sealed partial class EngineHost
     private void RequireArchiveMutationSupported(EngineSession session, string operation)
     {
         if (!HasArchiveEntityExtensions(session)) return;
+        if (operation is "time.insert" or "time.delete") return;
         RequireArchiveNoteArrayOperation(session, operation);
         if (ArchiveHasTrackAutomationExtensions(session) && !ArchiveDeletionOperation(operation) && !ArchiveStableCurveOwnerOperation(operation) && operation is not ("automation.set" or "automation.remove" or "part.split" or "part.join" or "undo" or "redo" or "history.rollback"))
             throw new InvalidOperationException("project_preservation: track automation mutation has no verified identity mapping: " + operation);
-        if (archiveStates[session.Id].MasterVolume is not null && operation is ("time.insert" or "time.delete"))
-            throw new InvalidOperationException("project_preservation: master volume extension timeline mapping is not verified.");
         if (ArchiveHasControllerExtensions(session) && !ArchiveDeletionOperation(operation) && !ArchiveStableCurveOwnerOperation(operation) && operation is not ("controller.set" or "controller.remove" or "part.split" or "part.join" or "undo" or "redo"))
             throw new InvalidOperationException("project_preservation: controller extension mutation has no verified identity mapping: " + operation);
         if (operation is not ("track.create" or "track.update" or "track.reorder" or "track.remove" or "track.duplicate" or
@@ -1146,7 +1155,7 @@ internal sealed partial class EngineHost
         "track.create" or "track.update" or "track.reorder" or "part.create" or "part.update" or "part.move" or "part.resize" or
         "note.add" or "note.update" or "note.duplicate" or "note.batch_update" or "track.duplicate" or "part.duplicate" or
         "note.split" or "note.join" or
-        "clipboard.paste" or "project.merge" or
+        "clipboard.paste" or "project.merge" or "media_import" or
         "lyrics_apply" or "lyrics_reset" or "phonemes_apply" or "phonemes_reset" or "audio.set_effect" or
         "voice.set" or "vibrato.set" or "phoneme_timing.set" or "phoneme_timing.reset" or "pitch.set" or "pitch.clear" or
         "performance.set" or "selection.set" or "sequence.update" or "tempo.set" or "tempo.remove" or
@@ -1453,6 +1462,12 @@ internal sealed partial class EngineHost
     {
         foreach ((string pointer, JsonNode? value) in extra)
         {
+            if (pointer.StartsWith(ArrayPrefix, StringComparison.Ordinal))
+            {
+                if (value is not JsonObject payload) throw new InvalidDataException("Invalid array metadata.");
+                if (JsonPath(target, pointer[ArrayPrefix.Length..]) is JsonArray actual) ReconcileArray(payload, actual, true);
+                continue;
+            }
             string[] segments = pointer[1..].Split('/').Select(segment => segment
                 .Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal)).ToArray();
             JsonObject parent = target;

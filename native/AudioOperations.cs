@@ -8,6 +8,10 @@ using Yamaha.VOCALOID.VEM;
 using Yamaha.VOCALOID.VSM;
 using Yamaha.VOCALOID.WOR;
 
+#if VOCALOID7
+using WEffectManager = Yamaha.VOCALOID.VEM.WAudioEffectManager;
+#endif
+
 internal sealed partial class EngineHost
 {
     private WEffectManager? audioEffects;
@@ -215,7 +219,11 @@ internal sealed partial class EngineHost
             if (VEAudioEngine.IsPlaying())
                 throw new InvalidOperationException("Native host-only mixer unexpectedly entered playback.");
             VEAudioEngine.SetSampleRateFromHost(sampleRate);
+#if VOCALOID7
+            if (!VEAudioEngine.SetAudioEffectManager((nint)effects))
+#else
             if (!VEAudioEngine.SetEffectManager((nint)effects))
+#endif
                 throw new InvalidOperationException("Native mixer effect-manager attachment failed.");
             VEAudioEngineError modeResult = VEAudioEngine.SetMixdownMode(VEMixdownMode.Manual);
             if (modeResult != VEAudioEngineError.Success)
@@ -226,12 +234,18 @@ internal sealed partial class EngineHost
             VEAudioEngine.SetBusInfo(buses);
             SetAudioMixAutomation(sequence, !stem);
             bool explicitSelection = options.TryGetProperty("track_indices", out _);
-            bool anySolo = sequence.Tracks.Any(track => track.IsSolo);
+#if !VOCALOID7
+            bool anySolo = sequence.Tracks.Any(track => V7Compat.IsSolo(track));
+#endif
             HashSet<int> pending = [];
             for (ulong index = 0; index < sequence.NumTrack; index++)
             {
                 WIVSMTrack track = sequence.GetTrack(index)!;
-                bool enabled = selectedSet.Contains(index) && (explicitSelection || track.IsSolo || (!track.IsMute && !anySolo));
+#if VOCALOID7
+                bool enabled = selectedSet.Contains(index) && (explicitSelection || !track.IsChannelMute);
+#else
+                bool enabled = selectedSet.Contains(index) && (explicitSelection || V7Compat.IsSolo(track) || (!V7Compat.IsMute(track) && !anySolo));
+#endif
                 VEAudioEngine.SetMixerInputEnabled((uint)index, enabled);
                 if (!enabled)
                     continue;
@@ -422,9 +436,11 @@ internal sealed partial class EngineHost
         {
             if (!effects.SynchronizeAudioEffect(track))
                 throw new InvalidOperationException("Native track effect synchronization failed: " + track.Name);
+#if !VOCALOID7
             foreach (WIVSMPart part in track.Parts)
                 if (!effects.SynchronizeAudioEffect(part))
                     throw new InvalidOperationException("Native part effect synchronization failed: " + part.Name);
+#endif
         }
         return effects;
     }
@@ -432,6 +448,10 @@ internal sealed partial class EngineHost
     private static (object Owner, WIVSMEffectManager Manager) AudioEffectScope(EngineSession session, JsonElement options)
     {
         string scope = AudioText(options, "scope", "master");
+#if VOCALOID7
+        if (scope == "part")
+            throw new NotSupportedException("VOCALOID7 does not support part audio effects. Explicit scope='track' affects every part on the track.");
+#endif
         object owner = session.Sequence;
         WIVSMEffectManager? effects = session.Sequence.EffectManager;
         if (scope is "track" or "part")
@@ -442,10 +462,12 @@ internal sealed partial class EngineHost
             effects = track.EffectManager;
             if (scope == "part")
             {
+#if !VOCALOID7
                 WIVSMPart part = track.GetPart(options.GetProperty("part_index").GetUInt64())
                     ?? throw new ArgumentOutOfRangeException("part_index");
                 owner = part;
                 effects = part.EffectManager;
+#endif
             }
         }
         else if (scope != "master")
@@ -763,10 +785,15 @@ internal sealed partial class EngineHost
             WORError result;
             switch (action)
             {
+#if VOCALOID7
+                case "reverse":
+                    throw new NotSupportedException("VOCALOID7 removed the native ReverseRenderer.");
+#else
                 case "reverse":
                     using (ReverseRenderer renderer = new())
                         result = renderer.RenderAudioFile(source, temporary, 0);
                     break;
+#endif
                 case "normalize":
                     using (NormalizeRenderer renderer = new())
                         result = renderer.RenderAudioFile(source, temporary);
@@ -776,6 +803,10 @@ internal sealed partial class EngineHost
                     using (TimeStretchRenderer renderer = new())
                         result = renderer.RenderAudioFile(source, temporary, action == "time_stretch" ? (float)ratio : 1f, (float)cents);
                     break;
+#if VOCALOID7
+                case "voice_change":
+                    throw new NotSupportedException("VOCALOID7 removed the native VOCALO CHANGER renderer.");
+#else
                 case "voice_change":
                     EnsureVoiceServices();
                     string voiceId = AudioText(options, "voice_id");
@@ -790,6 +821,7 @@ internal sealed partial class EngineHost
                     using (VoiceChangeRenderer renderer = new())
                         result = renderer.RenderAudioFile(source, temporary, model, voice.NPIndex, (float)cents);
                     break;
+#endif
                 default:
                     throw new ArgumentException("Unknown native audio action: " + action);
             }
@@ -861,7 +893,11 @@ internal sealed partial class EngineHost
         duration_seconds = part.DurationSec,
         original_path = part.GetOriginalWaveFilePath(),
         current_path = part.GetWaveFilePath(),
+#if VOCALOID7
+        voice_id = (string?)null
+#else
         voice_id = part.AiVoiceBankID
+#endif
     };
 
     private static void CommitAudio(EngineSession session)

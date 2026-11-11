@@ -10,7 +10,7 @@ from typing import Any
 
 from .music import _notes, _output_destination, _reject_links
 from .native_client import NativeClient
-from .projects import PHONEME_VALIDITY_MEMBER, ProjectStore, _part, _validate_phoneme_validity
+from .projects import PHONEME_VALIDITY_MEMBER, ProjectStore, _ai_voice, _part, _validate_phoneme_validity
 
 
 # First two default lyric/phoneme pairs from the installed editor's
@@ -138,7 +138,8 @@ def _write_prepared(store: ProjectStore, client: NativeClient, preparation, outp
             return {**result, "native_session": client.request("open", {"path": result["path"]})}
         if PHONEME_VALIDITY_MEMBER in archive.namelist():
             _validate_phoneme_validity(data, archive.read(PHONEME_VALIDITY_MEMBER), origins)
-        if track.get("type") != 2 or not isinstance(part.get("aiVoice"), dict):
+        assigned_voice = _ai_voice(track, part)
+        if assigned_voice is None:
             raise ValueError("Automatic phonemes require an AI voice part.")
         if any(language not in _SEEDS for _, _, language in pending):
             raise ValueError("Automatic phonemes require a supported native G2PA language.")
@@ -160,10 +161,11 @@ def _write_prepared(store: ProjectStore, client: NativeClient, preparation, outp
             store._write_archive(archive, candidate, f"{directory.name}/seed.vpr", origins)
             stage_session = client.request("open", {"path": str(seed_path)})["session_id"]
             scope = {"track_index": track_index, "part_index": part_index}
-            voice = _native_result(client, "score_edit", session_id=stage_session, operation="voice.get", options=scope)
-            voice_id = part["aiVoice"].get("compID")
+            voice_scope = {**scope, "scope": "track"} if client.installation.product == "VOCALOID7" else scope
+            voice = _native_result(client, "score_edit", session_id=stage_session, operation="voice.get", options=voice_scope)
+            voice_id = assigned_voice.get("compID")
             banks = client.request("voices")["voices"]
-            bank = next((item for item in banks if item["kind"] == "Dnn" and item["comp_id"] == voice_id), None)
+            bank = next((item for item in banks if item.get("is_ai", item["kind"] == "Dnn") and item["comp_id"] == voice_id), None)
             if (not voice["ai"] or voice["ai_voice_bank_id"] != voice_id or bank is None or
                     not bank["available_in_sequence"] or not bank["synthesizable_version"] or
                     any(language not in bank["lang_ids"] for _, _, language in pending)):

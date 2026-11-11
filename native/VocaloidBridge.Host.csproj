@@ -1,17 +1,40 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project>
+  <PropertyGroup>
+    <VocaloidInstall Condition="'$(VocaloidInstall)' == ''">$(VOCALOID_INSTALL)</VocaloidInstall>
+    <BaseIntermediateOutputPath>obj\$(VocaloidProduct)\</BaseIntermediateOutputPath>
+    <VocaloidPython Condition="'$(VocaloidPython)' == ''">$(MSBuildThisFileDirectory)..\.venv\Scripts\python.exe</VocaloidPython>
+  </PropertyGroup>
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <PlatformTarget>x64</PlatformTarget>
-    <VocaloidInstall Condition="'$(VocaloidInstall)' == ''">C:\Program Files\VOCALOID6\Editor</VocaloidInstall>
+    <OutputPath>bin\$(Configuration)\$(VocaloidProduct)\</OutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;bin\**</DefaultItemExcludes>
+    <DefineConstants Condition="'$(VocaloidProduct)' == 'VOCALOID7'">$(DefineConstants);VOCALOID7</DefineConstants>
+    <DefineConstants Condition="'$(VocaloidProduct)' == 'VOCALOID6'">$(DefineConstants);VOCALOID6</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="VOCALOID6">
-      <HintPath>$(VocaloidInstall)\VOCALOID6.dll</HintPath>
+    <Reference Include="$(VocaloidProduct)">
+      <HintPath>$(VocaloidInstall)\$(VocaloidProduct).dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+  <Target Name="ValidateVocaloidSelection" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(VocaloidProduct)' != 'VOCALOID6' and '$(VocaloidProduct)' != 'VOCALOID7'"
+           Text="Select VOCALOID6 or VOCALOID7 using tools/setup.ps1, or pass -p:VocaloidInstall and -p:VocaloidProduct from vocaloid_bridge/install.py. Unknown products are not supported." />
+    <Error Condition="'$(VocaloidInstall)' == '' or !Exists('$(VocaloidInstall)\$(VocaloidProduct).dll')"
+           Text="A matching explicit Editor directory is required. Run pwsh -File tools/setup.ps1 to discover the latest installed supported VOCALOID." />
+    <Error Condition="'$(TargetFramework)' != 'net10.0-windows'" Text="The shared VOCALOID6/7 host requires net10.0-windows." />
+    <Error Condition="!Exists('$(VocaloidPython)')" Text="Run tools/setup.ps1 to create the selector's Python environment." />
+    <Exec Command="&quot;$(VocaloidPython)&quot; &quot;$(MSBuildThisFileDirectory)..\vocaloid_bridge\install.py&quot; --install &quot;$(VocaloidInstall)&quot; --product &quot;$(VocaloidProduct)&quot;" />
+    <Delete Files="$(TargetDir)vocaloid-target.txt" />
+  </Target>
+  <Target Name="WriteVocaloidTarget" AfterTargets="Build">
+    <Exec Command="&quot;$(VocaloidPython)&quot; &quot;$(MSBuildThisFileDirectory)..\vocaloid_bridge\install.py&quot; --install &quot;$(VocaloidInstall)&quot; --product &quot;$(VocaloidProduct)&quot; --host &quot;$(TargetPath)&quot; --write-target" />
+  </Target>
 </Project>

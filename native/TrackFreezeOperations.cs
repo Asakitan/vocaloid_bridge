@@ -14,7 +14,11 @@ internal sealed partial class EngineHost
 
     private static FrozenAuthoringState CaptureFrozenAuthoring(WIVSMMidiTrack track, int index)
         => new(index, CaptureFrozenEffects(track.EffectManager),
+#if VOCALOID7
+            track.Parts.Select(part => Array.Empty<FrozenEffect>()).ToArray(), "");
+#else
             track.Parts.Select(part => CaptureFrozenEffects(part.EffectManager)).ToArray(), "");
+#endif
 
     private void ForgetFrozenAuthoring(EngineSession session) => frozenAuthoring.Remove(session.Id);
 
@@ -90,8 +94,10 @@ internal sealed partial class EngineHost
             Restore(track, snapshot.TrackEffects, "track " + index);
             JsonArray parts = track["parts"] as JsonArray ?? throw new InvalidDataException("Frozen authoring parts are missing.");
             if (parts.Count != snapshot.PartEffects.Length) throw new InvalidDataException("Frozen authoring part count changed.");
+#if !VOCALOID7
             for (int i = 0; i < parts.Count; i++)
                 Restore(parts[i] ?? throw new InvalidDataException("Frozen authoring part is missing."), snapshot.PartEffects[i], $"track {index} part {i}");
+#endif
         }
         File.WriteAllText(path, root.ToJsonString());
     }

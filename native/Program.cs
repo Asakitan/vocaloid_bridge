@@ -57,7 +57,12 @@ internal static class Program
                 string path = Path.Combine(install, name.Name + ".dll");
                 return File.Exists(path) ? AssemblyLoadContext.Default.LoadFromAssemblyPath(path) : null;
             };
-            Assembly assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.Combine(install, "VOCALOID6.dll"));
+            AssemblyName core = CoreReference();
+            string corePath = Path.Combine(install, core.Name + ".dll");
+            if (!File.Exists(corePath))
+                throw new FileNotFoundException(
+                    $"The host was built for {core.Name}, but that assembly is missing from {install}.", corePath);
+            Assembly assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(corePath);
             NativeLibrary.SetDllImportResolver(assembly, (name, _, _) =>
             {
                 if (Path.GetFileName(name) != name)
@@ -72,7 +77,7 @@ internal static class Program
             using StreamReader input = new(Console.OpenStandardInput(), new UTF8Encoding(false, true), false, 4096);
             using StreamWriter writer = new(Console.OpenStandardOutput(), new UTF8Encoding(false), 4096) { AutoFlush = true };
             Console.SetOut(Console.Error);
-            return Serve(output, desktop, input, writer);
+            return Serve(output, install, desktop, input, writer);
         }
         catch (Exception error)
         {
@@ -80,6 +85,11 @@ internal static class Program
             return 1;
         }
     }
+
+    private static AssemblyName CoreReference() =>
+        typeof(Program).Assembly.GetReferencedAssemblies().FirstOrDefault(name =>
+            name.Name is not null && name.Name.StartsWith("VOCALOID", StringComparison.OrdinalIgnoreCase))
+        ?? throw new InvalidOperationException("The host was not built against a VOCALOID core assembly.");
 
     private static string DesktopName()
     {
@@ -103,9 +113,9 @@ internal static class Program
     private static int StageMediaProperty(string workspace, string stage) => MediaPropertyWorker.Run(workspace, stage);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static int Serve(string workspace, string desktop, TextReader input, TextWriter output)
+    private static int Serve(string workspace, string install, string desktop, TextReader input, TextWriter output)
     {
-        using EngineHost host = new(workspace);
+        using EngineHost host = new(workspace, install);
         return new RpcServer(host, desktop).Run(input, output);
     }
 
@@ -113,9 +123,9 @@ internal static class Program
     private static int Probe(string output)
     {
         nint foreground = GetForegroundWindow();
-        using WIVSMSequenceManager manager = WVSMModuleIF.CreateManager("VOCALOID6", "6.13.3.1")
+        using WIVSMSequenceManager manager = WVSMModuleIF.CreateManager(EngineHost.EngineProduct, EngineHost.EngineVersion)
             ?? throw new InvalidOperationException("VSM manager creation failed: " + WVSMModuleIF.LastError());
-        VSMSequenceData settings = new(VSMSamplingRate._44100, 32, 100);
+        VSMSequenceData settings = EngineHost.SequenceSettings(VSMSamplingRate._44100);
         WIVSMSequence sequence = manager.CreateSequence(settings)
             ?? throw new InvalidOperationException("VSM sequence creation failed: " + manager.LastError);
         sequence.Title = "Background Native Probe";

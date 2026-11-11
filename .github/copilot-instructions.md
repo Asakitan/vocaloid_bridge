@@ -1,5 +1,12 @@
 # Project Rules
 
+Current host targets .NET 10 and selects installed VOCALOID6/7 through
+`vocaloid_bridge/install.py`. Build through `tools/setup.ps1`; products have
+separate output/intermediate paths and strict build markers. Never run an old
+host after a failed build. V7 settings require explicit track scope; its VMM
+media and part-effect paths are unsupported. See `docs/vocaloid7.md`; historical
+V6 acceptance is not V7 acceptance. Keep the existing MCP registration name.
+
 Use the official MCP Python SDK v1 documentation at https://py.sdk.modelcontextprotocol.io/v1/ and protocol documentation at https://modelcontextprotocol.io/llms-full.txt.
 
 - Use the installed native VSM engine on one STA thread in a private Windows desktop.
@@ -22,3 +29,7 @@ Use the official MCP Python SDK v1 documentation at https://py.sdk.modelcontextp
 - [x] Agent song workflow at 0.27.0: 39 tools with `vocaloid_workflow`, lyric conversion on edit, written-form hints and applicability markers, backed by a sample-exact audit of what VOCALOID:AI sings.
 - [x] 0.28.0 automatic temporary-file cleanup at server start and every 10 minutes (1 h cutoff), manual dry-run/apply tool, and a `vocaloid_status.temp_cleanup` receipt.
 - [ ] Complete editor-feature coverage fully validated.
+- [x] 0.29.0: V6/V7 selection and isolated builds; default VoiceType migration;
+	both products passed bounded stdio compose/save/reopen/nonzero-WAV checks.
+	Pure V7 asa file editing/G2PA roundtrip passed. 39 tools / 128 indexed operations
+	includes the previously omitted existing batch.run; V7 unsupported paths remain explicit.

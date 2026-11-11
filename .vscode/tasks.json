@@ -45,14 +45,13 @@
 		{
 			"label": "VOCALOID6: build native",
 			"type": "shell",
-			"command": "dotnet",
+			"command": "powershell",
 			"args": [
-				"build",
-				"${workspaceFolder}/native/VocaloidBridge.Host.csproj",
-				"-c",
-				"Release",
-				"--no-restore",
-				"--nologo"
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}/tools/setup.ps1"
 			],
 			"isBackground": false,
 			"problemMatcher": [

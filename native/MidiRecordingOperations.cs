@@ -197,7 +197,7 @@ internal sealed partial class EngineHost
             WIVSMMidiPart part = ScorePart(track, options);
             if (!part.IsAi || !track.IsEnabledMidiRecording || track.IsFrozen)
                 throw new InvalidOperationException("MIDI recording requires an armed, unfrozen AI track and AI part.");
-            if (string.IsNullOrEmpty(part.AiVoiceBankID)) throw new InvalidOperationException("The AI part must have a voice assigned.");
+            if (string.IsNullOrEmpty(V7Compat.VoiceBankId(part))) throw new InvalidOperationException("The AI part must have a voice assigned.");
             int begin = checked((int)part.AbsPosTick.Value);
             int end = checked((int)(part.AbsPosTick.Value + part.DurationTick.Value));
             string mode = ScoreString(options, "mode");

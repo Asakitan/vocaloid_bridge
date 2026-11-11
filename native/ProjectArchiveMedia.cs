@@ -2,7 +2,9 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+#if !VOCALOID7
 using Yamaha.VOCALOID.VMM;
+#endif
 using Yamaha.VOCALOID.VSM;
 
 internal sealed partial class EngineHost
@@ -61,6 +63,7 @@ internal sealed partial class EngineHost
         return result.PartExtra.Count != 0 || result.Controllers is not null || result.Notes.Any(note => note.Extra.Count != 0 || note.DirectPitch is not null) ? result : null;
     }
 
+#if !VOCALOID7
     private void LibraryArchiveWrite(UserClip clip, LibraryArchiveClip data)
     {
         data.ClipId = clip.ID;
@@ -84,6 +87,7 @@ internal sealed partial class EngineHost
         using JsonDocument document = JsonDocument.Parse(file);
         return document.RootElement.TryGetProperty(LibraryArchiveKey, out _);
     }
+#endif
 
     // ArchiveUnknownFields produces paths ending at unknown object properties,
     // never at a native field or through an array. Recheck that invariant for
@@ -122,6 +126,7 @@ internal sealed partial class EngineHost
         }
     }
 
+#if !VOCALOID7
     private LibraryArchiveClip? LibraryArchiveRead(Clip clip, MidiPart midi, LibraryClipValidity? validity)
     {
         PathGuard.NoLinks(clip.ClipPath);
@@ -207,6 +212,7 @@ internal sealed partial class EngineHost
         }
         finally { Close(clone.Id, true); }
     }
+#endif
 
     private void LibraryArchiveAttach(EngineSession session, WIVSMTrack track, WIVSMMidiPart part,
         IReadOnlyList<WIVSMNote> notes, LibraryArchiveClip data)

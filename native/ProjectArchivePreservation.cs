@@ -633,8 +633,8 @@ internal sealed partial class EngineHost
     private static void ArchiveValidateTrackDetails(WIVSMTrack track, JsonObject json)
     {
         if ((json["color"] is not null && json["color"]!.GetValue<int>() != track.Color) ||
-            (json["isMuted"] is not null && json["isMuted"]!.GetValue<bool>() != track.IsMute) ||
-            (json["isSoloMode"] is not null && json["isSoloMode"]!.GetValue<bool>() != track.IsSolo) ||
+            (json["isMuted"] is not null && json["isMuted"]!.GetValue<bool>() != V7Compat.IsMute(track)) ||
+            (json["isSoloMode"] is not null && json["isSoloMode"]!.GetValue<bool>() != V7Compat.IsSolo(track)) ||
             (json["busNo"] is not null && json["busNo"]!.GetValue<uint>() != track.GetBusNo()))
             throw new InvalidDataException("project_preservation: native track order or identity differs from serialized data.");
     }

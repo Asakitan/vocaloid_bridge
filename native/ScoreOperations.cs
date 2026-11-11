@@ -35,7 +35,7 @@ internal sealed partial class EngineHost
                 => ScoreNoteEdit(session, operation, options),
             "selection.get" => ScoreSelectionSummary(session, options),
             "selection.set" => ScoreSelectionEdit(session, options),
-            "voice.get" => ScoreVoiceSummary(ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options)),
+            "voice.get" => ScoreVoiceSummary(ScoreSettingsTarget(session, options)),
             "voice.set" => ScoreVoiceEdit(session, options),
             "tempo.list" => ScoreTempoList(session.Sequence),
             "tempo.set" or "tempo.remove" => ScoreTempoEdit(session, operation, options),
@@ -47,7 +47,7 @@ internal sealed partial class EngineHost
             "controller.set" or "controller.remove" => ScoreControllerEdit(session, operation, options),
             "automation.list" => ScoreAutomationList(session, options),
             "automation.set" or "automation.remove" => ScoreAutomationEdit(session, operation, options),
-            "performance.get" => ScorePerformanceView(ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options)),
+            "performance.get" => ScorePerformanceView(ScoreSettingsTarget(session, options)),
             "performance.set" => ScorePerformanceEdit(session, options),
             "pitch.list" => ScorePitchList(session, options),
             "pitch.set" or "pitch.clear" => ScorePitchEdit(session, operation, options),
@@ -145,8 +145,8 @@ internal sealed partial class EngineHost
         type = track.Type.ToString(),
         name = track.Name,
         color = track.Color,
-        mute = track.IsMute,
-        solo = track.IsSolo,
+        mute = V7Compat.IsMute(track),
+        solo = V7Compat.IsSolo(track),
         bus_no = track.GetBusNo(),
         midi_recording = track.Type is VSMTrackType.Midi or VSMTrackType.MidiAi ? new WIVSMMidiTrack(track).IsEnabledMidiRecording : (bool?)null,
         part_count = track.NumParts
@@ -226,8 +226,8 @@ internal sealed partial class EngineHost
         // MIDI recording deliberately stays on its original setter path.
         if (recording is null && (newName is null || track.Name == newName) &&
             (color is null || track.Color == color.Value) &&
-            (mute is null || track.IsMute == mute.Value) &&
-            (solo is null || track.IsSolo == solo.Value) &&
+            (mute is null || V7Compat.IsMute(track) == mute.Value) &&
+            (solo is null || V7Compat.IsSolo(track) == solo.Value) &&
             (bus is null || track.GetBusNo() == (uint)bus.Value))
         {
             ScoreRequireUnstaged(sequence);
@@ -243,18 +243,18 @@ internal sealed partial class EngineHost
                 track.Name = newName;
             if (color is not null && track.Color != color.Value)
                 ScoreRequire(track.SetColor(color.Value), operation, sequence);
-            if (mute is not null && track.IsMute != mute.Value)
-                track.SetMute(mute.Value);
-            if (solo is not null && track.IsSolo != solo.Value)
-                track.SetSolo(solo.Value);
+            if (mute is not null && V7Compat.IsMute(track) != mute.Value)
+                V7Compat.SetMute(track, mute.Value);
+            if (solo is not null && V7Compat.IsSolo(track) != solo.Value)
+                V7Compat.SetSolo(track, solo.Value);
             return true;
         }, () =>
         {
             WIVSMTrack updated = ScoreTrack(session, trackIndex);
             ScoreRequire((newName is null || updated.Name == newName) &&
                 (color is null || updated.Color == color.Value) &&
-                (mute is null || updated.IsMute == mute.Value) &&
-                (solo is null || updated.IsSolo == solo.Value) &&
+                (mute is null || V7Compat.IsMute(updated) == mute.Value) &&
+                (solo is null || V7Compat.IsSolo(updated) == solo.Value) &&
                 (bus is null || updated.GetBusNo() == (uint)bus.Value) &&
                 (recording is null || ScoreMidiTrack(session, trackIndex).IsEnabledMidiRecording == recording.Value), operation + " readback", sequence);
             return ScoreTrackSummary(updated, trackIndex);
@@ -277,12 +277,22 @@ internal sealed partial class EngineHost
         duration_tick = part.DurationTick.Value,
         note_count = part.NumNotes,
         ai = part.IsAi,
+    #if VOCALOID7
+        voice_scope = "track",
+        voice_bank_id = V7Compat.VoiceBankId(part),
+        ai_voice_bank_id = V7Compat.VoiceBankId(part),
+        voice_name = V7Compat.VoiceName(part),
+        ai_voice_name = V7Compat.VoiceName(part),
+        lang_id = V7Compat.LangId(part),
+        ai_lang_ids = V7Compat.LangIds(part)
+    #else
         voice_bank_id = part.VoiceBankID,
         ai_voice_bank_id = part.AiVoiceBankID,
         voice_name = part.VoiceName,
         ai_voice_name = part.AiVoiceName,
         lang_id = part.LangID,
         ai_lang_ids = part.AiLangIDs
+    #endif
     };
 
     private static object ScorePartList(EngineSession session, JsonElement options)
@@ -426,7 +436,10 @@ internal sealed partial class EngineHost
         is_valid_phonemes = note.IsValidPhonemes,
         lang_id = note.LangID,
         is_protected = note.IsProtected,
-        ai_vibrato_enabled = note.IsAiVibratoEnabled,
+        ai_vibrato_enabled = V7Compat.IsAiVibratoEnabled(note),
+    #if VOCALOID7
+        curve_model = note.VibratoAiCurveModel.ToString(),
+    #endif
         expression = ScoreExpressionSummary(note.GetNoteExpression()),
         ai_expression = ScoreExpressionSummary(note.GetAiNoteExpression())
     };
@@ -528,15 +541,19 @@ internal sealed partial class EngineHost
         string phonemes = ScoreString(options, "phonemes", note?.Phonemes ?? string.Empty);
         bool validPhonemes = ScoreBool(options, "is_valid_phonemes",
             options.TryGetProperty("phonemes", out _) ? true : note?.IsValidPhonemes ?? false);
-        int defaultLanguage = note?.LangID ?? (part.IsAi && part.AiLangIDs.Count > 0 ? part.AiLangIDs[0] : part.LangID);
+        int defaultLanguage = note?.LangID ?? (part.IsAi && V7Compat.LangIds(part).Count > 0 ? V7Compat.LangIds(part)[0] : V7Compat.LangId(part));
         if (defaultLanguage < 0 && !options.TryGetProperty("lang_id", out _))
         {
-            string voiceId = part.IsAi ? part.AiVoiceBankID : part.VoiceBankID;
+            string voiceId = V7Compat.VoiceBankId(part);
             if (string.IsNullOrEmpty(voiceId))
                 throw new InvalidOperationException("Assign a native voice before adding notes without lang_id.");
+#if VOCALOID7
+            VoiceBank voice = ScoreV7VoiceBank(voiceId, part.IsAi);
+#else
             VoiceBank voice = (part.IsAi ? EnsureDatabase().GetVoiceBankByCompID(voiceId, VDMVoiceBankType.Dnn)
                 : EnsureDatabase().GetVoiceBankByCompID(voiceId))
                 ?? throw new InvalidOperationException("The assigned native voice could not be resolved: " + voiceId);
+#endif
             defaultLanguage = voice.NativeLangID;
         }
         int language = ScoreInt(options, "lang_id", 0, 255, defaultLanguage);
@@ -555,9 +572,13 @@ internal sealed partial class EngineHost
                 lyric = noteConverter.DefaultLyric();
             if (part.IsAi)
             {
-                string voiceId = part.AiVoiceBankID;
+                string voiceId = V7Compat.VoiceBankId(part);
+#if VOCALOID7
+                VoiceBank bank = ScoreV7VoiceBank(voiceId, true);
+#else
                 VoiceBank bank = EnsureDatabase().GetVoiceBankByCompID(voiceId, VDMVoiceBankType.Dnn)
                     ?? throw new ArgumentException("Assign an installed AI voice before automatic lyric conversion.");
+#endif
                 if (!bank.IsAvailableInSequence || !bank.IsSynthesizableVersion || !bank.LangIDs.Contains(language))
                     throw new ArgumentException("The assigned AI voice does not support this note language.");
                 if (!noteConverter.CanConvert(lyric, false, true))
@@ -579,6 +600,7 @@ internal sealed partial class EngineHost
             part.GetMinNoteExpression(), part.GetMaxNoteExpression());
         VSMAiNoteExpression aiExpression = ScorePatchExpression(options, "ai_expression", note?.GetAiNoteExpression() ?? part.GetDefaultAiNoteExpression(),
             part.GetMinAiNoteExpression(), part.GetMaxAiNoteExpression());
+        V7Compat.RejectLegacyVibrato(options, "ai_vibrato_enabled");
         bool? vibrato = options.TryGetProperty("ai_vibrato_enabled", out _) ? ScoreBool(options, "ai_vibrato_enabled") : null;
         string[] mutable =["start_tick", "duration_tick", "number", "velocity", "lyric", "phonemes", "is_valid_phonemes",
             "lang_id", "expression", "ai_expression", "is_protected", "ai_vibrato_enabled"];
@@ -597,7 +619,7 @@ internal sealed partial class EngineHost
                     ?? throw new InvalidOperationException("Native note.add failed: " + part.LastError);
                 if (automaticAiDefaults is not null)
                     ScoreApplyAddedAiLyrics(session, part, edited, noteConverter!, automaticAiDefaults, lyric, language, surrounding);
-                else if (noteConverter is not null && (!noteConverter.SetLyrics((nint)edited, lyric, false, part.IsAi, out int converted) || converted != 1))
+                else if (noteConverter is not null && (!V7Compat.SetLyrics(noteConverter, edited, lyric, false, part.IsAi, out int converted) || converted != 1))
                     throw new ArgumentException("Native G2PA did not produce one syllable; use lyrics_apply for a phrase.");
             }
             else
@@ -655,7 +677,7 @@ internal sealed partial class EngineHost
                 ScoreRequire(edited.IsProtected == protect.Value, operation, session.Sequence);
             }
             if (vibrato is not null)
-                ScoreRequire(edited.SetAiVibratoEnabled(vibrato.Value), operation, session.Sequence);
+                ScoreRequire(V7Compat.SetAiVibratoEnabled(edited, vibrato.Value), operation, session.Sequence);
             return ScoreNoteSummary(edited, ScoreNoteIndex(part, edited));
         });
     }
@@ -692,11 +714,11 @@ internal sealed partial class EngineHost
         G2PAManager manager, ScoreAiLyricDefaults defaults, string lyric, int language,
         (WIVSMNote Note, string State)[] surrounding)
     {
-        var candidates = manager.CandidatePhonemes((nint)note, lyric, false, true);
+        var candidates = V7Compat.CandidatePhonemes(manager, note, lyric, false, true);
         string targetState = ScoreNoteConversionState(note, false);
         void Convert()
         {
-            if (!manager.SetLyrics((nint)note, lyric, false, true, out int affected) || affected != 1 ||
+            if (!V7Compat.SetLyrics(manager, note, lyric, false, true, out int affected) || affected != 1 ||
                 note.Lyric != lyric || note.LangID != language || string.IsNullOrEmpty(note.Phonemes) || !note.IsValidPhonemes)
                 throw new ArgumentException("Native G2PA did not resolve the complete single-syllable note lyric. "
                     + "A note holds one syllable; project_library lyrics_apply spreads a word or phrase over several notes.");
@@ -710,7 +732,7 @@ internal sealed partial class EngineHost
         string resolved = note.Phonemes;
         if (candidates.Count > 0)
         {
-            if (!candidates.Any(candidate => candidate.Count == 1 && candidate[0].Syllable == lyric && candidate[0].Phoneme == resolved))
+            if (!candidates.Any(candidate => candidate.Count == 1 && candidate[0].Syllable == lyric && candidate[0].Phonemes == resolved))
                 throw new ArgumentException("Native G2PA did not return a matching single-syllable candidate.");
         }
         else
@@ -874,17 +896,60 @@ internal sealed partial class EngineHost
         return (T)result;
     }
 
+#if VOCALOID7
+    private VoiceBank ScoreV7VoiceBank(string voiceId, bool isAi)
+    {
+        VoiceBank voice = EnsureDatabase().GetVoiceBankByCompID(voiceId)
+            ?? throw new ArgumentException("The voice is not installed: " + voiceId);
+        if (voice.IsAi != isAi)
+            throw new ArgumentException("Voice " + voiceId + " is incompatible with the target track type; VOCALOID7 requires the voice's native IsAi to match MidiAi/Midi.");
+        return voice;
+    }
+
+    private static WIVSMMidiTrack ScoreSettingsTarget(EngineSession session, JsonElement options)
+    {
+        V7Compat.RequireSettingsScope(options);
+        return ScoreMidiTrack(session, ScoreTrackIndex(session, options));
+    }
+
+    private object ScoreVoiceSummary(WIVSMMidiTrack part)
+#else
+    private static WIVSMMidiPart ScoreSettingsTarget(EngineSession session, JsonElement options)
+    {
+        V7Compat.RequireSettingsScope(options);
+        return ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options);
+    }
+
     private object ScoreVoiceSummary(WIVSMMidiPart part)
+#endif
     {
         // A new part keeps empty native name and language caches until it is saved and reopened.
         // The installed database entry shows which singer the assigned ID resolves to meanwhile.
-        string voiceId = part.IsAi ? part.AiVoiceBankID : part.VoiceBankID;
+        string voiceId = V7Compat.VoiceBankId(part);
+    #if VOCALOID7
+        VoiceBank? installed = string.IsNullOrEmpty(voiceId) ? null : EnsureDatabase().GetVoiceBankByCompID(voiceId);
+    #else
         VoiceBank? installed = string.IsNullOrEmpty(voiceId) ? null
-            : part.IsAi ? EnsureDatabase().GetVoiceBankByCompID(voiceId, VDMVoiceBankType.Dnn)
+            : V7Compat.IsAi(part) ? EnsureDatabase().GetVoiceBankByCompID(voiceId, VDMVoiceBankType.Dnn)
             : EnsureDatabase().GetVoiceBankByCompID(voiceId);
+    #endif
         return new
         {
-            ai = part.IsAi,
+            ai = V7Compat.IsAi(part),
+#if VOCALOID7
+            scope = "track", affects_all_parts_on_track = true,
+            voice_bank_id = V7Compat.VoiceBankId(part),
+            ai_voice_bank_id = V7Compat.VoiceBankId(part),
+            secondary_voice_bank_id = V7Compat.SecondaryVoiceBankId(part),
+            secondary_ai_voice_bank_id = V7Compat.SecondaryVoiceBankId(part),
+            voice_name = V7Compat.VoiceName(part),
+            ai_voice_name = V7Compat.VoiceName(part),
+            secondary_voice_name = V7Compat.SecondaryVoiceName(part),
+            secondary_ai_voice_name = V7Compat.SecondaryVoiceName(part),
+            lang_id = V7Compat.LangId(part),
+            ai_lang_ids = V7Compat.LangIds(part),
+            voice_type_id = part.VoiceTypeID,
+#else
             voice_bank_id = part.VoiceBankID,
             ai_voice_bank_id = part.AiVoiceBankID,
             secondary_voice_bank_id = part.SecondaryVoiceBankID,
@@ -895,11 +960,15 @@ internal sealed partial class EngineHost
             secondary_ai_voice_name = part.SecondaryAiVoiceName,
             lang_id = part.LangID,
             ai_lang_ids = part.AiLangIDs,
+#endif
             installed_voice = installed is null ? null : new
             {
                 name = installed.Name,
                 native_lang_id = installed.NativeLangID,
                 lang_ids = installed.LangIDs,
+#if VOCALOID7
+                compatible_with_track = installed.IsAi == V7Compat.IsAi(part),
+#endif
                 available_in_sequence = installed.IsAvailableInSequence
             }
         };
@@ -907,28 +976,41 @@ internal sealed partial class EngineHost
 
     private object ScoreVoiceEdit(EngineSession session, JsonElement options)
     {
-        WIVSMMidiPart part = ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options);
-        string primaryKey = part.IsAi ? "ai_voice_bank_id" : "voice_bank_id";
-        string secondaryKey = part.IsAi ? "secondary_ai_voice_bank_id" : "secondary_voice_bank_id";
-        if (options.TryGetProperty(part.IsAi ? "voice_bank_id" : "ai_voice_bank_id", out _) ||
-            options.TryGetProperty(part.IsAi ? "secondary_voice_bank_id" : "secondary_ai_voice_bank_id", out _))
-            throw new ArgumentException("Voice ID option does not match the part's native MIDI/AI type.");
+        var part = ScoreSettingsTarget(session, options);
+        bool isAi = V7Compat.IsAi(part);
+        string primaryKey = isAi ? "ai_voice_bank_id" : "voice_bank_id";
+        string secondaryKey = isAi ? "secondary_ai_voice_bank_id" : "secondary_voice_bank_id";
+        if (options.TryGetProperty(isAi ? "voice_bank_id" : "ai_voice_bank_id", out _) ||
+            options.TryGetProperty(isAi ? "secondary_voice_bank_id" : "secondary_ai_voice_bank_id", out _))
+            throw new ArgumentException("Voice ID option does not match the target's native MIDI/AI type.");
         string? primary = options.TryGetProperty(primaryKey, out _) ? ScoreString(options, primaryKey) : null;
         string? secondary = options.TryGetProperty(secondaryKey, out _) ? ScoreString(options, secondaryKey) : null;
         if (primary is null && secondary is null)
             throw new ArgumentException("voice.set requires " + primaryKey + " or " + secondaryKey + ".");
         EnsureVoiceServices();
+#if VOCALOID7
+        VoiceBank? primaryBank = primary is null ? null : ScoreV7VoiceBank(primary, isAi);
+        if (!string.IsNullOrEmpty(secondary)) ScoreV7VoiceBank(secondary, isAi);
+#endif
         return ScoreMutate(session, "voice.set", () =>
         {
             if (primary is not null)
             {
-                ScoreRequire(part.IsAi ? part.SetAiVoiceBankID(primary) : part.SetVoiceBankID(primary), "voice.set", session.Sequence);
-                ScoreRequire((part.IsAi ? part.AiVoiceBankID : part.VoiceBankID) == primary, "voice.set readback", session.Sequence);
+                ScoreRequire(V7Compat.SetVoice(part, primary), "voice.set", session.Sequence);
+                ScoreRequire(V7Compat.VoiceBankId(part) == primary, "voice.set readback", session.Sequence);
+#if VOCALOID7
+                if (isAi && primaryBank!.VoiceTypeByVoiceTypeID(part.VoiceTypeID) is null)
+                {
+                    ScoreRequire(part.SetVoiceTypeID(primaryBank.DefaultVoiceTypeID), "voice.set voice type", session.Sequence);
+                    ScoreRequire(part.VoiceTypeID == primaryBank.DefaultVoiceTypeID &&
+                        primaryBank.VoiceTypeByVoiceTypeID(part.VoiceTypeID) is not null, "voice.set voice type readback", session.Sequence);
+                }
+#endif
             }
             if (secondary is not null)
             {
-                ScoreRequire(part.IsAi ? part.SetSecondaryAiVoiceBankID(secondary) : part.SetSecondaryVoiceBankID(secondary), "voice.set", session.Sequence);
-                ScoreRequire((part.IsAi ? part.SecondaryAiVoiceBankID : part.SecondaryVoiceBankID) == secondary, "voice.set readback", session.Sequence);
+                ScoreRequire(V7Compat.SetSecondaryVoice(part, secondary), "voice.set", session.Sequence);
+                ScoreRequire(V7Compat.SecondaryVoiceBankId(part) == secondary, "voice.set readback", session.Sequence);
             }
             return ScoreVoiceSummary(part);
         });
@@ -1265,12 +1347,16 @@ internal sealed partial class EngineHost
         });
     }
 
+#if VOCALOID7
+    private static object ScorePerformanceView(WIVSMMidiTrack part)
+#else
     private static object ScorePerformanceView(WIVSMMidiPart part)
+#endif
     {
-        WIVSMRobotVoiceEffect? robot = part.RobotVoiceEffect;
-        WIVSMBreathEffect? breath = part.BreathEffect;
-        WIVSMTakeEffect? take = part.TakeEffect;
-        WIVSMVoiceColorEffect? color = part.VoiceColorEffect;
+        var track = V7Compat.Track(part);
+        WIVSMRobotVoiceEffect? robot = track.RobotVoiceEffect;
+        WIVSMBreathEffect? breath = track.BreathEffect;
+        WIVSMVoiceColorEffect? color = track.VoiceColorEffect;
         return new
         {
             robot = robot is null ? null : new { mode = robot.RobotVoiceMode.ToString(), modes = Enum.GetNames<VSMRobotVoiceMode>() },
@@ -1280,17 +1366,30 @@ internal sealed partial class EngineHost
                 type = breath.BreathType.ToString(), types = Enum.GetNames<VSMBreathType>(),
                 exhalation = breath.Exhalation, setting = breath.ExhalationSetting
             },
-            take = take is null ? null : new { lane = take.Lane, setting = take.LaneSetting },
+#if VOCALOID7
+            scope = "track", affects_all_parts_on_track = true,
+            take = new { take_number = track.TakeNumber, max_take_number = track.MaxTakeNumber, default_take_number = track.DefaultTakeNumber },
+#else
+            take = part.TakeEffect is null ? null : new { lane = part.TakeEffect.Lane, setting = part.TakeEffect.LaneSetting },
+#endif
             voice_colors = color is null ? null : Enum.GetValues<VSMVoiceColor>().Select(value => new
             {
+#if VOCALOID7
+                name = value.ToString(), value = track.VoiceColorValue(value), setting = color.VoiceColorSetting(value),
+#else
                 name = value.ToString(), value = color.VoiceColorValue(value), setting = color.VoiceColorSetting(value),
+#endif
                 applies_to = value is VSMVoiceColor.S5Expression or VSMVoiceColor.S5Air or VSMVoiceColor.S5Character ? "MidiAi" : "Midi",
+#if VOCALOID7
+                applicable_to_current_track = V7Compat.IsAi(part) == (value is VSMVoiceColor.S5Expression or VSMVoiceColor.S5Air or VSMVoiceColor.S5Character)
+#else
                 applicable_to_current_part = part.IsAi == (value is VSMVoiceColor.S5Expression or VSMVoiceColor.S5Air or VSMVoiceColor.S5Character)
+#endif
             }).ToArray(),
             bypass = Enum.GetValues<VSMMidiEffectType>().Select(value => new
             {
-                effect = value.ToString(), available = part.GetMidiEffect(value) is not null,
-                bypassed = part.IsBypassed(value)
+                effect = value.ToString(), available = track.GetMidiEffect(value) is not null,
+                bypassed = track.IsBypassed(value)
             }).ToArray()
         };
     }
@@ -1303,6 +1402,7 @@ internal sealed partial class EngineHost
         return value;
     }
 
+#if VOCALOID6
     private static string ScoreRobotVoiceScript(VSMRobotVoiceMode mode)
     {
         string path = new Yamaha.VOCALOID.LuaManager().GetRobotVoiceScriptPath(mode);
@@ -1325,7 +1425,115 @@ internal sealed partial class EngineHost
         if (effect.ScriptFilePath != path || effect.Timing != VSMMidiEffectTiming.BeforeRendering)
             throw new InvalidOperationException("Native RobotVoice runtime script setup failed.");
     }
+#else
+    private void PrepareRobotVoice(WIVSMMidiPart part)
+        => PrepareRobotVoice(V7Compat.Track(part));
 
+    private void PrepareRobotVoice(WIVSMMidiTrack track)
+    {
+        WIVSMRobotVoiceEffect? effect = track.RobotVoiceEffect;
+        if (effect is null || effect.IsBypassed) return;
+        string path = manager.RobotVoiceLuaPathByMode(effect.RobotVoiceMode);
+        if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            throw new FileNotFoundException("The installed native RobotVoice script is missing.", path);
+        PathGuard.NoLinks(path);
+        if (effect.ScriptFilePath != path) effect.ScriptFilePath = path;
+        if (effect.Timing != VSMMidiEffectTiming.BeforeRendering) effect.Timing = VSMMidiEffectTiming.BeforeRendering;
+        if (effect.ScriptFilePath != path || effect.Timing != VSMMidiEffectTiming.BeforeRendering)
+            throw new InvalidOperationException("Native RobotVoice runtime script setup failed.");
+    }
+#endif
+
+#if VOCALOID7
+    private object ScorePerformanceEdit(EngineSession session, JsonElement options)
+    {
+        int trackIndex = ScoreTrackIndex(session, options);
+        WIVSMMidiTrack track = ScoreSettingsTarget(session, options);
+        VSMRobotVoiceMode? robot = options.TryGetProperty("robot_mode", out _) ? ScorePerformanceEnum<VSMRobotVoiceMode>(options, "robot_mode") : null;
+        VSMBreathMode? breathMode = options.TryGetProperty("breath_mode", out _) ? ScorePerformanceEnum<VSMBreathMode>(options, "breath_mode") : null;
+        VSMBreathType? breathType = options.TryGetProperty("breath_type", out _) ? ScorePerformanceEnum<VSMBreathType>(options, "breath_type") : null;
+        if (robot.HasValue && track.RobotVoiceEffect is null)
+            throw new NotSupportedException("The native track has no RobotVoice effect.");
+        WIVSMBreathEffect? breath = track.BreathEffect;
+        WIVSMVoiceColorEffect? color = track.VoiceColorEffect;
+        if ((breathMode.HasValue || breathType.HasValue || options.TryGetProperty("breath_exhalation", out _)) && breath is null)
+            throw new NotSupportedException("The native track has no Breath effect.");
+        int? exhalation = options.TryGetProperty("breath_exhalation", out _)
+            ? ScoreInt(options, "breath_exhalation", breath!.ExhalationSetting.LowerBoundValue, breath.ExhalationSetting.UpperBoundValue) : null;
+        if (options.TryGetProperty("take_lane", out _))
+            throw new NotSupportedException("VOCALOID7 take_lane has no verified mapping to take_number; request take_number explicitly.");
+        int? take = options.TryGetProperty("take_number", out _)
+            ? ScoreInt(options, "take_number", 0, track.MaxTakeNumber) : null;
+        Dictionary<VSMVoiceColor, int> colors = [];
+        if (options.TryGetProperty("voice_colors", out JsonElement colorOptions))
+        {
+            if (colorOptions.ValueKind != JsonValueKind.Object || color is null)
+                throw new ArgumentException("voice_colors requires a native VoiceColor effect and an object of values.");
+            foreach (JsonProperty entry in colorOptions.EnumerateObject())
+            {
+                if (!Enum.TryParse(entry.Name, true, out VSMVoiceColor name) || !Enum.IsDefined(name) || colors.ContainsKey(name))
+                    throw new ArgumentException("Unknown or duplicate voice color: " + entry.Name);
+                VSMMidiEffectSetting bounds = color.VoiceColorSetting(name);
+                if (!entry.Value.TryGetInt32(out int value) || value < bounds.LowerBoundValue || value > bounds.UpperBoundValue)
+                    throw new ArgumentOutOfRangeException(entry.Name, "Voice color exceeds its native bounds.");
+                colors.Add(name, value);
+            }
+        }
+        Dictionary<VSMMidiEffectType, bool> bypass = [];
+        if (options.TryGetProperty("bypass", out JsonElement bypassOptions))
+        {
+            if (bypassOptions.ValueKind != JsonValueKind.Object)
+                throw new ArgumentException("bypass must be an object of native MIDI effect names and booleans.");
+            foreach (JsonProperty entry in bypassOptions.EnumerateObject())
+            {
+                if (!Enum.TryParse(entry.Name, true, out VSMMidiEffectType name) || !Enum.IsDefined(name) || bypass.ContainsKey(name)
+                    || track.GetMidiEffect(name) is null || entry.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    throw new ArgumentException("Unavailable, duplicate, or invalid MIDI effect bypass: " + entry.Name);
+                bypass.Add(name, entry.Value.GetBoolean());
+            }
+        }
+        if (robot.HasValue) bypass.TryAdd(VSMMidiEffectType.RobotVoice, false);
+        if (breathMode.HasValue || breathType.HasValue || exhalation.HasValue)
+            bypass.TryAdd(VSMMidiEffectType.Breath, false);
+        if (colors.Count != 0) bypass.TryAdd(VSMMidiEffectType.VoiceColor, false);
+        if (!robot.HasValue && !breathMode.HasValue && !breathType.HasValue && !exhalation.HasValue && !take.HasValue
+            && colors.Count == 0 && bypass.Count == 0)
+            throw new ArgumentException("performance.set requires at least one performance value.");
+
+        return ScoreMutate(session, "performance.set", () =>
+        {
+            if (robot.HasValue && track.RobotVoiceMode != robot.Value)
+                ScoreRequire(track.SetRobotVoiceMode(robot.Value), "performance.set robot", session.Sequence);
+            if (breathMode.HasValue && track.BreathMode != breathMode.Value)
+                ScoreRequire(track.SetBreathMode(breathMode.Value), "performance.set breath mode", session.Sequence);
+            if (breathType.HasValue && track.BreathType != breathType.Value)
+                ScoreRequire(track.SetBreathType(breathType.Value), "performance.set breath type", session.Sequence);
+            if (exhalation.HasValue && track.BreathExhalation != exhalation.Value)
+                ScoreRequire(track.SetBreathExhalation(exhalation.Value), "performance.set exhalation", session.Sequence);
+            if (take.HasValue && track.TakeNumber != take.Value)
+                ScoreRequire(track.SetTakeNumber(take.Value), "performance.set take", session.Sequence);
+            foreach ((VSMVoiceColor name, int value) in colors)
+                if (track.VoiceColorValue(name) != value)
+                    ScoreRequire(track.SetVoiceColor(name, value), "performance.set voice color", session.Sequence);
+            foreach ((VSMMidiEffectType name, bool value) in bypass)
+                if (track.IsBypassed(name) != value)
+                    ScoreRequire(track.SetBypass(name, value), "performance.set bypass", session.Sequence);
+            PrepareRobotVoice(track);
+            return true;
+        }, () =>
+        {
+            WIVSMMidiTrack currentTrack = ScoreMidiTrack(session, trackIndex);
+            ScoreRequire((!robot.HasValue || currentTrack.RobotVoiceMode == robot.Value)
+                && (!breathMode.HasValue || currentTrack.BreathMode == breathMode.Value)
+                && (!breathType.HasValue || currentTrack.BreathType == breathType.Value)
+                && (!exhalation.HasValue || currentTrack.BreathExhalation == exhalation.Value)
+                && (!take.HasValue || currentTrack.TakeNumber == take.Value)
+                && colors.All(entry => currentTrack.VoiceColorValue(entry.Key) == entry.Value)
+                && bypass.All(entry => currentTrack.IsBypassed(entry.Key) == entry.Value), "performance.set readback", session.Sequence);
+            return ScorePerformanceView(currentTrack);
+        });
+    }
+#else
     private static object ScorePerformanceEdit(EngineSession session, JsonElement options)
     {
         int trackIndex = ScoreTrackIndex(session, options);
@@ -1425,6 +1633,7 @@ internal sealed partial class EngineHost
             return ScorePerformanceView(current);
         });
     }
+#endif
 
     private static object ScoreAutomationList(EngineSession session, JsonElement options)
     {
@@ -1800,6 +2009,7 @@ internal sealed partial class EngineHost
                 ? ScorePatchExpression(update, "ai_expression", note.GetAiNoteExpression(), part.GetMinAiNoteExpression(), part.GetMaxAiNoteExpression()) : null;
             VSMNoteExpression? classic = update.TryGetProperty("expression", out _)
                 ? ScorePatchExpression(update, "expression", note.GetNoteExpression(), part.GetMinNoteExpression(), part.GetMaxNoteExpression()) : null;
+            V7Compat.RejectLegacyVibrato(update, "ai_vibrato_enabled");
             bool? vibrato = update.TryGetProperty("ai_vibrato_enabled", out _) ? ScoreBool(update, "ai_vibrato_enabled") : null;
             if (number is null && duration is null && velocity is null && ai is null && classic is null && vibrato is null)
                 throw new ArgumentException("Update " + index + " changes nothing.");
@@ -1823,7 +2033,7 @@ internal sealed partial class EngineHost
                 if (item.Ai is not null)
                     ScoreRequire(item.Note.SetAiNoteExpression(item.Ai.Value), "note.batch_update ai_expression", session.Sequence);
                 if (item.Vibrato is not null)
-                    ScoreRequire(item.Note.SetAiVibratoEnabled(item.Vibrato.Value), "note.batch_update ai_vibrato", session.Sequence);
+                    ScoreRequire(V7Compat.SetAiVibratoEnabled(item.Note, item.Vibrato.Value), "note.batch_update ai_vibrato", session.Sequence);
             }
             return true;
         }, () =>
@@ -1835,7 +2045,7 @@ internal sealed partial class EngineHost
                 ScoreRequire((item.Number is null || note.NoteNumber == item.Number)
                     && (item.Duration is null || note.DurationTick.Value == item.Duration)
                     && (item.Velocity is null || note.NoteVelocity == item.Velocity)
-                    && (item.Vibrato is null || note.IsAiVibratoEnabled == item.Vibrato),
+                    && (item.Vibrato is null || V7Compat.IsAiVibratoEnabled(note) == item.Vibrato),
                     "note.batch_update readback", session.Sequence);
             }
             return new { updated = plan.Count, note_count = ScoreCount(current.NumNotes) };
@@ -1889,11 +2099,22 @@ internal sealed partial class EngineHost
             object[] Events(VSMVibratoEventType type) => Enumerable.Range(0, ScoreCount(n.GetNumVibratoEvent(type)))
                 .Select(i => n.GetVibratoEvent(type, (ulong)i)!).Select(e => (object)new { tick = e.RelPosTick.Value, value = e.Value }).ToArray();
             object Range(VSMVibratoEventType type) => new { minimum = n.GetMinVibratoEventValue(type), maximum = n.GetMaxVibratoEventValue(type) };
-            return new { type = n.VibratoType.ToString(), duration_tick = n.VibratoDurationTick.Value, ai_enabled = n.IsAiVibratoEnabled,
+            return new { type = n.VibratoType.ToString(), duration_tick = n.VibratoDurationTick.Value, ai_enabled = V7Compat.IsAiVibratoEnabled(n),
+#if VOCALOID7
+                curve_model = n.VibratoAiCurveModel.ToString(), curve_models = Enum.GetNames<VSMVibratoAiCurveModel>(),
+#endif
                 depth = Events(VSMVibratoEventType.Depth), rate = Events(VSMVibratoEventType.Rate),
                 types = Enum.GetNames<VSMVibratoType>(), depth_range = Range(VSMVibratoEventType.Depth), rate_range = Range(VSMVibratoEventType.Rate) };
         }
         if (operation == "vibrato.get") return Read();
+        V7Compat.RejectLegacyVibrato(options, "ai_enabled");
+    #if VOCALOID7
+        VSMVibratoAiCurveModel? curveModel = options.TryGetProperty("curve_model", out _)
+            ? ScorePerformanceEnum<VSMVibratoAiCurveModel>(options, "curve_model") : null;
+    #else
+        if (options.TryGetProperty("curve_model", out _))
+            throw new NotSupportedException("curve_model requires VOCALOID7; VOCALOID6 uses ai_enabled.");
+    #endif
         WIVSMNote note = GetNote();
         VSMVibratoType? type = options.TryGetProperty("type", out _) ? ScorePerformanceEnum<VSMVibratoType>(options, "type") : null;
         int? duration = options.TryGetProperty("duration_tick", out _) ? ScoreInt(options, "duration_tick", 0, checked((int)note.DurationTick.Value)) : null;
@@ -1913,11 +2134,18 @@ internal sealed partial class EngineHost
             }
         }
         bool hasDepth = options.TryGetProperty("depth", out _), hasRate = options.TryGetProperty("rate", out _);
-        if (type is null && duration is null && enabled is null && !hasDepth && !hasRate) throw new ArgumentException("A vibrato field is required.");
+        if (type is null && duration is null && enabled is null && !hasDepth && !hasRate
+    #if VOCALOID7
+            && curveModel is null
+    #endif
+        ) throw new ArgumentException("A vibrato field is required.");
         return ScoreMutate(session, operation, () => {
+    #if VOCALOID7
+            if (curveModel is not null) ScoreRequire(note.SetVibratoAiCurveModel(curveModel.Value), operation + " curve_model", session.Sequence);
+    #endif
             if (type is not null) note.VibratoType = type.Value;
             if (duration is not null) ScoreRequire(note.SetVibratoDuration(new VSMRelTick(duration.Value)), operation + " duration", session.Sequence);
-            if (enabled is not null) ScoreRequire(note.SetAiVibratoEnabled(enabled.Value), operation + " ai_enabled", session.Sequence);
+            if (enabled is not null) ScoreRequire(V7Compat.SetAiVibratoEnabled(note, enabled.Value), operation + " ai_enabled", session.Sequence);
             if (hasDepth && note.GetNumVibratoEvent(VSMVibratoEventType.Depth) > 0)
                 ScoreRequire(note.RemoveAllVibratoEvents(VSMVibratoEventType.Depth), operation + " depth clear", session.Sequence);
             if (hasRate && note.GetNumVibratoEvent(VSMVibratoEventType.Rate) > 0)
@@ -1928,8 +2156,11 @@ internal sealed partial class EngineHost
             return true;
         }, () => {
             WIVSMNote current = GetNote();
+#if VOCALOID7
+            ScoreRequire(curveModel is null || current.VibratoAiCurveModel == curveModel.Value, operation + " curve_model readback", session.Sequence);
+#endif
             ScoreRequire((type is null || current.VibratoType == type.Value) && (duration is null || current.VibratoDurationTick.Value == duration.Value) &&
-                (enabled is null || current.IsAiVibratoEnabled == enabled.Value), operation + " readback", session.Sequence);
+                (enabled is null || V7Compat.IsAiVibratoEnabled(current) == enabled.Value), operation + " readback", session.Sequence);
             foreach (VSMVibratoEventType kind in new[] { VSMVibratoEventType.Depth, VSMVibratoEventType.Rate })
             {
                 if (kind == VSMVibratoEventType.Depth ? !hasDepth : !hasRate) continue;

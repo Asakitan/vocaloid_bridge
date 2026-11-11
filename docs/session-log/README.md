@@ -45,3 +45,4 @@
 | [session-41](session-41.md) | 2026-11-11 | README 改为猫娘助手语气，本机部署/验收记录移出；新增 CHANGELOG 汇总 0.1.0–0.27.0 |
 | [session-42](session-42.md) | 2026-11-11 | 跳进音符的滑音破音（PitchTransition / PitchDrift 实测）、句末爆音、take 与 `batch.run` 使用经验、渲染前导 0.5 秒；无代码改动 |
 | [session-43](session-43.md) | 2026-11-11 | 0.28.0：临时文件自动清理（默认 1 小时，启动后每 10 分钟）、手动 dry-run/apply 入口、`vocaloid_status.temp_cleanup`；真实工作区首次清理删除 4573 个文件 / 5.5 GB |
+| [session-44](session-44.md) | 2026-11-11 | 0.29.0：V6/V7 自动选择与产品隔离构建、VoiceTypeID 渲染修复、纯 V7 文件编曲；双版本 stdio 非静音合成通过，V7 不支持项显式保留 |

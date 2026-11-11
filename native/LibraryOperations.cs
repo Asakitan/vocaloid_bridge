@@ -7,15 +7,23 @@ using System.Text.Json.Serialization;
 using Yamaha.VOCALOID.G2PA;
 using Yamaha.VOCALOID.PathResource;
 using Yamaha.VOCALOID.VEM;
+#if !VOCALOID7
 using Yamaha.VOCALOID.VMM;
+#endif
 using Yamaha.VOCALOID.VSM;
 using Yamaha.VOCALOID.VSStyle;
 using NativeStyle = Yamaha.VOCALOID.VSStyle.Style;
 using NativeStyleEffect = Yamaha.VOCALOID.VSStyle.Effect;
+#if VOCALOID7
+using WEffectManager = Yamaha.VOCALOID.VEM.WAudioEffectManager;
+#endif
+#if !VOCALOID7
 using NativeMutableEffect = Yamaha.VOCALOID.VMM.MutableEffect;
+#endif
 
 internal sealed partial class EngineHost
 {
+#if !VOCALOID7
     [DllImport("vmm", EntryPoint = "VIS_VMM_MidiPartBase_secondaryVoiceBankID", CallingConvention = CallingConvention.Cdecl)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories)]
     private static extern nint LibrarySecondaryVoiceBankId(nint part);
@@ -23,10 +31,13 @@ internal sealed partial class EngineHost
     [DllImport("vmm", EntryPoint = "VIS_VMM_MidiPartBase_secondaryAiVoiceBankID", CallingConvention = CallingConvention.Cdecl)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories)]
     private static extern nint LibrarySecondaryAiVoiceBankId(nint part);
+#endif
 
     private readonly Dictionary<G2PAManagerLangID, G2PAManager> libraryLyrics = new();
     private StyleManager? libraryStyles;
+#if !VOCALOID7
     private MediaManager? libraryMedia;
+#endif
 
     private sealed class LibraryNoteValidity
     {
@@ -63,6 +74,7 @@ internal sealed partial class EngineHost
         Lyric = note.Lyric, Phonemes = note.Phonemes, LanguageId = note.LangID, IsValid = note.IsValidPhonemes
     };
 
+#if !VOCALOID7
     private LibraryNoteValidity LibrarySnapshotMediaNote(WIVSMNote note)
     {
         LibraryNoteValidity result = LibrarySnapshotValidity(note);
@@ -86,6 +98,7 @@ internal sealed partial class EngineHost
         }
         return result;
     }
+#endif
 
     internal object LibraryOperation(string? id, string operation, JsonElement options)
     {
@@ -93,6 +106,10 @@ internal sealed partial class EngineHost
         if (options.ValueKind is not (JsonValueKind.Object or JsonValueKind.Undefined or JsonValueKind.Null))
             throw new ArgumentException("options must be an object.");
         bool mediaOperation = operation.StartsWith("media_", StringComparison.Ordinal);
+    #if VOCALOID7
+        if (mediaOperation)
+            throw new NotSupportedException("VOCALOID7 removed MediaManager; media_* operations and journal recovery require VOCALOID6.");
+    #endif
         using MediaLibraryLease? lease = mediaOperation ? new MediaLibraryLease(Workspace) : null;
         if (mediaOperation)
         {
@@ -129,12 +146,17 @@ internal sealed partial class EngineHost
                 "style_capture" => LibraryCaptureStyle(LibrarySession(id), options),
                 "style_update" => LibraryUpdateStyle(LibrarySession(id), options),
                 "style_delete" => LibraryDeleteStyle(LibrarySession(id), options),
+#if VOCALOID7
+                "media_list" or "media_get" or "media_update" or "media_delete" or "media_capture" or "media_import"
+                    => throw new NotSupportedException("VOCALOID7 removed the managed MediaManager API; the media library is unavailable. Import WAV audio with project_audio import_audio instead."),
+#else
                 "media_list" => LibraryMediaList(options),
                 "media_get" => LibraryClipView(LibraryClip(LibraryText(options, "clip_id")), true),
                 "media_update" => LibraryUpdateMedia(LibrarySession(id), options),
                 "media_delete" => LibraryDeleteMedia(LibrarySession(id), options),
                 "media_capture" => LibraryCaptureMedia(LibrarySession(id), options),
                 "media_import" => LibraryImportMedia(LibrarySession(id), options),
+#endif
                 "media_recovery_list" => MediaPropertyJournal.ListPending(Workspace),
                 "media_recovery_resolve" => MediaPropertyJournal.Resolve(Workspace, LibraryText(options, "journal_token"),
                     LibraryText(options, "choice"), LibraryText(options, "expected_revision")),
@@ -367,6 +389,40 @@ internal sealed partial class EngineHost
         @protected = note.IsProtected
     };
 
+#if VOCALOID7
+    private object LibrarySingingSkillCatalog() => new
+    {
+        skills = Enumerable.Range(0, checked((int)manager.NumSingingSkills)).Select(index =>
+        {
+            WIVSMSingingSkill skill = manager.SingingSkillAtIndex((uint)index)
+                ?? throw new InvalidOperationException("Native Singing Skill catalog entry is missing.");
+            return new
+            {
+                name = skill.Name, plugin_id = skill.PluginID,
+                genres = Enumerable.Range(0, checked((int)skill.NumGenres)).Select(genre => skill.GenreAtIndex((uint)genre)).ToArray(),
+                timing = skill.Timing.ToString(), available = !string.IsNullOrEmpty(skill.LuaPath) && File.Exists(skill.LuaPath)
+            };
+        }).ToArray()
+    };
+
+    private void PrepareSingingSkill(WIVSMMidiPart part)
+        => PrepareSingingSkill(V7Compat.Track(part));
+
+    private void PrepareSingingSkill(WIVSMMidiTrack part)
+    {
+        if (V7Compat.IsAi(part)) return;
+        WIVSMSingingSkillEffect? effect = V7Compat.Track(part).SingingSkillEffect;
+        if (effect is null || effect.IsBypassed) return;
+        WIVSMSingingSkill skill = manager.SingingSkillByPluginID(effect.PluginID)
+            ?? throw new InvalidOperationException("The selected native Singing Skill is not installed.");
+        if (string.IsNullOrEmpty(skill.LuaPath) || !File.Exists(skill.LuaPath))
+            throw new FileNotFoundException("The selected native Singing Skill script is missing.", skill.LuaPath);
+        PathGuard.NoLinks(skill.LuaPath);
+        if (effect.ScriptFilePath != skill.LuaPath) effect.ScriptFilePath = skill.LuaPath;
+        if (effect.Timing != skill.Timing) effect.Timing = skill.Timing;
+        LibraryRequire(effect.ScriptFilePath == skill.LuaPath && effect.Timing == skill.Timing, "prepare Singing Skill runtime");
+    }
+#else
     private static Yamaha.VOCALOID.LuaManager LibrarySkillManager() => new();
 
     private static object LibrarySingingSkillCatalog() => new
@@ -393,15 +449,20 @@ internal sealed partial class EngineHost
         LibraryRequire(manager.SetScriptFilePathToMidiEffectSingingSkill(effect) &&
             manager.SetTimingToMidiEffectSingingSkill(effect), "prepare Singing Skill runtime");
     }
+#endif
 
     private object LibrarySingingSkillView(EngineSession session, JsonElement options)
     {
-        WIVSMMidiPart part = LibraryMidiPart(session, options);
-        if (part.IsAi) throw new NotSupportedException("Singing Skill is available on classic VOCALOID parts.");
-        WIVSMSingingSkillEffect effect = part.SingingSkillEffect
+        var part = ScoreSettingsTarget(session, options);
+        if (V7Compat.IsAi(part)) throw new NotSupportedException("Singing Skill is available on classic VOCALOID tracks/parts.");
+        WIVSMSingingSkillEffect effect = V7Compat.Track(part).SingingSkillEffect
             ?? throw new NotSupportedException("Singing Skill is available on classic VOCALOID parts.");
         return new
         {
+            scope = V7Compat.SettingsScope,
+#if VOCALOID7
+            affects_all_parts_on_track = true,
+#endif
             plugin_id = effect.PluginID, skill = effect.Skill, amount = effect.Amount,
             bypassed = effect.IsBypassed, skill_bounds = effect.SkillSetting, amount_bounds = effect.AmountSetting,
             timing = effect.Timing.ToString()
@@ -410,13 +471,17 @@ internal sealed partial class EngineHost
 
     private object LibrarySingingSkillEdit(EngineSession session, JsonElement options)
     {
-        WIVSMMidiPart part = LibraryMidiPart(session, options);
-        if (part.IsAi) throw new NotSupportedException("Singing Skill is available on classic VOCALOID parts.");
-        WIVSMSingingSkillEffect effect = part.SingingSkillEffect
+        var part = ScoreSettingsTarget(session, options);
+        if (V7Compat.IsAi(part)) throw new NotSupportedException("Singing Skill is available on classic VOCALOID tracks/parts.");
+        WIVSMSingingSkillEffect effect = V7Compat.Track(part).SingingSkillEffect
             ?? throw new NotSupportedException("Singing Skill is available on classic VOCALOID parts.");
         string plugin = LibraryText(options, "plugin_id", effect.PluginID);
+#if VOCALOID7
+    if (manager.SingingSkillByPluginID(plugin) is null)
+#else
         if (LibrarySkillManager().GetSingingSkillByPluginID(plugin) is null)
-            throw new ArgumentException("plugin_id must identify an installed native Singing Skill.");
+#endif
+        throw new ArgumentException("plugin_id must identify an installed native Singing Skill.");
         int skill = options.TryGetProperty("skill", out _) ? ScoreInt(options, "skill", effect.SkillSetting.LowerBoundValue, effect.SkillSetting.UpperBoundValue) : effect.Skill;
         int amount = options.TryGetProperty("amount", out _) ? ScoreInt(options, "amount", effect.AmountSetting.LowerBoundValue, effect.AmountSetting.UpperBoundValue) : effect.Amount;
         bool bypass = LibraryBool(options, "bypassed", effect.IsBypassed);
@@ -428,7 +493,15 @@ internal sealed partial class EngineHost
             if (effect.IsBypassed != bypass) LibraryRequire(effect.SetBypass(bypass), "Singing Skill bypass");
             PrepareSingingSkill(part);
             return true;
-        }, () => LibrarySingingSkillView(session, options));
+        }, () =>
+        {
+            var current = ScoreSettingsTarget(session, options);
+            WIVSMSingingSkillEffect actual = V7Compat.Track(current).SingingSkillEffect
+                ?? throw new InvalidOperationException("Singing Skill is missing after mutation.");
+            LibraryRequire(actual.PluginID == plugin && actual.Skill == skill && actual.Amount == amount && actual.IsBypassed == bypass,
+                "Singing Skill readback");
+            return LibrarySingingSkillView(session, options);
+        });
     }
 
     private object LibraryNoteSkillView(EngineSession session, JsonElement options)
@@ -473,7 +546,7 @@ internal sealed partial class EngineHost
         WIVSMNote note = LibraryNote(LibraryMidiPart(session, options), options);
         G2PAManagerLangID language = LibraryLanguage(options, note.LangID);
         string lyrics = LibraryText(options, "lyrics");
-        var candidates = LibraryLyrics(language).CandidatePhonemes((nint)note, lyrics,
+        var candidates = V7Compat.CandidatePhonemes(LibraryLyrics(language), note, lyrics,
             LibraryBool(options, "use_extension_dictionary"), note.IsAi);
         return new
         {
@@ -482,7 +555,7 @@ internal sealed partial class EngineHost
             candidates = candidates.Select(candidate => candidate.Select(syllable => new
             {
                 lyric = syllable.Syllable,
-                phonemes = syllable.Phoneme
+                phonemes = syllable.Phonemes
             }).ToArray()).ToArray()
         };
     }
@@ -498,15 +571,15 @@ internal sealed partial class EngineHost
             {
                 int[] languages = LibraryOption(options, "language_id").ValueKind != JsonValueKind.Undefined
                     ? [(int)LibraryLanguage(options)]
-                    : part.Notes.Select(note => note.LangID).Append(part.LangID)
+                    : part.Notes.Select(note => note.LangID).Append(V7Compat.LangId(part))
                         .Where(language => Enum.IsDefined((G2PAManagerLangID)language)).Distinct().ToArray();
                 if (languages.Length == 0)
                     throw new ArgumentException("language_id is required because the part and its notes have no initialized native language.");
                 G2PAManager[] managers = languages.Select(language => LibraryLyrics((G2PAManagerLangID)language)).ToArray();
                 foreach (G2PAManager manager in managers)
                     LibraryRequire(operation == "lyrics_reset"
-                        ? manager.ResetLyrics((nint)part, part.IsAi)
-                        : manager.ResetPhonemes((nint)part, part.IsAi), operation);
+                        ? V7Compat.ResetLyrics(manager, part)
+                        : V7Compat.ResetPhonemes(manager, part), operation);
                 affectedLength = part.Notes.Count;
             }
             else
@@ -520,7 +593,7 @@ internal sealed partial class EngineHost
                     ? null : LibraryBool(options, "protect");
                 if (operation == "phonemes_apply")
                 {
-                    LibraryRequire(manager.SetPhonemes((nint)note, text, note.IsAi), operation);
+                    LibraryRequire(V7Compat.SetPhonemes(manager, note, text, note.IsAi), operation);
                     affectedLength = 1;
                 }
                 else
@@ -529,10 +602,10 @@ internal sealed partial class EngineHost
                         throw new ArgumentException(ScoreLyricRejection((int)requestedLanguage, "lyrics"));
                     WIVSMNote[] before = part.Notes.ToArray();
                     int first = ScoreNoteIndex(part, note);
-                    var candidates = manager.CandidatePhonemes((nint)note, text, extension, note.IsAi);
+                    var candidates = V7Compat.CandidatePhonemes(manager, note, text, extension, note.IsAi);
                     string[] states = before.Select(item => LibraryLyricState(item, false)).ToArray();
                     string[] fullStates = before.Select(item => LibraryLyricState(item, true)).ToArray();
-                    LibraryRequire(manager.SetLyrics((nint)note, text, extension, note.IsAi, out affectedLength), operation);
+                    LibraryRequire(V7Compat.SetLyrics(manager, note, text, extension, note.IsAi, out affectedLength), operation);
                     WIVSMNote[] after = part.Notes.ToArray();
                     if (affectedLength < 1 || affectedLength > after.Length - first || before.Length != after.Length)
                         throw new InvalidOperationException("Native G2PA did not cover the requested phrase within the available notes.");
@@ -549,7 +622,7 @@ internal sealed partial class EngineHost
                     if (candidates.Count > 0)
                     {
                         if (!candidates.Any(candidate => candidate.Count == applied.Length &&
-                            candidate.Zip(applied).All(pair => pair.First.Syllable == pair.Second.Lyric && pair.First.Phoneme == pair.Second.Phonemes)))
+                            candidate.Zip(applied).All(pair => pair.First.Syllable == pair.Second.Lyric && pair.First.Phonemes == pair.Second.Phonemes)))
                             throw new InvalidOperationException("Native G2PA did not preserve a complete phrase candidate.");
                     }
                     else
@@ -609,9 +682,22 @@ internal sealed partial class EngineHost
     {
         if (libraryStyles is not null)
             return libraryStyles;
-        StyleManager? created = StyleManagerIF.CreateStyleManager("VOCALOID6",
+        string[] readOnlyRoots = LibraryReadOnlyRoots(ResourceType.StylePreset);
+#if VOCALOID7
+        HashSet<string> styleRoots = new(readOnlyRoots, StringComparer.OrdinalIgnoreCase);
+        var voiceDatabase = EnsureDatabase();
+        for (ulong index = 0; index < voiceDatabase.NumAiVoiceBanks; index++)
+        {
+            var voice = voiceDatabase.GetVoiceBankByIndex(index, Yamaha.VOCALOID.VDM.VDMVoiceBankType.Dnn);
+            if (voice is null || voice.MajorVersion != 7 || string.IsNullOrWhiteSpace(voice.DirectoryPath)) continue;
+            string directory = Path.Combine(voice.DirectoryPath, "StylePreset");
+            if (Directory.Exists(directory)) styleRoots.Add(Path.GetFullPath(directory));
+        }
+        readOnlyRoots = styleRoots.ToArray();
+#endif
+        StyleManager? created = StyleManagerIF.CreateStyleManager(EngineProduct,
             ResourceType.StylePreset.SystemPrimaryPath(), LibraryDirectory("styles"),
-            LibraryReadOnlyRoots(ResourceType.StylePreset), [], out VSStyleError result);
+            readOnlyRoots, [], out VSStyleError result);
         if (created is null || result != VSStyleError.None)
         {
             created?.Dispose();
@@ -635,6 +721,7 @@ internal sealed partial class EngineHost
         }
     }
 
+#if !VOCALOID7
     private MediaManager LibraryMedia()
     {
         if (libraryMedia is not null)
@@ -642,7 +729,7 @@ internal sealed partial class EngineHost
         using MediaLibraryLease? lease = mediaAccessDepth == 0 ? new MediaLibraryLease(Workspace) : null;
         if (lease is not null) MediaPropertyJournal.RecoverAll(Workspace);
         VMMError result = VMMError.None;
-        MediaManager? created = MediaManagerIF.CreateMediaManager("VOCALOID6",
+        MediaManager? created = MediaManagerIF.CreateMediaManager(EngineProduct,
             ResourceType.Media.SystemPrimaryPath(), LibraryDirectory("media"),
             LibraryReadOnlyRoots(ResourceType.Media), [], ref result);
         if (created is null || result != VMMError.None)
@@ -664,6 +751,7 @@ internal sealed partial class EngineHost
             throw;
         }
     }
+#endif
 
     private static T[] LibraryValues<T>(ulong count, Func<ulong, T> read)
     {
@@ -688,9 +776,11 @@ internal sealed partial class EngineHost
         .FirstOrDefault(style => style.Id == id)
         ?? throw new ArgumentException("style_id was not found in the native catalog.");
 
+#if !VOCALOID7
     private Clip LibraryClip(string id) => LibraryMedia().AllClipEnumerator()
         .FirstOrDefault(clip => clip.ID == id)
         ?? throw new ArgumentException("clip_id was not found in the native catalog.");
+#endif
 
     private static object LibraryStyleEffectView(NativeStyleEffect effect) => new
     {
@@ -770,9 +860,9 @@ internal sealed partial class EngineHost
 
     private object LibraryCaptureStyle(EngineSession session, JsonElement options)
     {
+        var part = ScoreSettingsTarget(session, options);
         bool includeAudio = LibraryBool(options, "include_audio", true);
         LibraryRequireStyleTransportReleased(includeAudio);
-        WIVSMMidiPart part = LibraryMidiPart(session, options);
         if (session.Sequence.IsStaged)
             throw new InvalidOperationException("Commit or roll back pending native edits before capturing a style.");
         string name = LibraryText(options, "name");
@@ -782,10 +872,10 @@ internal sealed partial class EngineHost
         try
         {
             draft.Name = name;
-            if (part.LangID >= 0) LibraryRequire(draft.AddLanguage(part.LangID), "capture style language");
+            if (V7Compat.LangId(part) >= 0) LibraryRequire(draft.AddLanguage(V7Compat.LangId(part)), "capture style language");
             foreach (string tag in LibraryStrings(options, "sub_genres")) LibraryRequire(draft.AddSubGenre(tag), "capture style genre");
             foreach (string tag in LibraryStrings(options, "colors")) LibraryRequire(draft.AddColor(tag), "capture style color");
-            WIVSMEffectManager effects = part.EffectManager
+            WIVSMEffectManager effects = V7Compat.Track(part).EffectManager
                 ?? throw new InvalidOperationException("Native part effect manager is absent.");
             ulong destination = 0;
             for (ulong index = 0; index < effects.NumMidiEffect; index++)
@@ -806,17 +896,21 @@ internal sealed partial class EngineHost
             if (!File.Exists(verified.Path)) throw new IOException("Native style save did not create its file.");
             return ScoreMutate(session, "style_capture", () =>
             {
-                if (part.StyleName != verified.Name)
-                    LibraryRequire(part.SetStyleName(verified.Name), "captured style name");
-                if (part.StylePresetID != savedId)
-                    LibraryRequire(part.SetStylePresetID(savedId), "captured style identity");
+                if (V7Compat.Track(part).StyleName != verified.Name)
+                    LibraryRequire(V7Compat.Track(part).SetStyleName(verified.Name), "captured style name");
+                if (V7Compat.Track(part).StylePresetID != savedId)
+                    LibraryRequire(V7Compat.Track(part).SetStylePresetID(savedId), "captured style identity");
                 return true;
             }, () =>
             {
-                WIVSMMidiPart current = LibraryMidiPart(session, options);
-                LibraryRequire(current.StyleName == verified.Name && current.StylePresetID == savedId,
+                var current = ScoreSettingsTarget(session, options);
+                LibraryRequire(V7Compat.Track(current).StyleName == verified.Name && V7Compat.Track(current).StylePresetID == savedId,
                     "captured style identity readback");
-                return new { session_id = session.Id, style = LibraryStyleView(verified, true) };
+                return new { session_id = session.Id, scope = V7Compat.SettingsScope,
+#if VOCALOID7
+                    affects_all_parts_on_track = true,
+#endif
+                    style = LibraryStyleView(verified, true) };
             });
         }
         finally { draft.Destroy(); }
@@ -893,11 +987,11 @@ internal sealed partial class EngineHost
 
     private object LibraryApplyStyle(EngineSession session, JsonElement options)
     {
+        var part = ScoreSettingsTarget(session, options);
         NativeStyle style = LibraryStyle(LibraryText(options, "style_id"));
         bool includeAudio = LibraryBool(options, "include_audio", true);
         LibraryRequireStyleTransportReleased(includeAudio);
-        WIVSMMidiPart part = LibraryMidiPart(session, options);
-        WIVSMEffectManager effects = part.EffectManager
+        WIVSMEffectManager effects = V7Compat.Track(part).EffectManager
             ?? throw new InvalidOperationException("Native part has no effect manager.");
         ScoreRequireUnstaged(session.Sequence);
         JsonElement[] audioPlans = includeAudio ? LibraryStyleAudioPlans(style, options) : [];
@@ -931,32 +1025,43 @@ internal sealed partial class EngineHost
                 while (effects.NumAudioEffect != 0)
                     SetAudioEffectCore(session, JsonSerializer.SerializeToElement(new
                     {
-                        scope = "part", action = "remove", slot = 0,
-                        track_index = LibraryIndex(options, "track_index"),
+                        scope = V7Compat.SettingsScope, action = "remove", slot = 0,
+#if !VOCALOID7
                         part_index = LibraryIndex(options, "part_index")
+                        ,
+#endif
+                        track_index = LibraryIndex(options, "track_index")
                     }));
                 foreach (JsonElement plan in audioPlans)
                     SetAudioEffectCore(session, plan);
             }
-            LibraryRequire(part.SetStyleName(style.Name) && part.SetStylePresetID(style.Id), "style identity");
+            LibraryRequire(V7Compat.Track(part).SetStyleName(style.Name) && V7Compat.Track(part).SetStylePresetID(style.Id), "style identity");
             PrepareSingingSkill(part);
+#if VOCALOID7
+            PrepareRobotVoice(part);
+#endif
             return true;
         }, () =>
         {
-            WIVSMMidiPart current = LibraryMidiPart(session, options);
-            LibraryRequire(current.StylePresetID == style.Id && current.StyleName == style.Name,
+            var current = ScoreSettingsTarget(session, options);
+            LibraryRequire(V7Compat.Track(current).StylePresetID == style.Id && V7Compat.Track(current).StyleName == style.Name,
                 "style identity readback");
             if (includeAudio)
-                LibraryRequire(current.EffectManager!.NumAudioEffect == style.NumAudioEffect, "style audio count readback");
+                LibraryRequire(V7Compat.Track(current).EffectManager!.NumAudioEffect == style.NumAudioEffect, "style audio count readback");
             return new
             {
                 session_id = session.Id,
-                style_id = current.StylePresetID,
-                name = current.StyleName,
+                style_id = V7Compat.Track(current).StylePresetID,
+                name = V7Compat.Track(current).StyleName,
                 midi_effects_applied = style.NumMidiEffect,
                 audio_effects_applied = includeAudio,
                 audio_effect_count = includeAudio ? style.NumAudioEffect : (ulong?)null,
+#if VOCALOID7
+                scope = "track", affects_all_parts_on_track = true,
+                content_scope = includeAudio ? "complete" : "midi_only"
+#else
                 scope = includeAudio ? "complete" : "midi_only"
+#endif
             };
         });
     }
@@ -1006,9 +1111,12 @@ internal sealed partial class EngineHost
                 }
                 plans.Add(JsonSerializer.SerializeToElement(new
                 {
-                    scope = "part", action = "add", effect_id = effectId, parameters, bypass,
-                    track_index = LibraryIndex(options, "track_index"),
+                    scope = V7Compat.SettingsScope, action = "add", effect_id = effectId, parameters, bypass,
+#if !VOCALOID7
                     part_index = LibraryIndex(options, "part_index")
+                    ,
+#endif
+                    track_index = LibraryIndex(options, "track_index")
                 }));
             }
             return plans.ToArray();
@@ -1019,6 +1127,7 @@ internal sealed partial class EngineHost
         }
     }
 
+#if !VOCALOID7
     private static string LibrarySecondaryVoice(MidiPartBase part, bool isAi)
     {
         nint handle = (nint)(PartBase)part;
@@ -1231,6 +1340,7 @@ internal sealed partial class EngineHost
             throw new IOException("Native media removal did not remove both the private file and catalog entry.");
         return new { session_id = session.Id, clip_id = id, deleted = true };
     }
+#endif
 
     private static TEnum LibraryMapEnum<TEnum>(Enum source) where TEnum : struct, Enum
     {
@@ -1241,6 +1351,7 @@ internal sealed partial class EngineHost
         throw new NotSupportedException("Native media has no mapping for " + source.GetType().Name + "." + source + ".");
     }
 
+#if !VOCALOID7
     private object LibraryCaptureMedia(EngineSession session, JsonElement options)
     {
         ScoreRequireUnstaged(session.Sequence);
@@ -1818,12 +1929,17 @@ internal sealed partial class EngineHost
             LibraryRequire(target.SetDirectPitch(new VSMRelTick(point.Tick), point.Value), "import direct pitch");
         return target;
     }
+#endif
 
     private G2PAManager LibraryLyrics(G2PAManagerLangID language)
     {
         CheckThread();
         if (!Enum.IsDefined(language))
             throw new ArgumentOutOfRangeException(nameof(language));
+#if VOCALOID7
+        return phonemeManagers.TryGetValue(language, out G2PAManager? existing)
+            ? existing : throw new InvalidOperationException("Native phoneme service was not initialized for " + language + ".");
+#else
         if (libraryLyrics.TryGetValue(language, out G2PAManager? existing))
             return existing;
         using G2PAManagerIF factory = new();
@@ -1832,13 +1948,16 @@ internal sealed partial class EngineHost
             ?? throw new InvalidOperationException("Native G2PA manager creation failed for " + language + ".");
         libraryLyrics.Add(language, created);
         return created;
+    #endif
     }
 
     private void DisposeLibraryServices()
     {
         CheckThread();
+#if !VOCALOID7
         libraryMedia?.Dispose();
         libraryMedia = null;
+#endif
         libraryStyles?.Dispose();
         libraryStyles = null;
         foreach (G2PAManager manager in libraryLyrics.Values)

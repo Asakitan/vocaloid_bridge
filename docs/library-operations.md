@@ -4,6 +4,14 @@
 
 # Native Library Operations
 
+## VOCALOID7
+
+Style apply/capture and Singing Skill get/set require explicit `scope="track"`
+and affect all parts on the track. V6 retains part scope. V7 G2PA uses typed
+native note/part getters. V7 has no VMM backend here: all `media_*` operations
+return an explicit unsupported error. The historical V6 media and effect
+evidence below does not establish V7 acceptance.
+
 ## Entry Point and Ownership
 
 `EngineHost.LibraryOperation(string? id, string operation, JsonElement options)`
@@ -54,8 +62,8 @@ integers; the default `track_index`, `part_index`, and `note_index` is `0`.
 | `dvqm_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true`, `db_id`, `name_id`, optional `speed`, `top_factor`, `is_protected`. Attack/Release is a standard VOCALOID part function; an AI note stores the selection without singing it | Committed native selection readback |
 | `dvqm_clear` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true` | Cleared native selection readback |
 | `singing_skill_catalog` | Optional | `{}` | Installed Singing Skill plugin IDs, names, tags, timing and script availability |
-| `singing_skill_get` | Required | Target classic part (optional `track_index=0`, `part_index=0`) | Skill, amount, plugin ID, bypass and native bounds |
-| `singing_skill_set` | Required | Target classic part (optional `track_index=0`, `part_index=0`); optional `plugin_id`, `skill`, `amount`, `bypassed` | Committed Singing Skill readback |
+| `singing_skill_get` | Required | Target classic part on V6; V7 explicit `scope="track"`; optional `track_index=0`, V6 `part_index=0` | Skill, amount, plugin ID, bypass and native bounds |
+| `singing_skill_set` | Required | Target classic part on V6; V7 explicit `scope="track"`; optional `track_index=0`, V6 `part_index=0`, `plugin_id`, `skill`, `amount`, `bypassed` | Committed Singing Skill readback |
 | `note_skill_get` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`) | `duration_tick`, `pre_weight`, `post_weight` |
 | `note_skill_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`); optional `duration_tick`, `pre_weight`, `post_weight` (weights 0..127). Changing them left VOCALOID:AI synthesis unchanged | Committed note-level HMM weights |
 | `note_skill_reset` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`) | Native default HMM weights |
@@ -67,8 +75,8 @@ integers; the default `track_index`, `part_index`, and `note_index` is `0`.
 | `phonemes_reset` | Required | Target part (optional `track_index=0`, `part_index=0`), optional `language_id` | Mutation result below |
 | `style_list` | Optional | `query=""`, `sub_genres=[]`, `colors=[]`. A singer's default sound is the style named `<singer name> Default` | `{total,styles:[Style]}` |
 | `style_get` | Optional | `style_id` | Style with native effect parameter arrays |
-| `style_apply` | Required | Target part (optional `track_index=0`, `part_index=0`), `style_id`, `include_audio=true`; MIDI, audio and identity changes form one undoable transaction | `{session_id,style_id,name,midi_effects_applied,audio_effects_applied,audio_effect_count,scope}` |
-| `style_capture` | Required | Target part (optional `track_index=0`, `part_index=0`), `name`; optional `sub_genres=[]`, `colors=[]`, `include_audio=true`, `overwrite_style_id`; requires no pending native edits | Native private style snapshot and saved path; links the source part to the saved style in one undoable transaction |
+| `style_apply` | Required | `track_index=0`, V6 `part_index=0` or V7 explicit `scope="track"`, `style_id`, `include_audio=true`; MIDI, audio and identity changes form one undoable transaction | `{session_id,style_id,name,midi_effects_applied,audio_effects_applied,audio_effect_count,scope}`; V7 reports track-wide effect |
+| `style_capture` | Required | `track_index=0`, V6 `part_index=0` or V7 explicit `scope="track"`, `name`; optional `sub_genres=[]`, `colors=[]`, `include_audio=true`, `overwrite_style_id`; requires no pending native edits | Native private style snapshot and saved path; links the source part (V6) or track (V7) in one undoable transaction |
 | `style_update` | Required | Private `style_id`; optional `name`, `add_sub_genres=[]`, `add_colors=[]` | Native saved property readback; existing tags preserved |
 | `style_delete` | Required | Private `style_id` | Native removal, verified file and catalog absence |
 | `media_list` | Optional | `query=""`, `genres=[]`, `types=[]` | `{total,clips:[Clip]}` |

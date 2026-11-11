@@ -2,6 +2,15 @@
 
 ## Scope and Evidence
 
+VOCALOID7 stores the active AI voice at `track.voice`; VOCALOID6 uses
+`part.aiVoice`. File editing and automatic phoneme conversion prefer the track
+voice when present. Summaries expose that effective voice in the existing
+`aiVoice` result field. New V7 notes use `vibrato.aiCurveModel`; explicitly
+selected source-note snapshots retain their fields. Changing a V7 template's
+voice clears its old `voiceTypeID`, allowing native open to initialize the
+selected bank's default. Actual V7 asa create/save/replace/reopen evidence is
+recorded in [session 44](session-log/session-44.md).
+
 This Windows-targeted layer reads and writes files only. VPR access uses pywin32.
 It does not start, focus, automate, or communicate with VOCALOID, and it does
 not implement an MCP server.

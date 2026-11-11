@@ -1,3 +1,4 @@
+#if !VOCALOID7
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
@@ -17,7 +18,7 @@ internal static class MediaPropertyWorker
         string id = options.GetProperty("clip_id").GetString()!;
         if (!Guid.TryParse(id, out _)) throw new ArgumentException("Invalid media clip ID.");
         VMMError error = VMMError.None;
-        using MediaManager manager = MediaManagerIF.CreateMediaManager("VOCALOID6", Path.Combine(stage, "empty"),
+        using MediaManager manager = MediaManagerIF.CreateMediaManager(EngineHost.EngineProduct, Path.Combine(stage, "empty"),
             Path.Combine(stage, "media"), [], [], ref error)
             ?? throw new IOException("Native staged media manager creation failed: " + error);
         if (error != VMMError.None || manager.ReadAllClipFiles() != VMMError.None)
@@ -193,3 +194,4 @@ internal sealed partial class EngineHost
         }
     }
 }
+#endif

@@ -98,6 +98,15 @@ internal sealed partial class EngineHost
             if (track.Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi))
                 continue;
             WIVSMMidiTrack midi = track as WIVSMMidiTrack ?? new WIVSMMidiTrack(track);
+#if VOCALOID7
+            if (snapshot || serializedTrack.TryGetProperty("voice", out _))
+            {
+                ValidateVoiceIdentity(IntegrityVoice(serializedTrack, "voice"), midi.VoiceBankID,
+                    snapshot, voiceIds, $"{operation} track {index} voice");
+                ValidateVoiceIdentity(IntegrityVoice(serializedTrack, "secondaryVoice"), midi.SecondaryVoiceBankID,
+                    snapshot, voiceIds, $"{operation} track {index} secondaryVoice");
+            }
+#endif
             for (int partIndex = 0; partIndex < partCount; partIndex++)
             {
                 JsonElement serializedPart = parts[partIndex];
@@ -105,17 +114,34 @@ internal sealed partial class EngineHost
                     throw new InvalidDataException($"project_integrity: {operation} track {index} part {partIndex} is invalid.");
                 WIVSMMidiPart part = midi.GetPart((ulong)partIndex)
                     ?? throw new InvalidDataException($"project_integrity: {operation} native track {index} part {partIndex} is missing.");
+#if VOCALOID7
+                if (snapshot || serializedTrack.TryGetProperty("voice", out _))
+                    continue;
+                foreach ((string key, string nativeId) in new[] {
+                    (part.IsAi ? "aiVoice" : "voice", midi.VoiceBankID),
+                    (part.IsAi ? "secondaryAiVoice" : "secondaryVoice", midi.SecondaryVoiceBankID) })
+                {
+                    string jsonId = IntegrityVoice(serializedPart, key);
+#else
                 foreach ((string key, string nativeId) in new[] {
                     ("voice", part.VoiceBankID), ("aiVoice", part.AiVoiceBankID),
                     ("secondaryVoice", part.SecondaryVoiceBankID), ("secondaryAiVoice", part.SecondaryAiVoiceBankID) })
                 {
                     string jsonId = IntegrityVoice(serializedPart, key);
-                    if ((snapshot ? nativeId.Length != 0 : jsonId.Length != 0) && !string.Equals(jsonId, nativeId, StringComparison.Ordinal))
-                        throw new InvalidDataException($"project_integrity: {operation} track {index} part {partIndex} {key} ID differs (JSON='{jsonId}', native='{nativeId}').");
-                    if (snapshot && nativeId.Length != 0 && !voiceIds.Contains(nativeId))
-                        throw new InvalidDataException($"project_integrity: {operation} track {index} part {partIndex} {key} ID is absent from the voices table.");
+#endif
+                    ValidateVoiceIdentity(jsonId, nativeId, snapshot, voiceIds,
+                        $"{operation} track {index} part {partIndex} {key}");
                 }
             }
         }
+    }
+
+    private static void ValidateVoiceIdentity(string jsonId, string nativeId, bool snapshot,
+        HashSet<string> voiceIds, string context)
+    {
+        if ((snapshot || jsonId.Length != 0) && !string.Equals(jsonId, nativeId, StringComparison.Ordinal))
+            throw new InvalidDataException($"project_integrity: {context} ID differs (JSON='{jsonId}', native='{nativeId}').");
+        if (snapshot && nativeId.Length != 0 && !voiceIds.Contains(nativeId))
+            throw new InvalidDataException($"project_integrity: {context} ID is absent from the voices table.");
     }
 }

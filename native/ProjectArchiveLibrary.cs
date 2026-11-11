@@ -1,10 +1,18 @@
 using System.IO;
 using System.Text.Json;
 using Yamaha.VOCALOID.VSM;
+#if !VOCALOID7
 using Yamaha.VOCALOID.VMM;
+#endif
 
 internal sealed partial class EngineHost
 {
+#if VOCALOID7
+    internal bool IsPreservedMidiMediaImport(string? id, string operation, JsonElement options) => false;
+
+    internal bool IsIndependentArchiveLibraryOperation(string? id, string operation, JsonElement options) =>
+        operation is "style_update" or "style_delete";
+#else
     // These operations read the sequence or change only bridge-owned library
     // files. Controller extensions remain guarded; MIDI part and note payloads
     // are carried by bridge-owned clip metadata.
@@ -35,4 +43,6 @@ internal sealed partial class EngineHost
             throw new InvalidDataException("project_preservation: selected media part identity is not tracked.");
         return true;
     }
+#endif
 }
+

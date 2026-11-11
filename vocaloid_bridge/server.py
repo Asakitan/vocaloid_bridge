@@ -1,4 +1,4 @@
-"""MCP tools for isolated native VOCALOID6 sessions and music interchange."""
+"""MCP tools for isolated native VOCALOID sessions and music interchange."""
 
 from __future__ import annotations
 
@@ -35,9 +35,12 @@ NATIVE = NativeClient(WORKSPACE)
 atexit.register(NATIVE.close)
 temp_cleanup.start_background_sweep(WORKSPACE)
 mcp = FastMCP(
-    "VOCALOID6 Native",
+    "VOCALOID Native",
     instructions=(
-        "Control real VOCALOID6 native engine sessions on a private Windows desktop. "
+        "Control the latest installed supported VOCALOID6/7 native engine on a private Windows desktop. "
+        "Check vocaloid_status for the selected product. On VOCALOID7, voice/style/performance "
+        "settings require explicit scope='track' and affect all parts on that track; "
+        "media library operations and part-level audio effects are unavailable. "
         "Never automate, activate, minimize, close or send input to the user's interactive editor. "
         "There is no UI or alternate-backend fallback. When making a song, call vocaloid_workflow first: "
         "it gives the tested steps, the lyric form each language accepts and the controls VOCALOID:AI "
@@ -57,11 +60,21 @@ async def _rpc(method: str, **parameters: Any) -> dict[str, Any]:
 async def vocaloid_status() -> dict[str, Any]:
     """Initialize the isolated native engine and return its real version and session count."""
     result = await _rpc("ping")
+    version7 = result.get("product") == "VOCALOID7"
+    limitations = ["Complete editor-feature coverage has not been validated."]
+    if version7:
+        limitations.extend([
+            "Voice, style and performance settings require scope='track' and affect all parts on the track.",
+            "Media library operations, native reverse and VOCALO CHANGER are unavailable in VOCALOID7.",
+            "Part-level audio effects are unavailable; select track or master scope.",
+            "Use take_number and vibrato curve_model, not legacy take_lane or AI vibrato booleans.",
+        ])
     return {**result, "mcp_version": __version__, "workspace": str(WORKSPACE), "server_pid": os.getpid(),
+            "installation": NATIVE.installation.to_dict(),
             "generation": NATIVE.generation, "managed_by_mcp": True,
             "isolation_desktop_expected": NATIVE.child.desktop_name, "fallbacks": False,
             "temp_cleanup": temp_cleanup.summary(WORKSPACE),
-            "known_limitations": ["Complete editor-feature coverage has not been validated."]}
+            "settings_scope": "track" if version7 else "part", "known_limitations": limitations}
 
 
 @mcp.tool()
@@ -248,6 +261,7 @@ async def project_audio(session_id: str, operation: str,
     mixdown is the deliverable render, with effects, at sample_rate 44100, 48000, 96000 or 192000;
     it stops at the end of the last part. Unsupported operations return explicit errors; no
     alternate audio backend is used.
+    VOCALOID7 effects use track/master scope; part scope, reverse and voice_change are unsupported.
     """
     parameters = {"session_id": session_id, "operation": operation, "options": options or {}}
     return await asyncio.to_thread(NATIVE.request, "audio_op", parameters, 180)
@@ -262,6 +276,8 @@ async def project_library(operation: str, options: dict[str, Any] | None = None,
     and Singing Skill act on standard VOCALOID parts; an AI part stores them without singing them.
     phoneme_table returns a versioned manual reference, not native enumeration.
     Catalog reads need no project; operations changing notes or parts require a session_id.
+    VOCALOID7 style and Singing Skill settings need explicit scope='track' and affect every
+    part on that track. VOCALOID7 does not expose the VMM media library; media_* is unsupported.
     """
     return await _rpc("library_op", operation=operation, options=options or {}, session_id=session_id)
 
@@ -451,7 +467,7 @@ def midi_read(path: str) -> dict[str, Any]:
 @mcp.resource("vocaloid://workflow")
 def workflow() -> str:
     return json.dumps({
-        "backend": "VOCALOID6 native VSM in an isolated Windows desktop",
+        "backend": "VOCALOID6/7 native VSM in an isolated Windows desktop",
         "workflow": ["vocaloid_workflow", "voicebanks", "score_compose or project_create",
                      "project_edit track.create, part.create, voice.set", "project_library style_apply",
                      "project_edit note.add and expression", "project_render_part", "project_audio mixdown",

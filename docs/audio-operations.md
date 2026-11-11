@@ -19,6 +19,12 @@ windows, or `App`, and never sends UI input.
 
 ## Output Rules
 
+VOCALOID7 effects support track/master scope, not part scope. Its installed WOR
+does not expose the V6 reverse or VOCALO CHANGER entry points used here;
+`process_audio` with `reverse` or `voice_change` returns unsupported. Other
+routes compile against their version-specific API, but the historical V6
+mixdown and device evidence below is not V7 runtime acceptance.
+
 - `output_name` is relative to the existing workspace `output` directory.
 - `overwrite` defaults to `false`; publication uses exclusive file movement.
 - Input paths must be absolute existing files and cannot traverse links.

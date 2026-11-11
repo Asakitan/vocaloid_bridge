@@ -23,6 +23,8 @@ import win32event
 import win32job
 import win32process
 
+from .install import SUPPORTED_PRODUCTS, TARGET_FILE, VocaloidInstallation, VocaloidInstallError, discover, host_path, validate_target
+
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _user32.CreateDesktopW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID]
@@ -162,7 +164,8 @@ class IsolatedProcess:
 class NativeClient:
     def __init__(self, workspace: Path, install: Path | None = None):
         self.workspace = workspace.resolve()
-        self.install = install or Path(os.environ.get("VOCALOID_INSTALL", r"C:\Program Files\VOCALOID6\Editor"))
+        self._explicit_install = install
+        self._installation: VocaloidInstallation | None = None
         self.child: IsolatedProcess | None = None
         self.counter = 0
         self.lock = threading.RLock()
@@ -170,6 +173,20 @@ class NativeClient:
         self.host_snapshot: Path | None = None
         self.generation = 0
         self.cache_namespace: str | None = None
+
+    @property
+    def installation(self) -> VocaloidInstallation:
+        with self.lock:
+            if self.child is not None and self._installation is not None:
+                return self._installation
+            try:
+                return discover(self._explicit_install)
+            except VocaloidInstallError as error:
+                raise NativeError(str(error)) from error
+
+    @property
+    def install(self) -> Path:
+        return self.installation.path
 
     def _running(self) -> bool:
         return self.child is not None and self.child.process is not None and (
@@ -179,27 +196,35 @@ class NativeClient:
     def _release_child(self) -> None:
         child, self.child = self.child, None
         namespace, self.cache_namespace = self.cache_namespace, None
+        installation, self._installation = self._installation, None
         try:
             if child is not None:
                 child.close()
-                if child.exit_code is not None and namespace is not None:
-                    self._remove_cache(namespace)
+                if child.exit_code is not None and namespace is not None and installation is not None:
+                    self._remove_cache(namespace, installation.product)
         finally:
             self._remove_snapshot()
 
     @staticmethod
-    def _remove_cache(namespace: str) -> None:
+    def _remove_cache(namespace: str, product: str) -> None:
         if not re.fullmatch(r"VocaloidBridge-[0-9a-f]{32}", namespace):
             raise NativeError("Invalid owned native cache namespace.")
+        if product not in SUPPORTED_PRODUCTS:
+            raise NativeError("Invalid owned native cache product.")
+        local = Path(os.environ["LOCALAPPDATA"])
+        root = local / product
         for kind in ("VSM", "VSMCaches"):
-            base = (Path(os.environ["LOCALAPPDATA"]) / "VOCALOID6" / kind).resolve()
+            base = root / kind
             path = base / namespace
             if not path.exists():
                 continue
-            if path.resolve().parent != base:
+            if any(parent.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                   for parent in (root, base)):
+                raise NativeError("Owned native cache root contains a reparse point.")
+            if path.resolve().parent != base.resolve():
                 raise NativeError("Owned native cache escaped its parent.")
-            if any(p.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
-                   for p in (path, *path.rglob("*"))):
+            if any(entry.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                   for entry in (path, *path.rglob("*"))):
                 raise NativeError("Owned native cache contains a reparse point.")
             shutil.rmtree(path)
 
@@ -238,6 +263,7 @@ class NativeClient:
         for suffix in (".dll", ".deps.json", ".runtimeconfig.json"):
             source = host.with_name("VocaloidBridge.Host" + suffix)
             shutil.copyfile(source, snapshot / source.name)
+        shutil.copyfile(host.parent / TARGET_FILE, snapshot / TARGET_FILE)
         return snapshot / host.name
 
     def request(self, method: str, parameters: dict[str, Any] | None = None, timeout: float = 180) -> dict[str, Any]:
@@ -255,14 +281,22 @@ class NativeClient:
                 self.failed = ""
             if self.child is None:
                 dotnet = shutil.which("dotnet")
-                host = self.workspace / "native/bin/Release/net8.0-windows/VocaloidBridge.Host.dll"
-                if dotnet is None or not host.is_file():
-                    raise NativeError("Build the native host first: dotnet build native/VocaloidBridge.Host.csproj -c Release.")
+                if dotnet is None:
+                    raise NativeError("The .NET 10 runtime is required; dotnet was not found on PATH.")
+                installation = self.installation
+                host = host_path(self.workspace, installation)
+                try:
+                    validate_target(installation, host)
+                except VocaloidInstallError as error:
+                    raise NativeError(str(error)) from error
                 try:
                     snapshot = self._snapshot_host(host)
-                    self.child = IsolatedProcess([dotnet, str(snapshot), "--serve", str(self.install), str(self.workspace)], self.workspace)
+                    validate_target(installation, snapshot)
+                    self._installation = installation
+                    self.child = IsolatedProcess([dotnet, str(snapshot), "--serve", str(installation.path), str(self.workspace)], self.workspace)
                     self.generation += 1
                 except BaseException:
+                    self._installation = None
                     self._remove_snapshot()
                     raise
                 status = self._exchange("ping", {}, timeout)
@@ -279,16 +313,35 @@ class NativeClient:
             response = json.loads(self.child.read_line(timeout).decode("utf-8"))
             if response.get("id") != self.counter:
                 raise NativeError("Native RPC response ID did not match the request.")
-        except Exception as error:
+        except BaseException as error:
             self.failed = "Native request outcome is unknown; the request was not replayed. " + str(error)
             self._release_child()
+            if not isinstance(error, Exception):
+                raise
             raise NativeError(self.failed) from error
         if "error" in response:
             detail = response["error"]
             raise NativeError(f"{detail.get('type', 'NativeError')}: {detail.get('message', detail)}")
         result = response["result"]
-        if method == "ping" and isinstance(result.get("cache_namespace"), str):
-            self.cache_namespace = result["cache_namespace"]
+        if method == "ping":
+            installation = self._installation
+            if (installation is None or result.get("product") != installation.product
+                    or result.get("version") != installation.version
+                    or not isinstance(result.get("install"), str)
+                    or Path(result["install"]).resolve() != installation.path):
+                self.failed = "Native host identity did not match the selected build/installation."
+                self._release_child()
+                raise NativeError(self.failed)
+            namespace = result.get("cache_namespace")
+            if not isinstance(namespace, str) or not re.fullmatch(r"VocaloidBridge-[0-9a-f]{32}", namespace):
+                self.failed = "Native host did not return a valid owned cache namespace."
+                self._release_child()
+                raise NativeError(self.failed)
+            if self.cache_namespace is not None and namespace != self.cache_namespace:
+                self.failed = "Native host cache namespace changed during its lifetime."
+                self._release_child()
+                raise NativeError(self.failed)
+            self.cache_namespace = namespace
         return result
 
     def close(self) -> None:

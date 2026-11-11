@@ -4,7 +4,7 @@
 flowchart LR
     Client[MCP 客户端] -->|stdio| Python[Python MCP 服务]
     Python -->|UTF-8 JSON 行协议| Native[私有 desktop 中的 STA 宿主]
-    Native --> Wrapper[已安装的 VOCALOID6 .NET 封装]
+    Native --> Wrapper[选定的 VOCALOID6/7 .NET 封装]
     Wrapper --> Engine[VSM / VDM / DSE 原生组件]
     Wrapper --> Audio[WOR / VEM / VAE 原生音频]
     Wrapper --> Library[G2PA / VSStyle / VMM 原生素材]
@@ -19,9 +19,13 @@ flowchart LR
 
 ## 进程边界
 
+`install.py` 按注册表、标准目录及核心 DLL 文件版本选择安装；显式目录覆盖优先。每次创建宿主时选择并绑定产品、目录、版本，握手再次核对。V6/V7 的 .NET 10 构建输出分别位于 `native/bin/Release/<product>/net10.0-windows`，中间目录也按产品隔离。构建标记包含目标身份与宿主摘要，缺失或失配不启动旧构建。活动宿主不会重新发现并切换引擎；关闭后下一次启动才重新选择。
+
+V7 的参数所有权由片段迁移到轨道，`V7Compatibility.cs` 显式区分两版原生 API，`MediaCompatibility.cs` 对 V7 缺失的 VMM 路径返回不支持。V7 原生音符使用 G2PA 类型化 getter，工程设置通过共享工厂创建。打开、克隆及导入时仅为空 VoiceTypeID 的 AI 轨初始化同声库默认类型；渲染入口校验声库和类型。详细边界见 [V7 兼容说明](vocaloid7.md)。下文历史 V6 的效果、素材及完整功能证据不自动延伸到 V7。
+
 客户端通过各自的用户级配置启动同一 Python 入口。VS Code Stable/Insiders 使用 `servers`，Claude Code/Desktop 使用 `mcpServers`，Codex 使用 `mcp_servers`。绝对路径及显式 `PYTHONPATH`、`VOCALOID_WORKSPACE` 使启动不依赖客户端当前目录。不同客户端持有独立 MCP 进程；生成文件仍统一限定在本项目的 output。当前工作区配置保留。
 
-Python 使用 Win32 `CreateDesktopW` 创建私有 desktop，以 `STARTUPINFO.lpDesktop` 启动原生宿主。宿主不实例化 WPF Application 或 MainWindow，也不运行 VOCALOID6 的图形启动入口。不存在切换到用户桌面的分支。
+Python 使用 Win32 `CreateDesktopW` 创建私有 desktop，以 `STARTUPINFO.lpDesktop` 启动原生宿主。宿主不实例化 WPF Application 或 MainWindow，也不运行编辑器的图形启动入口。不存在切换到用户桌面的分支。
 
 启动前创建匿名管道与 Job Object；宿主先以挂起状态创建，加入 kill-on-close Job 后继续执行。任何隔离或进程归属设置失败都会终止启动，不换用普通桌面。
 
@@ -95,7 +99,7 @@ VMM 的原生素材写入器保存次声库字段，但当前读取器返回空�
 
 MCP 不暴露任意进程调用、内存地址、脚本执行、授权数据或图形窗口命令。原生错误原样转换为协议错误，不使用静音文件、旧音频、其他音源或 UI 操作掩盖失败。
 
-运行时子进程的 `TEMP` / `TMP` 指向工作区 `.runtime/tmp/<private-desktop>`，退出后检查归属再清理。原生管理器成功释放后只删除自身 GUID 命名空间的 `LOCALAPPDATA/VOCALOID6/VSM` 和 `VSMCaches` 目录；历史清理按回执和进程创建时间判断，保留活动及无证据目录。
+运行时子进程的 `TEMP` / `TMP` 指向工作区 `.runtime/tmp/<private-desktop>`，退出后检查归属再清理。原生管理器成功释放后只删除所选产品 `LOCALAPPDATA/<product>/VSM` 和 `VSMCaches` 内自身 GUID 命名空间；历史清理按回执和进程创建时间判断，保留活动及无证据目录。取消或读取故障会关闭自有连接，保留未知结果错误，不自动重放请求。
 
 ## 0.24.0 补充
 

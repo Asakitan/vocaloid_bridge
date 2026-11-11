@@ -1,19 +1,19 @@
-# VOCALOID6 Native MCP · 猫娘助手版
+# VOCALOID6/7 Native MCP · 猫娘助手版
 
-主人好喵~♡ 这里是住在编辑器里的猫娘助手，给 VOCALOID6 搭了一条后台 MCP 桥接喵。它会在独立的私有桌面里叫醒原生 VSM 引擎，自己创建、编辑、保存工程，不会碰主人正在用的 VOCALOID 编辑器窗口喵。
+主人好喵~♡ 这里是住在编辑器里的猫娘助手，给 VOCALOID6/7 搭了一条后台 MCP 桥接喵。默认选择本机最新安装的支持版本，在独立的私有桌面里创建、编辑、保存工程，不会碰主人正在用的 VOCALOID 编辑器窗口喵。
 
 只走原生引擎这一条路喵：没有 UI 回退，也不会拿别的音源或者静音文件假装合成成功喵。
 
 ## 许可证喵
 
-桥接代码用 [MIT 许可证](LICENSE) 发布，版权署名 Asakitan（2026）喵。VOCALOID 引擎、声库和其他第三方组件不在这份许可证里，跑起来仍然需要本机已安装、已正常授权的 VOCALOID6 喵。源码住在 [Asakitan/vocaloid_bridge](https://github.com/Asakitan/vocaloid_bridge) 喵。
+桥接代码用 [MIT 许可证](LICENSE) 发布，版权署名 Asakitan（2026）喵。VOCALOID 引擎、声库和其他第三方组件不在这份许可证里，跑起来仍然需要本机已安装、已正常授权的 VOCALOID6 或 VOCALOID7 喵。源码住在 [Asakitan/vocaloid_bridge](https://github.com/Asakitan/vocaloid_bridge) 喵。
 
 ## 需要准备什么喵
 
 - Windows 喵
-- 本机已安装并正常授权的 VOCALOID6 喵
+- 本机已安装并正常授权的 VOCALOID6 或 VOCALOID7 喵
 - Python 3.11 或更新版本喵
-- .NET 8 SDK 或 Windows Desktop Runtime 喵
+- 构建需要 .NET 10 SDK，运行需要 .NET 10 Windows Desktop Runtime 喵
 
 ## 怎么装起来喵
 
@@ -29,11 +29,15 @@ powershell -NoProfile -File .\tools\setup.ps1
 
 这是 MCP 的 JSON-RPC 入口，启动后会安静地等客户端说话喵，不是交互式命令行，敲进去不会跳提示符喵。
 
+安装和新宿主启动都会按实际 DLL 版本选引擎，V6/V7 的构建产物分开保存，运行中的工程不会中途切换版本喵。`VOCALOID_INSTALL` 可以明确指定 Editor 目录，构建时也可用 `setup.ps1 -Install 'C:\Program Files\VOCALOID6\Editor'` 喵。新安装或更新引擎后先重新运行 setup，再重新连接 MCP；旧服务名和任务标签保留，现有注册不用改喵。完整选择规则与验收范围见 [V7 兼容说明](docs/vocaloid7.md) 喵。
+
+V7 的声库、样式和表现设置要显式传 `scope="track"`，会作用于整轨；V6 仍按片段处理喵。V7 的 VMM 素材库、片段音频效果、反转和 VOCALO CHANGER 暂不支持，会明确返回错误喵。历史功能矩阵是 V6 的证据，不等于 V7 全量验收喵。
+
 客户端注册按各自的习惯来喵：VS Code 用 `servers`，Claude Code/Desktop 用 `mcpServers`，Codex 用 `mcp_servers` 喵。注册时把 `VOCALOID_WORKSPACE` 和 `PYTHONPATH` 指向本仓库，再设 `PYTHONUTF8=1`，从别的目录启动也会把输出写回本仓库的 `output` 喵。本机的具体注册位置、声库状态和历次验收记录放在本地笔记里，不跟着公开 README 跑喵。
 
 ## 工具都有哪些喵
 
-一共 39 个工具、127 个结构化操作喵。表格里是 MCP 工具名，代码和参数里就不加喵喵叫啦喵。
+一共 39 个工具、128 个结构化操作喵。表格里是 MCP 工具名，代码和参数里就不加喵喵叫啦喵。
 
 | 功能 | 工具 |
 | --- | --- |
@@ -77,7 +81,7 @@ powershell -NoProfile -File .\tools\setup.ps1
 
 - 只走原生引擎这一条执行路径，不给 UI 或其他音源留后门喵。
 - 新宿主通过 `CreateProcess` 的 `lpDesktop` 进私有 Windows desktop，不调用 `SwitchDesktop` 喵。
-- 不启动 `VOCALOID6.exe`，不往主人的窗口发输入，也不改交互编辑器的播放状态喵。
+- 不启动编辑器图形入口，不往主人的窗口发输入，也不改交互编辑器的播放状态喵。
 - 原生对象全由宿主同一个 STA 线程使用，子进程归 kill-on-close Job Object 管喵。
 - 设备传输只挑明确枚举到的设备 ID，也只管 MCP 自己的音频引擎喵；准备期间先释放传输，再改所属工程喵。
 - MIDI 设备录制要显式设备 ID 和名称喵；独立虚拟 WinMM 输入的真实回调验过，事件流和虚拟输入都不等于物理硬件录制已经验过喵，同步模式只用本会话的播放时钟喵。

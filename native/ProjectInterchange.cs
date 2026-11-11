@@ -29,7 +29,7 @@ internal sealed partial class EngineHost
             ValidateOpenRequirements(json);
             sequence = manager.OpenSequence(json,
                 Path.GetDirectoryName(typeof(WVSMModuleIF).Assembly.Location)!,
-                new VSMSequenceData(source.Sequence.GetSamplingRate(), 32, 100))
+                SequenceSettings(source.Sequence.GetSamplingRate()))
                 ?? throw new InvalidOperationException("Native clone open failed: " + manager.LastError);
             ownedSequences.Add(sequence);
             ValidateLoadedTrackKinds(sequence, json);
@@ -37,6 +37,7 @@ internal sealed partial class EngineHost
             if (title is not null)
                 sequence.Title = title;
             EngineSession clone = new(cloneId, directory, sequence, null, true);
+            clone.InitializedVoiceTypes = InitializeOpenedVoiceTypes(sequence);
             CaptureArchivePreservation(clone, directory);
             sessions.Add(cloneId, clone);
             return clone;
@@ -360,7 +361,7 @@ internal sealed partial class EngineHost
         {
             string stagedInput = Path.Combine(directory, "source" + extension);
             File.Copy(path, stagedInput, false);
-            VSMSequenceData settings = new(VSMSamplingRate._44100, 32, 100);
+            VSMSequenceData settings = SequenceSettings(VSMSamplingRate._44100);
             if (extension == ".vsqx")
             {
                 string schemaDirectory = Path.GetDirectoryName(typeof(WVSMModuleIF).Assembly.Location)!;
@@ -392,6 +393,7 @@ internal sealed partial class EngineHost
             if (manager.LastYVSResult == YVSResult.LimitedTrackDeletion)
                 throw new InvalidDataException("Native import removed tracks because of an engine limit; the partial project was rejected.");
             EngineSession session = new(id, directory, sequence, path, true);
+            session.InitializedVoiceTypes = InitializeOpenedVoiceTypes(sequence);
             sessions.Add(id, session);
             return session;
         }

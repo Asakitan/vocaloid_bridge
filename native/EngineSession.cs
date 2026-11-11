@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Yamaha.VOCALOID.DSE;
+using Yamaha.VOCALOID.G2PA;
+using Yamaha.VOCALOID.PathResource;
 using Yamaha.VOCALOID.VDM;
 using Yamaha.VOCALOID.VLC;
 using Yamaha.VOCALOID.VSM;
@@ -38,6 +40,7 @@ internal sealed class EngineSession
     internal string RootRef { get; }
     internal bool Dirty { get; set; }
     internal string? LastSavedPath { get; set; }
+    internal int InitializedVoiceTypes { get; set; }
     internal Action<string>? ArchiveBegin { get; set; }
     internal Action<string>? ArchiveEnd { get; set; }
     internal Action<object, object>? ArchiveCopy { get; set; }
@@ -50,7 +53,8 @@ internal sealed class EngineSession
         track_count = Sequence.NumTrack,
         dirty = Dirty,
         root_ref = RootRef,
-        last_saved_path = LastSavedPath
+        last_saved_path = LastSavedPath,
+        initialized_voice_types = InitializedVoiceTypes
     };
 
     internal string Register(object value, Action<object>? writeBack = null)
@@ -95,7 +99,10 @@ internal sealed class EngineSession
 
 internal sealed partial class EngineHost : IDisposable
 {
-    internal const string EngineVersion = "6.13.3.1";
+    internal static string EngineProduct => typeof(WIVSMSequence).Assembly.GetName().Name
+        ?? throw new InvalidOperationException("The VOCALOID core assembly has no name.");
+    internal static string EngineVersion => typeof(WIVSMSequence).Assembly.GetName().Version?.ToString()
+        ?? throw new InvalidOperationException("The VOCALOID core assembly has no version.");
     private const string ProjectValidityEntry = "vocaloid_bridge/phoneme-validity-v1.json";
     private const long MaxArchiveBytes = 8L * 1024 * 1024 * 1024;
     private readonly Dictionary<string, EngineSession> sessions = new(StringComparer.Ordinal);
@@ -105,6 +112,10 @@ internal sealed partial class EngineHost : IDisposable
     private readonly int ownerThread = Environment.CurrentManagedThreadId;
     private DatabaseManager? database;
     private DSEManager? dse;
+#if VOCALOID7
+    private G2PAManagerIF? phonemeFactory;
+    private readonly Dictionary<G2PAManagerLangID, G2PAManager> phonemeManagers = new();
+#endif
     private Exception? databaseFailure;
     private Exception? dseFailure;
     private bool databaseAttempted;
@@ -126,9 +137,10 @@ internal sealed partial class EngineHost : IDisposable
         [JsonRequired] public List<ProjectInvalidNote> Notes { get; set; } = [];
     }
 
-    internal EngineHost(string workspace)
+    internal EngineHost(string workspace, string install)
     {
         Workspace = Path.GetFullPath(workspace);
+        InstallDirectory = Path.GetFullPath(install);
         PathGuard.NoLinks(Workspace);
         if (!System.IO.Directory.Exists(Workspace))
             throw new DirectoryNotFoundException("Workspace does not exist.");
@@ -144,17 +156,116 @@ internal sealed partial class EngineHost : IDisposable
             if (manager.CacheCapacity != 0)
                 throw new InvalidOperationException("Native render cache policy was not applied.");
             EnsureDatabase();
+#if VOCALOID7
+            InitializeMidiEffectStorage(manager);
+            InitializePhonemeService();
+#endif
         }
         catch
         {
             manager.Dispose();
+#if VOCALOID7
+            DisposePhonemeService();
+#endif
             database?.Dispose();
             throw;
         }
     }
 
     internal string Workspace { get; }
+    internal string InstallDirectory { get; }
     internal string CacheNamespace { get; } = "VocaloidBridge-" + Guid.NewGuid().ToString("N");
+
+#if VOCALOID7
+    private static void InitializeMidiEffectStorage(WIVSMSequenceManager manager)
+    {
+        manager.AppendMidiEffectPath(VSMMidiEffectPathType.SingingSkill, ResourceType.SingingSkill.SystemPrimaryPath());
+        manager.AppendMidiEffectPath(VSMMidiEffectPathType.SingingSkill, ResourceType.SingingSkill.UserPrimaryPath());
+        foreach (string path in ResourceType.SingingSkill.SystemExtraPaths())
+            manager.AppendMidiEffectPath(VSMMidiEffectPathType.SingingSkill, path);
+        foreach (string path in ResourceType.SingingSkill.UserExtraPaths())
+            manager.AppendMidiEffectPath(VSMMidiEffectPathType.SingingSkill, path);
+        manager.AppendMidiEffectPath(VSMMidiEffectPathType.RobotVoice, ResourceType.RobotVoice.SystemPrimaryPath());
+        if (!manager.InitializeMidiEffectStorage())
+            throw new InvalidOperationException("Native MIDI effect storage initialization failed: " + manager.LastError);
+    }
+
+    private void InitializePhonemeService()
+    {
+        WIVSMPhonemeService service = manager.PhonemeService
+            ?? throw new InvalidOperationException("Native phoneme service is unavailable.");
+        phonemeFactory = new G2PAManagerIF();
+        service.SetG2PAManagerIF(phonemeFactory.Handle);
+        string directory = Path.GetDirectoryName(typeof(G2PAManager).Assembly.Location)!;
+        foreach (G2PAManagerLangID language in Enum.GetValues<G2PAManagerLangID>())
+        {
+            G2PAManager created = phonemeFactory.CreateManager(language, directory)
+                ?? throw new InvalidOperationException("Native G2PA manager creation failed: " + language);
+            phonemeManagers.Add(language, created);
+            if (!service.SetG2PAManager((int)language, created.Handle))
+                throw new InvalidOperationException("Native phoneme service rejected G2PA language: " + language);
+        }
+    }
+
+    private void DisposePhonemeService()
+    {
+        foreach (G2PAManager phonemeManager in phonemeManagers.Values)
+            phonemeManager.Dispose();
+        phonemeManagers.Clear();
+        phonemeFactory?.Dispose();
+        phonemeFactory = null;
+    }
+#endif
+    internal static VSMSequenceData SequenceSettings(VSMSamplingRate sampleRate) => new()
+    {
+        SamplingRate = sampleRate,
+        MaxNumTracks = 32,
+        MaxUndoCount = 100,
+#if VOCALOID7
+        VEXEnabled = false,
+#endif
+    };
+
+    private int InitializeOpenedVoiceTypes(WIVSMSequence sequence)
+    {
+        int initialized = 0;
+#if VOCALOID7
+        foreach (WIVSMTrack rawTrack in sequence.Tracks)
+        {
+            if (rawTrack.Type != VSMTrackType.MidiAi)
+                continue;
+            WIVSMMidiTrack track = rawTrack as WIVSMMidiTrack ?? new WIVSMMidiTrack(rawTrack);
+            if (track.VoiceTypeID.Length != 0 || track.VoiceBankID.Length == 0)
+                continue;
+            VoiceBank? bank = EnsureDatabase().GetVoiceBankByCompID(track.VoiceBankID);
+            if (bank is null)
+                continue;
+            string voiceId = track.VoiceBankID;
+            string voiceType = bank.DefaultVoiceTypeID;
+            if (voiceType.Length == 0 || bank.VoiceTypeByVoiceTypeID(voiceType) is null ||
+                !track.SetVoiceTypeID(voiceType) || track.VoiceTypeID != voiceType || track.VoiceBankID != voiceId)
+                throw new InvalidOperationException("Native default voice type initialization failed for " + voiceId);
+            initialized++;
+        }
+        if (initialized != 0 && !sequence.Commit(false))
+            throw new InvalidOperationException("Native voice type initialization commit failed: " + sequence.LastError);
+#endif
+        return initialized;
+    }
+
+    private void RequireRenderableVoice(WIVSMMidiPart part)
+    {
+#if VOCALOID7
+        WIVSMMidiTrack track = V7Compat.Track(part);
+        VoiceBank bank = EnsureDatabase().GetVoiceBankByCompID(track.VoiceBankID)
+            ?? throw new InvalidOperationException("Assign an installed voice to the track before rendering.");
+        if (!bank.IsAvailableInSequence || !bank.IsSynthesizableVersion || bank.IsAi != part.IsAi)
+            throw new InvalidOperationException("The assigned voice is unavailable or incompatible with the track: " + track.VoiceBankID);
+        if (part.IsAi && bank.VoiceTypeByVoiceTypeID(track.VoiceTypeID) is null)
+            throw new InvalidOperationException("The assigned voice type is missing or invalid. Set the track voice with voice.set before rendering.");
+#endif
+    }
+
     internal long RenderCacheBytes => manager.CacheCapacity;
     internal string RuntimeRoot { get; }
     internal string OutputRoot { get; }
@@ -184,7 +295,7 @@ internal sealed partial class EngineHost : IDisposable
         WIVSMSequence? sequence = null;
         try
         {
-            sequence = manager.CreateSequence(new VSMSequenceData((VSMSamplingRate)sampleRate, 32, 100))
+            sequence = manager.CreateSequence(SequenceSettings((VSMSamplingRate)sampleRate))
                 ?? throw new InvalidOperationException("Native create failed: " + manager.LastError);
             ownedSequences.Add(sequence);
             if (tempo < sequence.GetMinTempoValue() || tempo > sequence.GetMaxTempoValue())
@@ -223,12 +334,13 @@ internal sealed partial class EngineHost : IDisposable
                 throw new InvalidDataException("VPR must contain Project/sequence.json.");
             ValidateOpenRequirements(json);
             sequence = manager.OpenSequence(json, Path.GetDirectoryName(typeof(WVSMModuleIF).Assembly.Location)!,
-                new VSMSequenceData(VSMSamplingRate._44100, 32, 100))
+                SequenceSettings(VSMSamplingRate._44100))
                 ?? throw new InvalidOperationException("Native open failed: " + manager.LastError);
             ownedSequences.Add(sequence);
             ValidateLoadedTrackKinds(sequence, json);
             RestoreProjectValidity(sequence, directory);
             EngineSession session = new(id, directory, sequence, path, false);
+            session.InitializedVoiceTypes = InitializeOpenedVoiceTypes(sequence);
             CaptureArchivePreservation(session, directory);
             sessions.Add(id, session);
             return session;
@@ -461,11 +573,16 @@ internal sealed partial class EngineHost : IDisposable
         };
     }
 
-    private static (VLCResult LuaResult, object Observation) RenderNativePart(WIVSMSequence sequence, WIVSMMidiPart part, string output)
+    private (VLCResult LuaResult, object Observation) RenderNativePart(WIVSMSequence sequence, WIVSMMidiPart part, string output)
     {
         if (sequence.GetSamplingRate() != VSMSamplingRate._44100)
             throw new NotSupportedException("Native vocal-part synthesis requires a 44100 Hz project; mixdown output sample_rate is independent.");
+        RequireRenderableVoice(part);
         Stopwatch elapsed = Stopwatch.StartNew();
+        double timeoutSeconds = double.TryParse(
+            Environment.GetEnvironmentVariable("VOCALOID_RENDER_TIMEOUT_SECONDS"),
+            System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double configured)
+            && configured >= 1 && configured <= 600 ? configured : 120;
         nint controller = LuaControllerIF.CreateController();
         if (controller == nint.Zero)
             throw new InvalidOperationException("Native MIDI controller initialization failed: " + LuaControllerIF.LastError);
@@ -501,10 +618,15 @@ internal sealed partial class EngineHost : IDisposable
                     throw new InvalidOperationException("Native rendering cancelled: " + cancellation);
                 if (part.HasValidRenderedWave && sequence.IsFinishedRendering)
                     break;
-                if (elapsed.Elapsed > TimeSpan.FromMinutes(2))
+                if (elapsed.Elapsed > TimeSpan.FromSeconds(timeoutSeconds))
                 {
                     VSMRendererProgress progress = part.RendererProgress;
+#if VOCALOID7
+                    WIVSMMidiTrack renderTrack = V7Compat.Track(part);
+                    throw new TimeoutException($"Native part rendering timed out: part={part.Name}, first_end={progress.FirstEnd}, second_begin={progress.SecondBegin}, second_end={progress.SecondEnd}, paused={progress.IsPaused}, finished={sequence.IsFinishedRendering}, started={started}, completed={completed}, valid_wave={part.HasValidRenderedWave}, can_async={sequence.CanAsyncRendering()}, concurrency={sequence.GetRendererConcurrency()}, ai={part.IsAi}, voice={renderTrack.VoiceBankID}, style={renderTrack.StyleName}, effects={string.Join(',', renderTrack.EffectManager?.MidiEffectIDs ?? [])}, latest_parent={part.LatestParent is not null}, has_score={part.HasValidRenderedScore}.");
+#else
                     throw new TimeoutException($"Native part rendering timed out: part={part.Name}, first_end={progress.FirstEnd}, second_begin={progress.SecondBegin}, second_end={progress.SecondEnd}, paused={progress.IsPaused}, finished={sequence.IsFinishedRendering}, started={started}, completed={completed}, valid_wave={part.HasValidRenderedWave}.");
+#endif
                 }
                 Thread.Sleep(20);
             }
@@ -615,16 +737,28 @@ internal sealed partial class EngineHost : IDisposable
                     ?? throw new InvalidOperationException("Native voicebank lookup failed.");
                 if (voice.LangIDSize > 256)
                     throw new InvalidDataException("Native language count exceeds the 256-language limit.");
+                int major = 0, minor = 0, revision = 0;
+                bool hasVersion = voice.Version(ref major, ref minor, ref revision);
                 voices.Add(new
                 {
                     name = voice.Name,
                     component_name = voice.ComponentName,
                     comp_id = voice.CompID,
                     kind = type.ToString(),
+                    version = hasVersion ? $"{major}.{minor}.{revision}" : null,
+#if VOCALOID7
+                    is_ai = voice.IsAi,
+                    default_voice_type_id = voice.DefaultVoiceTypeID,
+                    voice_type_count = voice.NumVoiceTypes,
+#endif
                     native_lang_id = voice.NativeLangID,
                     lang_ids = voice.LangIDs,
                     available_in_sequence = voice.IsAvailableInSequence,
+#if VOCALOID7
+                    available_for_voice_changer = false,
+#else
                     available_for_voice_changer = voice.IsAvailableForVoiceChanger,
+#endif
                     synthesizable_version = voice.IsSynthesizableVersion
                 });
             }
@@ -647,19 +781,27 @@ internal sealed partial class EngineHost : IDisposable
                 ?? throw new InvalidOperationException("DSEManagerIF.CreateManager returned null.");
             manager.SetDSEManager(dse);
             LicenseResult editor = LicenseResult.Undefined;
+#if !VOCALOID7
             LicenseResult lite = LicenseResult.Undefined;
+#endif
             foreach (Yamaha.VOCALOID.DSE.License license in dse.GetLicenses())
             {
                 if (license.CompType != Yamaha.VOCALOID.DSE.License.Type.Application)
                     continue;
                 if (license.CompID == Yamaha.VOCALOID.Identifier.Component.EditorId)
                     editor = license.Result;
+#if !VOCALOID7
                 else if (license.CompID == Yamaha.VOCALOID.Identifier.Component.EditorLiteId)
                     lite = license.Result;
+#endif
             }
             bool validEditor = editor is LicenseResult.ValidLeaseFile or LicenseResult.PaidOffLeaseFile or LicenseResult.ValidExpiryKey or LicenseResult.NoError;
+#if VOCALOID7
+            manager.SetYvs(validEditor ? YVS.CCAD9AC02E2B : YVS.A91D77BC1F12);
+#else
             bool validLite = lite is LicenseResult.ValidLeaseFile or LicenseResult.PaidOffLeaseFile or LicenseResult.ValidExpiryKey or LicenseResult.NoError;
             manager.SetYvs(validEditor ? YVS.CCAD9AC02E2B : validLite ? YVS.E9413638C757 : YVS.A91D77BC1F12);
+#endif
         }
         catch (Exception error)
         {
@@ -678,8 +820,8 @@ internal sealed partial class EngineHost : IDisposable
         try
         {
             VDMError result = default;
-            string explib = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFiles), "VOCALOID6", "Explib");
-            database = DatabaseManagerIF.CreateDatabaseManager("VOCALOID6", explib, ref result)
+            string explib = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFiles), EngineProduct, "Explib");
+            database = DatabaseManagerIF.CreateDatabaseManager(EngineProduct, explib, ref result)
                 ?? throw new InvalidOperationException("DatabaseManagerIF.CreateDatabaseManager failed: " + result);
             if (result != VDMError.None)
                 throw new InvalidOperationException("Database initialization failed: " + result);
@@ -812,6 +954,9 @@ internal sealed partial class EngineHost : IDisposable
         try { DisposeAudioServices(); } catch (Exception error) { errors.Add(error); }
         bool managerReleased = false;
         try { manager.Dispose(); managerReleased = true; } catch (Exception error) { errors.Add(error); }
+    #if VOCALOID7
+        try { DisposePhonemeService(); } catch (Exception error) { errors.Add(error); }
+    #endif
         try { dse?.Dispose(); } catch (Exception error) { errors.Add(error); }
         try { database?.Dispose(); } catch (Exception error) { errors.Add(error); }
         foreach (string directory in ownedDirectories.ToArray())
@@ -823,7 +968,7 @@ internal sealed partial class EngineHost : IDisposable
             string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             foreach (string kind in new[] { "VSM", "VSMCaches" })
             {
-                string root = Path.Combine(local, "VOCALOID6", kind);
+                string root = Path.Combine(local, EngineProduct, kind);
                 string cache = PathGuard.Under(root, CacheNamespace);
                 try
                 {

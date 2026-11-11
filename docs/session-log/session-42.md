@@ -35,3 +35,9 @@
 - `S5Air` 的取值范围是 −100..100，`controller.set` 传 127 会被拒绝（`value must be an integer in -100..100`）；在一个 F#5 的短音上，Air 70（Expression 60）把"噪声/谐波"从 −34 dB 抬到 −19.5 dB，Air 100（同时改了 Expression 和 Dynamics）则变成没有音高的气声（电平低了约 9 dB），所以想要"带噪的喊声"只能取中间值，并用 Expression 和 Dynamics 把电平补回来。
 - `note.update` 可以改 `start_tick` 和 `duration_tick`（整个音符前后移动、加长缩短），歌词和音素不受影响；`controller.set` 逐点写入是 upsert，不会删除相邻的点；take 配置（`controller.set` + `replace`）会整条换掉 PitchBend，其余曲线（Dynamics、Expression、S5Air、S5Character）保留在 VPR 里。
 - 一个我自己的构建器 bug 值得提醒用这个桥画曲线的人：把几条曲线（起音、颤音、收音）写进同一个按 tick 排序的列表时，重叠区间的点会交替出现，PitchBend 在几个 tick 内上下跳几百单位，渲染里是音高抖动；重叠的曲线要先相加再写点。
+
+## 补充 2（同一天晚些时候）
+
+- **`output/` 不是仓库，一小时后会被清空**：`vocaloid_bridge/cleanup.py` 随 MCP 服务启动一个后台线程，永久删除 `output/**` 里超过 3600 秒的文件（环境变量 `VOCALOID_TEMP_CLEANUP=0` 关闭，`VOCALOID_TEMP_MAX_AGE_SECONDS` 调整时限，`VOCALOID_TEMP_CLEANUP_INTERVAL_SECONDS` 调整间隔）。本曲一直把 VPR 版本和整段渲染留在 `output/` 里，某次服务重启之后的清理（16:40）把现行的两个 VPR、两个和声工程和一批渲染都永久删掉了（不进回收站）。要长期保留的 VPR / 渲染，保存后立刻复制到工程目录；需要保留时先关掉清理或加大时限。这条行为在文档里写在 `cleanup.py` 的模块说明里，使用说明里没有提醒，值得在 README 的"输出目录"处补一句。
+- **`S5Character` 在 IA :[R] 上作用很强**：在 build 末尾约 D#6 的喊声音符上，Character 0 → 50 把 1.5–4.5 kHz 相对 0.2–1.5 kHz 的倾斜抬高到 +5.8 dB（约 0.5 dB / 单位），过头了；取 27 并配合 Dynamics 88、Air 60，渲染后的倾斜接近原唱的 +1.7 dB 还差约 3.4 dB，其余在混音里补（3.2 kHz 钟形 +4.5 dB）。Character 做的是渐变而不是开关，按 tick 渐变写比整音符一个值更自然。
+- 同一类做法的共同点：先用同一把尺（噪声/谐波比、1.5–4.5 kHz 倾斜、电平）量原唱与渲染，再决定动 Air / Character / Expression / Dynamics 的哪个；每动一次整段重新渲染后重新量。

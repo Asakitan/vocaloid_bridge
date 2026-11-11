@@ -6,6 +6,13 @@ are exact. `vocaloid_operations` gives the complete contract of every operation.
 
 ## Conventions
 
+- Start with `vocaloid_status`: a new host selects the newest installed supported
+  engine. On V7, voice, style and performance settings require explicit
+  `scope="track"` and affect every part on the track; on V6 they remain part-level.
+  V7 uses `take_number` and vibrato `curve_model`, not legacy booleans/take lanes.
+  Query native bounds and voicebank `is_ai`/version rather than inferring editor
+  track labels from a singer name. The control audio audit below was on V6.
+
 - Time is in ticks, 480 per quarter note. Parts, tempo and automation use
   project ticks. Notes and controller points count from the start of their
   part. Pitch and vibrato points count from the start of their note.
@@ -26,10 +33,11 @@ are exact. `vocaloid_operations` gives the complete contract of every operation.
 4. `project_edit` `part.create` `{track_index, start_tick, duration_tick}`: end
    the part at least one beat after its last note. The mixdown stops at the end
    of the last part, so leave room there for the release and any reverb tail.
-5. `project_edit` `voice.set` `{track_index, part_index, ai_voice_bank_id}`.
+5. `project_edit` `voice.set` `{track_index, part_index, ai_voice_bank_id}`;
+  on V7 add `scope: "track"` (the part index does not restrict the change).
    `installed_voice` in the result names the singer the ID resolves to.
 6. `project_library` `style_list` `{query: "<singer name>"}`, then `style_apply`
-   `{track_index, part_index, style_id}` with the style called
+  `{track_index, part_index, style_id}` (V7 also `scope: "track"`) with the style called
    `<singer name> Default`. A new part starts with Breath bypassed and with no
    audio effects, so without the singer's default style the voice is rendered
    bare.

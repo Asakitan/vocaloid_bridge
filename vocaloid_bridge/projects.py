@@ -1,4 +1,4 @@
-"""Structured edits for editor-authored VOCALOID6 VPR ZIP projects."""
+"""Structured edits for editor-authored VOCALOID6/7 VPR ZIP projects."""
 
 from __future__ import annotations
 
@@ -122,6 +122,13 @@ def _extended_points(value: Any) -> bool:
         for item in value)
 
 
+def _ai_voice(track: dict, part: dict) -> dict | None:
+    if track.get("type") != 2:
+        return None
+    voice = track.get("voice", part.get("aiVoice"))
+    return voice if isinstance(voice, dict) else None
+
+
 def _guard_note_replacement(data: dict) -> None:
     """Keep file-level note replacement inside the existing extension boundaries."""
     tracks = data.get("tracks")
@@ -166,7 +173,8 @@ def _replace_notes(data: dict, notes: list[dict], track_index: int, part_index: 
     prototypes = part.get("notes", [])
     if not isinstance(prototypes, list):
         raise ValueError("part.notes must be a list")
-    is_ai = track.get("type") == 2 and isinstance(part.get("aiVoice"), dict)
+    voice = _ai_voice(track, part)
+    is_ai = voice is not None
     if not is_ai and prototypes:
         if not isinstance(prototypes[0], dict) or not _NOTE_FIELDS <= prototypes[0].keys():
             raise ValueError("template note lacks the verified native note fields")
@@ -175,7 +183,7 @@ def _replace_notes(data: dict, notes: list[dict], track_index: int, part_index: 
         raise ValueError("no native note prototype; use an editor-authored AI or populated vocal template")
     else:
         legacy_prototype = {}
-    available_languages = {entry.get("langID") for entry in part.get("aiVoice", {}).get("langIDs", []) if isinstance(entry, dict)}
+    available_languages = {entry.get("langID") for entry in (voice or {}).get("langIDs", []) if isinstance(entry, dict)}
     native_notes = []
     origins: list[int | None] = []
     used: set[int] = set()
@@ -203,6 +211,9 @@ def _replace_notes(data: dict, notes: list[dict], track_index: int, part_index: 
             native = deepcopy(source_note)
         elif is_ai:
             native = deepcopy(_EDITOR_AI_NOTE)
+            if isinstance(track.get("voice"), dict):
+                native.pop("isAiVibratoEnabled")
+                native["vibrato"]["aiCurveModel"] = 0
             # Preserve the established part language default, not a note's opaque fields.
             if prototypes and isinstance(prototypes[0], dict):
                 native["langID"] = prototypes[0].get("langID", native["langID"])
@@ -213,7 +224,7 @@ def _replace_notes(data: dict, notes: list[dict], track_index: int, part_index: 
         native["velocity"] = _integer(note.get("velocity", native.get("velocity", 64)), "note.velocity", 1, 127)
         native["langID"] = _integer(note.get("lang_id", native.get("langID", 0)), "note.lang_id", 0, 127)
         if available_languages and native["langID"] not in available_languages:
-            raise ValueError("note.lang_id is absent from this part's aiVoice.langIDs")
+            raise ValueError("note.lang_id is absent from the selected voice.langIDs")
         if ("phoneme" not in note and source_index is not None and
                 note["lyric"] == prototypes[source_index]["lyric"] and
                 native["langID"] == prototypes[source_index]["langID"]):
@@ -436,7 +447,7 @@ class ProjectStore:
                 notes = part.get("notes")
                 parts.append({"index": part_index, "pos": part.get("pos"), "duration": part.get("duration"),
                               "note_count": len(notes) if isinstance(notes, list) else 0,
-                              "aiVoice": deepcopy(part.get("aiVoice"))})
+                              "aiVoice": deepcopy(_ai_voice(track, part))})
             tracks.append({"index": index, "name": track.get("name"), "type": track.get("type"), "parts": parts})
         master = data.get("masterTrack")
         tempo = master.get("tempo", {}) if isinstance(master, dict) else {}
@@ -515,16 +526,19 @@ class ProjectStore:
             raise ValueError("title must be a string")
         with _source_archive(self.workspace, template) as archive:
             data = self._read_note_edit_archive(archive)
-            _, part = _part(data, track_index, part_index)
+            track, part = _part(data, track_index, part_index)
             if voice_comp_id is not None:
                 if not isinstance(voice_comp_id, str) or not voice_comp_id:
                     raise ValueError("voice_comp_id must be a nonempty string")
                 voices = data.get("voices")
                 if not isinstance(voices, list) or not any(isinstance(voice, dict) and voice.get("compID") == voice_comp_id for voice in voices):
                     raise ValueError("voice_comp_id must already exist in the project's voices list")
-                if not isinstance(part.get("aiVoice"), dict):
+                voice = _ai_voice(track, part)
+                if voice is None:
                     raise ValueError("selected part has no aiVoice")
-                part["aiVoice"]["compID"] = voice_comp_id
+                if isinstance(track.get("voice"), dict) and voice.get("compID") != voice_comp_id:
+                    track["voiceTypeID"] = ""
+                voice["compID"] = voice_comp_id
             origins = _replace_notes(data, notes, track_index, part_index)
             _tempo_events(data, [{"start": 0, "bpm": bpm}])
             data["title"] = title

@@ -23,14 +23,15 @@ async def main() -> None:
         command=sys.executable,
         args=["-m", "vocaloid_bridge"],
         cwd=str(root),
-        env={**os.environ, "VOCALOID_WORKSPACE": str(root), "PYTHONUTF8": "1"},
+           env={**os.environ, "VOCALOID_WORKSPACE": str(root), "PYTHONUTF8": "1",
+               "VOCALOID_TEMP_CLEANUP": "0", "VOCALOID_RENDER_TIMEOUT_SECONDS": "15"},
     )
     async with stdio_client(parameters) as (reader, writer):
         async with ClientSession(reader, writer) as client:
             await client.initialize()
 
             async def call(name: str, **arguments):
-                result = await client.call_tool(name, arguments)
+                result = await asyncio.wait_for(client.call_tool(name, arguments), timeout=40)
                 if result.isError or result.structuredContent is None:
                     raise AssertionError(f"{name}: {result.content}")
                 return result.structuredContent
@@ -44,6 +45,7 @@ async def main() -> None:
                  "lyric": "\u3042", "phoneme": "a", "lang_id": 0}
                 for index, pitch in enumerate([60, 64, 67, 64])
             ]
+            del notes[0]["phoneme"]
             score = await call("score_compose", output_name=stem + "-score.vpr",
                                title="Background demo", bpm=120, notes=notes)
             saved = await call("project_save", session_id=score["native_session"]["session_id"],
@@ -52,6 +54,13 @@ async def main() -> None:
             opened = await call("project_open", path=saved["path"])
             session_id = opened["session_id"]
             assert opened["dirty"] is False, opened
+            voice_options = {"track_index": 0, "part_index": 0}
+            if status["product"] == "VOCALOID7":
+                voice_options["scope"] = "track"
+            voice = await call("project_edit", session_id=session_id,
+                               operation="voice.get", options=voice_options)
+            if status["product"] == "VOCALOID7":
+                assert voice["result"]["voice_type_id"], voice
             rendered = await call("project_render_part", session_id=session_id,
                                   output_name=stem + ".wav", track_index=0, part_index=0)
             audio = rendered["audio"]
@@ -69,6 +78,8 @@ async def main() -> None:
                 raise RuntimeError("Foreground changed during the rendering check.")
             report = {
                 "transport": "mcp-stdio", "backend": status["backend"], "desktop": status["desktop"],
+                "mcp_version": status["mcp_version"],
+                "product": status["product"], "version": status["version"], "voice": voice,
                 "voicebank_count": len(voices["voices"]), "rendered_clean_reopened_project": True,
                 "native_project": saved["path"], "native_render": rendered,
                 "audio": audio, "native_note_roundtrip": True, "remaining_sessions": after["sessions"],
@@ -82,4 +93,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(asyncio.wait_for(main(), timeout=120))

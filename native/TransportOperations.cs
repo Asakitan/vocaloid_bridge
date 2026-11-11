@@ -4,6 +4,11 @@ using System.Text.Json;
 using Yamaha.VOCALOID;
 using Yamaha.VOCALOID.VAE;
 using Yamaha.VOCALOID.VSM;
+#if VOCALOID7
+using WEffectManager = Yamaha.VOCALOID.VEM.WAudioEffectManager;
+#else
+using WEffectManager = Yamaha.VOCALOID.VEM.WEffectManager;
+#endif
 
 internal sealed partial class EngineHost
 {
@@ -192,7 +197,7 @@ internal sealed partial class EngineHost
         var effects = SyncAudioEffects(session, true);
         effects.SetSampleRate(sampleRate);
         var tempos = AudioTempoSnapshot(sequence);
-        if (!effects.RecreateTempoInfo(tempos.Select(value => new Yamaha.VOCALOID.VEM.WEffectManager.VEMTempoInfo(value.Seconds, value.Tempo)).ToArray()))
+        if (!effects.RecreateTempoInfo(tempos.Select(value => new WEffectManager.VEMTempoInfo(value.Seconds, value.Tempo)).ToArray()))
             throw new InvalidOperationException("Native transport tempo synchronization failed.");
         effects.SetBypassAll(false);
         effects.ClearProcessMemory();
@@ -226,7 +231,11 @@ internal sealed partial class EngineHost
                 actual.DeviceType != devices[0].DeviceType || !Yamaha.VOCALOID.VAE.GUID.Equals(actual.Guid, devices[0].Guid))
                 throw new InvalidOperationException("Native standalone transport initialization failed: " + result + "; connection=" + connection + "; sample_rate=" + actual.SampleRate);
             current.Configuration = actual;
+#if VOCALOID7
+            if (!VEAudioEngine.SetAudioEffectManager((nint)effects))
+#else
             if (!VEAudioEngine.SetEffectManager((nint)effects))
+#endif
                 throw new InvalidOperationException("Native transport effect-manager attachment failed.");
             VEBusInfo buses = new() { BusBits = new uint[4], ExtBus = new VEExtBusInfo[127], ExtBusCount = 0 };
             foreach (ulong index in selected)
@@ -240,12 +249,18 @@ internal sealed partial class EngineHost
                 VEAudioEngine.EndEditOutputGain();
             }
             bool explicitSelection = options.TryGetProperty("track_indices", out _);
-            bool anySolo = sequence.Tracks.Any(track => track.IsSolo);
+#if !VOCALOID7
+            bool anySolo = sequence.Tracks.Any(track => V7Compat.IsSolo(track));
+#endif
             HashSet<int> pending = [];
             foreach (ulong index in selected)
             {
                 WIVSMTrack track = sequence.GetTrack(index)!;
-                bool enabled = explicitSelection || track.IsSolo || (!track.IsMute && !anySolo);
+#if VOCALOID7
+                bool enabled = explicitSelection || !track.IsChannelMute;
+#else
+                bool enabled = explicitSelection || V7Compat.IsSolo(track) || (!V7Compat.IsMute(track) && !anySolo);
+#endif
                 VEAudioEngine.SetMixerInputEnabled((uint)index, enabled);
                 if (!enabled)
                     continue;

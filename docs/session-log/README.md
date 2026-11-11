@@ -42,3 +42,4 @@
 | [session-38](session-38.md) | 2026-11-10 | 样式来源关联、细项参数默认启用、样式单次事务及扩展工程保存与历史验证 |
 | [session-39](session-39.md) | 2026-11-11 | 整曲制作中的桥接扩展：points_file、逐音符批量补丁、batch.run；Expression 实测为“唱法强弱”；连音/尾辅音/音素时值经验 |
 | [session-40](session-40.md) | 2026-11-11 | 发布公开仓库 Asakitan/vocaloid_bridge：MIT 许可证、包元数据、发布范围核对与远端回读 |
+| [session-41](session-41.md) | 2026-11-11 | README 改为猫娘助手语气，本机部署/验收记录移出；新增 CHANGELOG 汇总 0.1.0–0.27.0 |

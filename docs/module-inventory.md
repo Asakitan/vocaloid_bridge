@@ -78,6 +78,9 @@
 | `.gitignore` | 运行缓存、构建输出、证据、音频与调教中间数据排除 | `curves/` 保留本机；随包仅保留自有 `ai-starter.vpr` 模板 |
 | `.vscode/mcp.json` | 工作区 stdio 服务配置 | 已配置；使用 `${workspaceFolder}` 占位符，可随仓库发布 |
 | `.vscode/tasks.json` | 安装、工程验收和原生合成验收任务 | 原生合成任务已运行通过 |
+| `README.md` | 项目说明（猫娘助手语气） | 安装、39 工具、后台约束与验证入口；本机部署细节已移出，版本变化见 `CHANGELOG.md` |
+| `CHANGELOG.md` | 版本变化记录（Keep a Changelog） | 0.1.0–0.27.0 已记录；未发布段为空 |
+| `.vscode/handoff/local-environment.md` | 本机客户端注册、声库、输出与验收记录 | 本机笔记；`.vscode/handoff/` 被忽略，不随公开仓库发布 |
 | VS Code Stable/Insiders 用户 `mcp.json` | 跨工作区启动原生 MCP | 已注册；配置及共用启动检查通过 |
 | Claude Code 用户 `.claude.json` | 用户级 stdio MCP | 原生命令报告 Connected；会话 36 的实际聊天连接列出 38 个工具并返回 0.26.0 |
 | Claude Desktop `Claude-Data` / `Claude-3p` 配置 | 桌面客户端两种模式的 stdio MCP | 已注册；配置及共用启动检查通过，界面连接未验 |
@@ -150,3 +153,4 @@
 | 2026-11-10 | 会话 38：样式捕获关联来源、表现参数默认启用、样式一次事务与扩展工程保护；普通/扩展定向用例通过，重复 Gain 夹具失败回执保留。 |
 | 2026-11-11 | 会话 39：`points_file`、逐音符批量补丁与 `batch.run`，AI 声库 Expression/Dynamics/PitchBend 实测；真实整曲调用证据保留，未新增自动化回归。 |
 | 2026-11-11 | 会话 40：公开仓库 `Asakitan/vocaloid_bridge`，加入 MIT 许可证与包元数据；发布范围排除运行缓存、证据、音频和 `curves/` 中间数据。远端回读 PUBLIC、`master`、MIT，315 文件且无 `curves/`。 |
+| 2026-11-11 | 会话 41：README 改为猫娘语气；本机部署与验收记录移到本地忽略的 `.vscode/handoff/local-environment.md`；新增 `CHANGELOG.md` 记录 0.1.0–0.27.0，README 不再重复版本历史。 |

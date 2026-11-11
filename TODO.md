@@ -41,3 +41,4 @@
 - [会话 38](docs/session-log/session-38.md)：样式与细项参数修复，普通/扩展工程的定向验收。
 - [会话 39](docs/session-log/session-39.md)：整曲制作中的 `points_file`、逐音符批量补丁与 `batch.run`，AI 声库实测。
 - [会话 40](docs/session-log/session-40.md)：公开仓库、MIT 许可证与远端回读。
+- [会话 41](docs/session-log/session-41.md)：README 猫娘化、本机记录移出与 CHANGELOG 分离。

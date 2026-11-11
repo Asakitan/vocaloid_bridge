@@ -2,6 +2,14 @@
 
 日期：2026-11-11。版本：0.27.0。39 个工具、127 个结构化操作。
 
+## README 猫娘化与更新日志拆分（会话 41）
+
+`README.md` 改成猫娘助手口吻，保留安装、39 工具表、后台约束和验证入口；命令、参数、路径与表格值不加语气词。已安装客户端表、E 盘启动参数、连接/版本状态、本机声库计数、输出与清理记录移到 `.vscode/handoff/local-environment.md`，该目录已被忽略，不进入公开仓库。验证示例改用 `<MANUAL_TEXT>`、`<VSQX>`、`<PSSF>` 等占位符。
+
+新增根目录 `CHANGELOG.md`，按 Keep a Changelog 记录 0.1.0–0.27.0 的版本变化；README 正文不再写版本号和单次会话记录，只链接更新日志、STATUS 和会话索引。
+
+本次只改文档，没有改代码、重建宿主或重跑验收。README 保留 39 工具/127 操作的当前能力数字。
+
 ## 公开仓库与许可证（会话 40）
 
 源码以 MIT 许可证发布：根目录 `LICENSE` 版权署名为 Asakitan（2026），`pyproject.toml` 的 `project.license` 引用该文件，README 说明桥接代码与 VOCALOID 第三方组件的授权范围区别。公开仓库为 [Asakitan/vocaloid_bridge](https://github.com/Asakitan/vocaloid_bridge)，`origin` 使用 HTTPS，默认分支 `master`。

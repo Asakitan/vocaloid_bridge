@@ -3,16 +3,16 @@
 | 源文件 | 功能 | Status |
 | --- | --- | --- |
 | `native/Program.cs` | 原生宿主入口、安装库解析、私有 desktop 检查 | 已编译 |
-| `native/EngineSession.cs` | VSM 会话、工程生命周期、声库、片段渲染和归档校验钩子 | 独立命名空间、零结果缓存；保存前 ZIP 及控制器事务校验有定向测试 |
+| `native/EngineSession.cs` | VSM 会话、工程生命周期、声库、片段渲染和归档校验钩子 | 独立命名空间、零结果缓存；渲染等待整条队列完成后释放控制器，12 段整体混缩超时回归通过；保存前 ZIP 及控制器事务校验有定向测试 |
 | `native/ProjectIntegrity.cs` | 原生打开与发布前的结构和声库身份检查 | 缺经典声库预检、丢失身份阻止覆盖、AI 正例通过；不代替经典声库 |
-| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 68 操作；21 AI 首音符、扩展删除/拆合和普通编辑有定向证据 |
+| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 68 操作；AI 改词和适用性已有定向证据；会话 38 的四类表现参数默认启用、显式旁路优先及保存重开通过 |
 | `native/AudioOperations.cs` | 原生离线音频、效果与整轨混缩 | 16 操作；扩展工程音频导入/编辑及效果添加/撤销通过，复杂资源组合另列边界 |
 | `native/TransportOperations.cs` | 原生设备枚举与私有会话播放、停止、定位、释放 | 普通及扩展工程快照的 DirectSound 静音闭环通过；定位区分异步请求与观测 |
 | `native/TrackFreezeOperations.cs` | 会话自有冻结缓存、时基物化和作者态保存 | 多片段/非零起点/效果/自动化与正式 MCP 通过；不持久化冻结标志 |
-| `native/ProjectArchivePreservation.cs`、`native/ProjectArchiveArrays.cs` | 实体身份、事件与未知字段 | 原生身份映射、音频 region 区分、元数据地图 no-op/历史通过 |
+| `native/ProjectArchivePreservation.cs`、`native/ProjectArchiveArrays.cs` | 实体身份、事件与未知字段 | 原生身份映射、音频 region 区分、元数据地图 no-op/历史通过；样式捕获/应用进入身份保护事务并通过定向往返 |
 | `native/ProjectArchiveTimeEdit.cs`、`native/ProjectArchiveNoteArrays.cs`、`native/ProjectArchiveNoteIntegration.cs`、`native/ProjectArchiveMasterAutomation.cs`、`native/ProjectArchiveTrackAutomation.cs` | 复杂时间编辑与曲线元数据 | MIDI/AI/音频跨边界、曲线迁移、起始 tempo 及历史的必要用例通过 |
 | `native/MidiRecordingOperations.cs`、`native/MidiRecordingGuards.cs` | 设备枚举、MIDI 事件队列、事务录制及会话保护 | 六操作、静音同步、回调保护及自有虚拟输入通过；物理设备和驱动错误路径未验 |
-| `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 32 操作；完整短语检查、三语言及 21 AI 首音符往返定向通过 |
+| `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 32 操作；样式捕获关联来源声部，样式应用一次提交；普通/扩展工程及单步撤销、保存重开通过；Attack/Release 适用性标注保留 |
 | `native/MediaPropertyOperations.cs`、`native/MediaPropertyJournal.cs` | 独立原生属性写入、独占发布及持久恢复 | 显式版本化冲突决策、决策中断恢复、普通与归档 clip 字节保持有定向证据 |
 | `native/ProjectInterchange.cs`、`native/ProjectArchiveTempoMerge.cs`、`native/ProjectArchiveTimeSigMerge.cs` | 原生格式交换、复制、恢复与合并 | 真实 PPSF3/音频克隆、受测纯元数据历史及空操作状态、tempo/拍号扩展合并和速度碰撞覆盖通过；其他音频组合受限 |
 | `native/ProjectClipboard.cs`、`native/ProjectArchiveTransfer.cs` | 私有原生剪贴板及扩展身份迁移 | 音高、控制器、轨道自动化复制/剪切/迁移及偏移有 0.24.0 定向证据 |
@@ -20,7 +20,8 @@
 | `native/ProjectArchiveLibrary.cs`、`native/ProjectArchiveMedia.cs` | 素材元数据 v1/v2、音频绑定与候选核对 | 控制器/音高/其他数组/音频捕获导入、单次历史及重开通过 |
 | `native/RpcServer.cs` | 单线程 JSON 行协议、原生对象发现与精确签名调用 | 已编译 |
 | `vocaloid_bridge/native_client.py` | 私有进程、握手、代次、缓存及故障生命周期 | 按需启动、默认保护、确认退出重建和不重放失联请求通过定向验证 |
-| `vocaloid_bridge/server.py` | 38 个 MCP 工具、资源、写歌提示 | 增加托管 runtime 启停入口，所有工作保留在私有后台实例 |
+| `vocaloid_bridge/server.py` | 39 个 MCP 工具、资源、写歌提示 | 增加 `vocaloid_workflow` 和面向 Agent 的工具说明；不带范围的整库文档请求明确报错 |
+| `docs/song-workflow.md` | Agent 作曲流程、歌词写法、AI 演唱与仅保存的控制项 | 由 `vocaloid_workflow` 原样返回；内容与操作目录的一致性有定向检查 |
 | `vocaloid_bridge/compose.py` | AI 编曲/替换缺省音素共用原生 G2PA、临时会话和独占发布 | asa 日英中单音节、替换源身份及保存重开定向通过；其他声库、扩展源及发音质量待验 |
 | `vocaloid_bridge/operations.json` | 原生 dispatch 对照的随包操作索引 | 127 操作均有精确契约行；发现与实测分开 |
 | `tools/generate_operation_catalog.py` | 操作目录生成及漂移检查 | 按源码与文档操作首列精确生成，缺契约行时检查失败 |
@@ -30,9 +31,9 @@
 | `vocaloid_bridge/desktop.py` | 旧 UI 模块退役标记 | 不包含可调用后端 |
 | `tools/smoke_mcp.py` | 真实 stdio 原生生命周期及 MCP 版本验收 | 0.17.0 独立连接通过 |
 | `tools/render_demo.py` | MCP stdio 编曲、保存、重开、合成和 WAV 样本验收 | 通过：374849 帧，非零峰值与 RMS，关闭后 0 会话 |
-| `tools/verify_features.py`、`tools/verify_all.py` | 按功能分类的真实 MCP 验收 | 历史整合 76/5/2；本轮定向证据及环境边界见 STATUS |
+| `tools/verify_features.py`、`tools/verify_all.py` | 按功能分类的真实 MCP 验收 | 历史整合 76/5/2；新增多片段和 `--mixdown-fixture` 实际工程回归，12 段逐段非零样本及会话清理通过；证据见 STATUS |
 | `tools/check_host_isolation.py` | 双原生宿主缓存回归 | 修复前失败、每宿主命名空间后通过 |
-| `tools/check_*remaining*.py` | 乐谱、音频、素材、交换的定向验证 | 证据与限制分别记录在模块文档 |
+| `tools/check_*remaining*.py` | 乐谱、音频、素材、交换的定向验证 | 会话 38 扩展私有样式用例，核对来源身份、四类参数、显式旁路及一次撤销；证据见会话记录 |
 | `tools/check_session_features.py` | VPR 导入、完整表现、素材参数与 Breath 音频 | 参数往返及 Breath 启用/频率/音量差异通过，类型声音差异未成立 |
 | `tools/check_robot_runtime.py`、`tools/check_audio_routing.py` | Robot 时序/缓存和内部/输出率调查 | 原失败回归、双会话及六组合混音通过，非 44100 内部合成显式报错 |
 | `tools/check_voicecolor_audio.py`、`tools/check_score_parameters.py` | VoiceColor 和 Take 定向音频测量 | 三个 AI VoiceColor 及 Take 差异通过；六个经典 VoiceColor 待 DSE |
@@ -73,7 +74,9 @@
 | `tools/check_internal_rate_static.py` | 安装版本的采样率分支取证 | 只读静态证据；不当作 96 kHz 动态验收 |
 | `tools/fetch_public_ppsf_fixture.py` | 公开样本获取及来源记录 | 作者原始 PPSF3 与最小格式夹具分开标识；歌曲不入 Git |
 | `docs/feature-matrix.md` | 官方手册与原生接口逐项覆盖 | 证据已回填，未验、缺失和受限项保留 |
-| `.vscode/mcp.json` | 工作区 stdio 服务配置 | 已配置 |
+| `LICENSE` | MIT 许可证（桥接代码） | 已随公开仓库发布；VOCALOID 引擎、声库及第三方组件不在授权范围 |
+| `.gitignore` | 运行缓存、构建输出、证据、音频与调教中间数据排除 | `curves/` 保留本机；随包仅保留自有 `ai-starter.vpr` 模板 |
+| `.vscode/mcp.json` | 工作区 stdio 服务配置 | 已配置；使用 `${workspaceFolder}` 占位符，可随仓库发布 |
 | `.vscode/tasks.json` | 安装、工程验收和原生合成验收任务 | 原生合成任务已运行通过 |
 | VS Code Stable/Insiders 用户 `mcp.json` | 跨工作区启动原生 MCP | 已注册；配置及共用启动检查通过 |
 | Claude Code 用户 `.claude.json` | 用户级 stdio MCP | 原生命令报告 Connected；会话 36 的实际聊天连接列出 38 个工具并返回 0.26.0 |
@@ -87,7 +90,10 @@
 | `native/ProjectArchiveNestedArrays.cs` | 其他对象数组的自然键、已知投影与暂存核对 | voices/语言/效果参数/颤音等元数据编辑和往返定向通过；身份歧义报错 |
 | `tools/check_completion_34.py`、`tools/check_transaction_readback_34.ps1` | 剩余时间、素材、数组、提交前失败与纯元数据历史 | 三项必要契约最终通过；原失败回执保留 |
 
-| `tools/check_runtime_35.py` | MCP 托管生命周期与未知结果不重放 | 两个定向用例及清理通过；无原生重编译 |
+| `tools/check_runtime_35.py` | MCP 托管生命周期与未知结果不重放 | 两个定向用例及清理通过；无原生重编译；版本断言改读包版本后在 0.27.0 重跑通过 |
+
+| `tools/check_ai_effect_audit_36.py` | 逐样本比较各表现控制对 AI 合成的影响 | asa：34 项改变、53 项不改变、1 项拒绝；基线两次渲染逐样本相同 |
+| `tools/check_agent_song_36.py` | 作曲指引、改词转换、适用性标注和完整做歌流程 | 四项用例通过；首次批次的两处失败回执保留 |
 
 ## 更新记录
 
@@ -139,3 +145,8 @@
 | 2026-11-10 | 0.25.0：复杂时间事务、素材元数据 v2、其他数组与读回回滚/元数据 no-op，剩余实现收齐。 |
 | 2026-11-10 | 0.26.0：MCP 按需拉起和管理 VOCALOID 私有实例，活动工程保护、确认退出后重建及失联不重放。 |
 | 2026-11-10 | 会话 36：Claude Code 新聊天的实际 MCP 连接经单次状态检查确认 0.26.0，TODO 无未完成项；无代码改动、未重跑功能测试。 |
+| 2026-11-10 | 0.27.0：按 AI 合成的逐样本审计标注表现控制的适用性，AI 改词重转音素，新增作曲流程工具与歌词写法提示；39 工具，客户端重连后的版本确认待用户操作。 |
+| 2026-11-10 | 会话 37：修复多片段渲染队列提前停止导致的整体混缩超时，真实 12 段工程单段/整体混缩与逐段非零音频通过；超时值未改，活动宿主需重启载入。 |
+| 2026-11-10 | 会话 38：样式捕获关联来源、表现参数默认启用、样式一次事务与扩展工程保护；普通/扩展定向用例通过，重复 Gain 夹具失败回执保留。 |
+| 2026-11-11 | 会话 39：`points_file`、逐音符批量补丁与 `batch.run`，AI 声库 Expression/Dynamics/PitchBend 实测；真实整曲调用证据保留，未新增自动化回归。 |
+| 2026-11-11 | 会话 40：公开仓库 `Asakitan/vocaloid_bridge`，加入 MIT 许可证与包元数据；发布范围排除运行缓存、证据、音频和 `curves/` 中间数据。 |

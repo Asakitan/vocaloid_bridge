@@ -45,6 +45,14 @@ records VSM instructions and native enum ordinals in
   field with `44100` at `0x59ed8`; the non-equal branch returns `0x49` at
   `0x59f6e`. Managed `VSMResult` ordinal 73 has the same failure name.
 
+The Reference Manual 6.13 (page 37) states that pasted audio is converted to
+44.1 kHz/16-bit "in accordance with the internal operating specifications of
+VOCALOID", and its export dialog offers the output sampling rate separately.
+Session 36 confirmed through MCP that 48000 and 96000 Hz projects store their
+rate, that part rendering and mixdown reject them with the explicit guard
+message, and that rendering succeeds after `sequence.update` sets 44100. The
+native 96000 Hz path itself was still not run.
+
 These static branches are consistent with the observed 48000 Hz failure and
 show an explicit 44100 comparison in the installed VSM binary. The exact
 internal object type, provenance of its `+0x28` field, full dynamic call chain,

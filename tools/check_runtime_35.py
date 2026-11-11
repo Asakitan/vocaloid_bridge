@@ -11,6 +11,7 @@ import win32process
 import verify_features as v
 
 sys.path.insert(0, str(v.ROOT))
+from vocaloid_bridge import __version__
 from vocaloid_bridge.native_client import NativeClient, NativeError
 
 
@@ -22,7 +23,7 @@ async def lifecycle(check):
     sid = (await check.call('project_create', title='MCP-owned startup'))['session_id']
     running = await check.call('vocaloid_runtime', operation='status')
     check.owned_pids.add(running['pid'])
-    v.require(running['running'] and running['generation'] == 1 and running['mcp_version'] == '0.26.0',
+    v.require(running['running'] and running['generation'] == 1 and running['mcp_version'] == __version__,
               'Project create did not start the native runtime', running)
     await check.edit(sid, 'track.create', type='MidiAi', name='AI')
     await check.edit(sid, 'part.create', track_index=0, start_tick=0, duration_tick=1920)

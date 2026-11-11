@@ -10,3 +10,5 @@ native/obj/
 output/
 artifacts/
 .vscode/handoff/
+# 整曲调教中间数据（音符索引/曲线点），保留在本机，不随源码发布
+curves/

@@ -49,7 +49,7 @@ Indices are zero-based. Fields marked optional have the defaults shown.
 | `edit_audio` | `track_index`, `part_index`; optional `position_tick`, `begin_tick`, `end_tick`, `name` | Calls `SetRegion`, `MovePart`, and `SetName`; returns the new native sorted part index. Region tick offsets are relative to the underlying audio asset, not the project start. |
 | `export_audio` | `track_index`, `part_index`, `output_name`; optional `overwrite=false`, `original=false` | Copies the current native stored WAV, or original stored asset with `original=true`. This is **whole-asset export**, not region trimming, effects rendering, or resynthesis. |
 | `process_audio` | `path`, `action` (`reverse`, `normalize`, `time_stretch`, `pitch_shift`, or `voice_change`), `output_name`; optional `overwrite=false`, `ratio=1`, `pitch_cents=0`; `voice_id` required for voice change | Calls the installed WOR offline renderer directly; see action table below. Creates a separate WAV without changing the imported part. |
-| `mixdown` | `output_name`; optional `track_indices`, `sample_rate=44100`, `bits_per_sample=24`, `channels=2`, `bypass_effects=false`, `timeout_seconds=120`, `overwrite=false` | Native VAE manual mixdown with VEM effects, file placements, and VSM-rendered vocal parts. |
+| `mixdown` | `output_name`; optional `track_indices`, `sample_rate=44100` (or 48000, 96000, 192000), `bits_per_sample=24` (or 16), `channels=2` (or 1), `bypass_effects=false`, `timeout_seconds=120`, `overwrite=false` | Native VAE manual mixdown with VEM effects, file placements, and VSM-rendered vocal parts. The file ends at the end of the last part. |
 | `mixdown_stems` | `output_prefix`; optional `track_indices`, `sample_rate=44100`, `bits_per_sample=24`, `channels=2`, `bypass_effects=false`, `timeout_seconds=120`, `overwrite=false` | One native mix per selected track, named `PREFIX-track-INDEX.wav`. Existing destinations are preflighted before the first stem. Earlier completed stems remain if a later native render fails. |
 | `effects` | optional `scope=catalog`, `effect_id`, `track_index`, `part_index` | Bundled VEM effect discovery or current master/track/part chain inspection. |
 | `set_effect` | `action` is `add`, `set`, `remove`, or `move`; optional `scope=master`, `slot`, `track_index`, `part_index`, `effect_id`, `parameters`, `preset`, `bypass`, `target_slot` | Edits the native persisted effect chain; no plugin editor is opened. |
@@ -64,8 +64,9 @@ Indices are zero-based. Fields marked optional have the defaults shown.
 Direct `set_effect` add, set, move, and remove operations use the native score
 transaction; a staged change commits to native history and can be undone or
 redone.
-Applying a style retains its existing internal effect-commit behavior rather
-than wrapping each constituent effect as an independent history operation.
+Applying a style stages its complete MIDI/audio chain and identity in one score
+transaction, including on supported extension-bearing projects. One undo restores
+the prior chain; constituent effects no longer commit independently.
 In 0.24.0, extension-bearing effect edits use the same transaction and validate existing curve owners; add/undo has focused evidence. The actual master-effect transaction and rollback case passed in
 `artifacts/feature-acceptance-f97d35cd5451/audio.effect_history.json`; that
 batch also records two later-corrected test failures in other cases.
@@ -117,6 +118,15 @@ actual model is
 hardcoding that path, changing voice, copying packages, or changing authorization.
 
 ### Mix Options
+
+Vocal rendering keeps the Lua controller and observer attached until the target
+wave is valid and the sequence renderer has finished. A target-part completion
+event alone is not sufficient: stopping the shared queue at that point can leave
+other parts partially rendered and make the next pre-mix render time out. Single
+part exports use the same completion rule and may finish other queued parts
+before returning the requested WAV. The existing timeout limits are unchanged.
+The 12-part VPR regression and per-part nonzero PCM checks pass in
+`artifacts/feature-acceptance-e83d8be0e2a2/mixdown.project_fixture.json`.
 
 - `track_indices`: optional array of native track indices. With no selection,
   master export respects native mute and solo. An explicit selection, including

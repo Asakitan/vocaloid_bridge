@@ -298,7 +298,8 @@ internal sealed partial class EngineHost
     private object LibraryDvqmView(EngineSession session, JsonElement options)
     {
         bool isAttack = LibraryBool(options, "is_attack", true);
-        WIVSMDvqm selection = LibraryNote(LibraryMidiPart(session, options), options).GetDvqm(isAttack)
+        WIVSMMidiPart part = LibraryMidiPart(session, options);
+        WIVSMDvqm selection = LibraryNote(part, options).GetDvqm(isAttack)
             ?? throw new NotSupportedException("The native note has no Attack/Release record.");
         string? componentId = null;
         string[] levels = [];
@@ -308,11 +309,14 @@ internal sealed partial class EngineHost
             componentId = resolved.Database.CompID;
             levels = resolved.Property.LevelNames.ToArray();
         }
+        // Attack/Release is a standard VOCALOID part function. An AI note stores the selection,
+        // but VOCALOID:AI synthesis renders the same audio with or without it.
         return new
         {
             is_attack = isAttack, is_empty = selection.IsEmpty, db_id = selection.DBID, name_id = selection.NameID,
             component_id = componentId, level_names = levels, speed = selection.Speed,
-            top_factor = selection.TopFactor, is_protected = selection.IsProtect
+            top_factor = selection.TopFactor, is_protected = selection.IsProtect,
+            applies_to = "Midi", applicable_to_current_part = !part.IsAi
         };
     }
 
@@ -522,7 +526,7 @@ internal sealed partial class EngineHost
                 else
                 {
                     if (!manager.CanConvert(text, extension, note.IsAi))
-                        throw new ArgumentException("Native G2PA does not accept the requested lyrics.");
+                        throw new ArgumentException(ScoreLyricRejection((int)requestedLanguage, "lyrics"));
                     WIVSMNote[] before = part.Notes.ToArray();
                     int first = ScoreNoteIndex(part, note);
                     var candidates = manager.CandidatePhonemes((nint)note, text, extension, note.IsAi);
@@ -769,6 +773,8 @@ internal sealed partial class EngineHost
         bool includeAudio = LibraryBool(options, "include_audio", true);
         LibraryRequireStyleTransportReleased(includeAudio);
         WIVSMMidiPart part = LibraryMidiPart(session, options);
+        if (session.Sequence.IsStaged)
+            throw new InvalidOperationException("Commit or roll back pending native edits before capturing a style.");
         string name = LibraryText(options, "name");
         string overwriteId = LibraryText(options, "overwrite_style_id", "");
         if (overwriteId.Length != 0) LibraryOwnedStyle(overwriteId);
@@ -798,7 +804,20 @@ internal sealed partial class EngineHost
                 throw new InvalidOperationException("Native style catalog refresh failed.");
             UserStyle verified = LibraryOwnedStyle(savedId);
             if (!File.Exists(verified.Path)) throw new IOException("Native style save did not create its file.");
-            return new { session_id = session.Id, style = LibraryStyleView(verified, true) };
+            return ScoreMutate(session, "style_capture", () =>
+            {
+                if (part.StyleName != verified.Name)
+                    LibraryRequire(part.SetStyleName(verified.Name), "captured style name");
+                if (part.StylePresetID != savedId)
+                    LibraryRequire(part.SetStylePresetID(savedId), "captured style identity");
+                return true;
+            }, () =>
+            {
+                WIVSMMidiPart current = LibraryMidiPart(session, options);
+                LibraryRequire(current.StyleName == verified.Name && current.StylePresetID == savedId,
+                    "captured style identity readback");
+                return new { session_id = session.Id, style = LibraryStyleView(verified, true) };
+            });
         }
         finally { draft.Destroy(); }
     }
@@ -880,57 +899,66 @@ internal sealed partial class EngineHost
         WIVSMMidiPart part = LibraryMidiPart(session, options);
         WIVSMEffectManager effects = part.EffectManager
             ?? throw new InvalidOperationException("Native part has no effect manager.");
+        ScoreRequireUnstaged(session.Sequence);
         JsonElement[] audioPlans = includeAudio ? LibraryStyleAudioPlans(style, options) : [];
-        session.Dirty = true;
-        session.InvalidateChildren();
-        effects.SetupAndResetAllMidiEffects();
-        foreach (Yamaha.VOCALOID.VSStyle.MidiEffect source in style.MidiEffects)
+        return ScoreMutate(session, "style_apply", () =>
         {
-            WIVSMMidiEffect target = effects.GetMidiEffectById(source.Id)
-                ?? throw new InvalidOperationException("Native MIDI effect is unavailable: " + source.Id);
-            for (ulong index = 0; index < source.NumParameter; index++)
+            effects.SetupAndResetAllMidiEffects();
+            foreach (Yamaha.VOCALOID.VSStyle.MidiEffect source in style.MidiEffects)
             {
-                Parameter parameter = source.Parameter(index);
-                if (parameter.Name == "VoiceBlend" ||
-                    parameter.Name == "VoiceBID" && target.MidiEffectType == VSMMidiEffectType.VoiceColor)
-                    continue;
-                bool applied = parameter.Name == "Bypass"
-                    ? target.SetBypass(parameter.ValueInt == 1)
-                    : parameter.Type switch
-                    {
-                        VSStyleEffectParameterType.Int => target.SetParameterInt(parameter.Name, parameter.ValueInt),
-                        VSStyleEffectParameterType.Float => target.SetParameterFloat(parameter.Name, parameter.ValueFloat),
-                        VSStyleEffectParameterType.String => target.SetParameterString(parameter.Name, parameter.ValueString),
-                        _ => false
-                    };
-                LibraryRequire(applied, "style MIDI parameter " + parameter.Name);
-            }
-        }
-        if (includeAudio)
-        {
-            while (effects.NumAudioEffect != 0)
-                SetAudioEffect(session, JsonSerializer.SerializeToElement(new
+                WIVSMMidiEffect target = effects.GetMidiEffectById(source.Id)
+                    ?? throw new InvalidOperationException("Native MIDI effect is unavailable: " + source.Id);
+                for (ulong index = 0; index < source.NumParameter; index++)
                 {
-                    scope = "part", action = "remove", slot = 0,
-                    track_index = LibraryIndex(options, "track_index"),
-                    part_index = LibraryIndex(options, "part_index")
-                }), recordHistory: false);
-            foreach (JsonElement plan in audioPlans)
-                SetAudioEffect(session, plan, recordHistory: false);
-        }
-        LibraryRequire(part.SetStyleName(style.Name) && part.SetStylePresetID(style.Id), "style identity");
-        PrepareSingingSkill(part);
-        LibraryCommit(session, "style");
-        return new
+                    Parameter parameter = source.Parameter(index);
+                    if (parameter.Name == "VoiceBlend" ||
+                        parameter.Name == "VoiceBID" && target.MidiEffectType == VSMMidiEffectType.VoiceColor)
+                        continue;
+                    bool applied = parameter.Name == "Bypass"
+                        ? target.SetBypass(parameter.ValueInt == 1)
+                        : parameter.Type switch
+                        {
+                            VSStyleEffectParameterType.Int => target.SetParameterInt(parameter.Name, parameter.ValueInt),
+                            VSStyleEffectParameterType.Float => target.SetParameterFloat(parameter.Name, parameter.ValueFloat),
+                            VSStyleEffectParameterType.String => target.SetParameterString(parameter.Name, parameter.ValueString),
+                            _ => false
+                        };
+                    LibraryRequire(applied, "style MIDI parameter " + parameter.Name);
+                }
+            }
+            if (includeAudio)
+            {
+                while (effects.NumAudioEffect != 0)
+                    SetAudioEffectCore(session, JsonSerializer.SerializeToElement(new
+                    {
+                        scope = "part", action = "remove", slot = 0,
+                        track_index = LibraryIndex(options, "track_index"),
+                        part_index = LibraryIndex(options, "part_index")
+                    }));
+                foreach (JsonElement plan in audioPlans)
+                    SetAudioEffectCore(session, plan);
+            }
+            LibraryRequire(part.SetStyleName(style.Name) && part.SetStylePresetID(style.Id), "style identity");
+            PrepareSingingSkill(part);
+            return true;
+        }, () =>
         {
-            session_id = session.Id,
-            style_id = part.StylePresetID,
-            name = part.StyleName,
-            midi_effects_applied = style.NumMidiEffect,
-            audio_effects_applied = includeAudio,
-            audio_effect_count = includeAudio ? style.NumAudioEffect : (ulong?)null,
-            scope = includeAudio ? "complete" : "midi_only"
-        };
+            WIVSMMidiPart current = LibraryMidiPart(session, options);
+            LibraryRequire(current.StylePresetID == style.Id && current.StyleName == style.Name,
+                "style identity readback");
+            if (includeAudio)
+                LibraryRequire(current.EffectManager!.NumAudioEffect == style.NumAudioEffect, "style audio count readback");
+            return new
+            {
+                session_id = session.Id,
+                style_id = current.StylePresetID,
+                name = current.StyleName,
+                midi_effects_applied = style.NumMidiEffect,
+                audio_effects_applied = includeAudio,
+                audio_effect_count = includeAudio ? style.NumAudioEffect : (ulong?)null,
+                scope = includeAudio ? "complete" : "midi_only"
+            };
+        });
     }
 
     private JsonElement[] LibraryStyleAudioPlans(NativeStyle style, JsonElement options)

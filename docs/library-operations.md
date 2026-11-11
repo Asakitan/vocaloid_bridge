@@ -50,25 +50,25 @@ integers; the default `track_index`, `part_index`, and `note_index` is `0`.
 | `languages` | Optional | `{}` | Array of `{language_id,name,default_lyric}` from real native managers |
 | `phoneme_table` | Optional | `language_id=0` | Manual symbol inventory, source pages, and documented Japanese AI restriction; `native_enumeration=false` |
 | `dvqm_catalog` | Optional | `is_attack=true`, `voice_id=""`, `offset=0`, `limit=100` (1..256) | Installed native Attack/Release component IDs, numeric IDs, level names, capabilities and total |
-| `dvqm_get` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true` | Native selection, component/level names, speed, top factor and protection |
-| `dvqm_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true`, `db_id`, `name_id`, optional `speed`, `top_factor`, `is_protected` | Committed native selection readback |
+| `dvqm_get` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true` | Native selection, component/level names, speed, top factor and protection, with `applies_to` (`Midi`) and `applicable_to_current_part` |
+| `dvqm_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true`, `db_id`, `name_id`, optional `speed`, `top_factor`, `is_protected`. Attack/Release is a standard VOCALOID part function; an AI note stores the selection without singing it | Committed native selection readback |
 | `dvqm_clear` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true` | Cleared native selection readback |
 | `singing_skill_catalog` | Optional | `{}` | Installed Singing Skill plugin IDs, names, tags, timing and script availability |
 | `singing_skill_get` | Required | Target classic part (optional `track_index=0`, `part_index=0`) | Skill, amount, plugin ID, bypass and native bounds |
 | `singing_skill_set` | Required | Target classic part (optional `track_index=0`, `part_index=0`); optional `plugin_id`, `skill`, `amount`, `bypassed` | Committed Singing Skill readback |
 | `note_skill_get` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`) | `duration_tick`, `pre_weight`, `post_weight` |
-| `note_skill_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`); optional `duration_tick`, `pre_weight`, `post_weight` (weights 0..127) | Committed note-level HMM weights |
+| `note_skill_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`); optional `duration_tick`, `pre_weight`, `post_weight` (weights 0..127). Changing them left VOCALOID:AI synthesis unchanged | Committed note-level HMM weights |
 | `note_skill_reset` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`) | Native default HMM weights |
 | `lyrics_can_convert` | Optional | `language_id=0, lyrics, is_ai=false, use_extension_dictionary=false` | `{language_id,lyrics,can_convert}` |
 | `lyrics_candidates` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `lyrics`, optional `language_id` (default note language), `use_extension_dictionary=false` | `{language_id,lyrics,candidates:[[{lyric,phonemes}]]}` |
-| `lyrics_apply` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `lyrics`, optional `language_id`, `use_extension_dictionary=false`, `protect` | Mutation result below |
+| `lyrics_apply` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `lyrics`, optional `language_id`, `use_extension_dictionary=false`, `protect`. A word or phrase is spread over the following notes; write kana, plain English words or unmarked pinyin | Mutation result below |
 | `phonemes_apply` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `phonemes`, optional `language_id`, `protect` | Mutation result below |
 | `lyrics_reset` | Required | Target part (optional `track_index=0`, `part_index=0`), optional `language_id` | Mutation result below |
 | `phonemes_reset` | Required | Target part (optional `track_index=0`, `part_index=0`), optional `language_id` | Mutation result below |
-| `style_list` | Optional | `query=""`, `sub_genres=[]`, `colors=[]` | `{total,styles:[Style]}` |
+| `style_list` | Optional | `query=""`, `sub_genres=[]`, `colors=[]`. A singer's default sound is the style named `<singer name> Default` | `{total,styles:[Style]}` |
 | `style_get` | Optional | `style_id` | Style with native effect parameter arrays |
-| `style_apply` | Required | Target part (optional `track_index=0`, `part_index=0`), `style_id`, `include_audio=true` | `{session_id,style_id,name,midi_effects_applied,audio_effects_applied,audio_effect_count,scope}` |
-| `style_capture` | Required | Target part (optional `track_index=0`, `part_index=0`), `name`; optional `sub_genres=[]`, `colors=[]`, `include_audio=true`, `overwrite_style_id` | Native private style snapshot and saved path |
+| `style_apply` | Required | Target part (optional `track_index=0`, `part_index=0`), `style_id`, `include_audio=true`; MIDI, audio and identity changes form one undoable transaction | `{session_id,style_id,name,midi_effects_applied,audio_effects_applied,audio_effect_count,scope}` |
+| `style_capture` | Required | Target part (optional `track_index=0`, `part_index=0`), `name`; optional `sub_genres=[]`, `colors=[]`, `include_audio=true`, `overwrite_style_id`; requires no pending native edits | Native private style snapshot and saved path; links the source part to the saved style in one undoable transaction |
 | `style_update` | Required | Private `style_id`; optional `name`, `add_sub_genres=[]`, `add_colors=[]` | Native saved property readback; existing tags preserved |
 | `style_delete` | Required | Private `style_id` | Native removal, verified file and catalog absence |
 | `media_list` | Optional | `query=""`, `genres=[]`, `types=[]` | `{total,clips:[Clip]}` |
@@ -156,10 +156,13 @@ It cannot delete built-in or pre-existing user media.
 
 `style_apply` uses the existing headless native audio service. Audio parameters
 are preflighted through a native VEM effect block, converted from style plain
-integers with `ToNormalized`, and passed to the existing `SetAudioEffect` path.
+integers with `ToNormalized`, and staged through the existing `SetAudioEffectCore` path.
 Unavailable, virtual, duplicate, noneditable, or unconvertible effects fail
 before part mutation. Full application replaces the audio chain; explicitly
 setting `include_audio=false` preserves it and returns `scope=midi_only`.
+MIDI values, the audio chain and style identity commit together through the
+score transaction. A staged failure rolls back instead of committing only part
+of the style; one undo restores the prior part state.
 The `VoiceBID` and `VoiceBlend` MIDI parameters are not overwritten, matching the
 installed editor's style-transfer logic.
 
@@ -174,9 +177,12 @@ materialized WAV preserves format and applicable fact metadata, but does not
 claim to preserve unrelated WAV metadata chunks. That owned source remains
 available for native clip loading. Native clip-file existence is checked after save.
 
-On an extension-tracked project, `style_capture`, `style_update`, `style_delete`,
-`media_update` and `media_delete` remain available because they read the source
-or update only bridge-owned library files. For MIDI parts, capture can embed
+On an extension-tracked project, `style_capture` and `style_apply` use the native
+identity transaction and existing curve/array checks. Unchanged entity and
+effect extensions are retained; explicitly replaced effect entries follow the
+existing effect-array replacement rules. `style_update`, `style_delete`,
+`media_update` and `media_delete` update only bridge-owned library files.
+For MIDI parts, media capture can embed
 unknown part and note fields in private, versioned bridge metadata, bound to the
 clip ID and unique native note signatures. Controller and direct-pitch metadata are captured and imported by the version-2 media payload. Extended targets use the same native identity transaction. Import
 validates the metadata and stages the corresponding target
@@ -230,7 +236,11 @@ AI/Robot pitch processing.
 
 `style_capture` copies native MIDI and (by default) audio effect values in their
 existing order, excluding `DefaultLyric`. Saving creates a new native VSStyle
-file under `.runtime/library/styles`. Overwrite is explicit and limited to that
+file under `.runtime/library/styles`, then assigns its name and ID to the source
+part through a native transaction. Save the project with `project_save` to persist
+that association in the VPR. Undo restores the part's previous association; it
+does not delete or undo the separate preset file. Pending native edits are
+rejected before writing the preset. Overwrite is explicit and limited to that
 same owned directory. Property edits preserve existing subgenre/color tags;
 delete verifies both the file and native catalog. Built-in and pre-existing user
 styles stay read-only. Applying a captured style retains the documented voice
@@ -259,7 +269,7 @@ path. The original part and all other clip fields are preserved.
 | Phrase/phoneme edits | `SetLyrics`, `SetPhonemes`, `ResetLyrics`, `ResetPhonemes` |
 | Style catalog | `StyleManagerIF.CreateStyleManager`, `ReadSystemStyles`, `ReadUserStyles`, `AllStylesEnumerator` |
 | MIDI style application | `SetupAndResetAllMidiEffects`, `GetMidiEffectById`, `SetParameterInt/Float/String`, `SetBypass`, `SetStyleName`, `SetStylePresetID` |
-| Audio style application | Existing `EnsureAudioEffects`, VEM `AddMasterBlock`, `AddLoadEffect`, `ToNormalized`, existing `SetAudioEffect` |
+| Audio style application | Existing `EnsureAudioEffects`, VEM `AddMasterBlock`, `AddLoadEffect`, `ToNormalized`, `SetAudioEffectCore` inside one `ScoreMutate` |
 | Media catalog | `MediaManagerIF.CreateMediaManager`, `ReadAllClipFiles`, `AllClipEnumerator`, `Clip.ReadPart` |
 | Media properties | `UserClip.CreatePropertyEditor`, `SetClipName`, `SetPartTempo`, `AddFilterGenre`, `AddFilterType`, `Save`, `DestroyPropertyEditor` |
 | Private media deletion | `UserClip.Remove`, file existence and native catalog readback |
@@ -302,7 +312,11 @@ Current explicit gaps (not reported as successful operations):
   Attack and 42 Release entries. One of each was tested through classic and AI
   media capture/import and VPR reopen; actual singing with these presets and
   the remaining combinations are unverified. The initially empty catalog was
-  queried before initialization.
+  queried before initialization. Session 36 measured that VOCALOID:AI
+  synthesis renders the same samples with and without an Attack or Release
+  selection, which matches the manual's note that the function is for
+  VOCALOID parts. Singing with these presets therefore needs a standard
+  voicebank; `dvqm_get` reports `applicable_to_current_part`.
 - Invalid-phoneme flags survive the bridge-owned media/VPR extension, clone and
   reopen; edits that invalidate a VPR extension's note references are rejected.
   The bridge does not claim that external editors preserve this metadata.

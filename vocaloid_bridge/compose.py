@@ -24,6 +24,15 @@ _SEEDS = {
 }
 
 
+# Written forms the installed converters accept; the same wording as the native note.add error.
+_LYRIC_FORMS = {
+    0: "Japanese lyrics are kana, one mora or syllable per note, for example ら.",
+    1: "English lyrics are plain words, one syllable per note.",
+    4: "Chinese lyrics are unmarked pinyin, one syllable per note, for example wo; "
+       "Han characters and tone numbers are not accepted.",
+}
+
+
 def _native_result(client: NativeClient, method: str, **parameters: Any) -> dict:
     return client.request(method, parameters)["result"]
 
@@ -63,7 +72,9 @@ def _resolve(client: NativeClient, session: str, scope: dict, index: int,
     convertible = _native_result(client, "library_op", session_id=None, operation="lyrics_can_convert",
                                  options={**query, "is_ai": True})
     if not convertible["can_convert"]:
-        raise ValueError(f"Native G2PA does not accept lyric at note {index}.")
+        form = _LYRIC_FORMS.get(language, "Use a written form that the native converter of this language accepts.")
+        raise ValueError(f"Native G2PA does not accept lyric at note {index}. {form} "
+                         "To keep any other lyric text, give the note an explicit phoneme.")
     target = {**scope, "note_index": index, **query}
     candidates = _native_result(client, "library_op", session_id=session, operation="lyrics_candidates",
                                 options=target)["candidates"]

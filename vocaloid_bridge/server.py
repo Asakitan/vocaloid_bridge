@@ -29,6 +29,7 @@ from .projects import ProjectStore
 
 
 TEMPLATE = Path(__file__).parent / "templates" / "ai-starter.vpr"
+WORKFLOW = WORKSPACE / "docs" / "song-workflow.md"
 STORE = ProjectStore(WORKSPACE)
 NATIVE = NativeClient(WORKSPACE)
 atexit.register(NATIVE.close)
@@ -37,8 +38,11 @@ mcp = FastMCP(
     instructions=(
         "Control real VOCALOID6 native engine sessions on a private Windows desktop. "
         "Never automate, activate, minimize, close or send input to the user's interactive editor. "
-        "There is no UI or alternate-backend fallback. Start with project_create or project_open; "
-        "save through project_save and close through project_close. Discover exact native object "
+        "There is no UI or alternate-backend fallback. When making a song, call vocaloid_workflow first: "
+        "it gives the tested steps, the lyric form each language accepts and the controls VOCALOID:AI "
+        "actually sings. Start with project_create or project_open; "
+        "save through project_save and close through project_close. Lyrics are one syllable per note, "
+        "and Chinese lyrics are unmarked pinyin. Discover exact native object "
         "signatures with project_members before project_call. A saved VPR is not rendered audio."
     ),
 )
@@ -72,7 +76,10 @@ async def vocaloid_runtime(operation: Literal["status", "start", "stop", "restar
 
 @mcp.tool()
 async def project_create(title: str = "Untitled", bpm: float = 120, sample_rate: int = 44100) -> dict[str, Any]:
-    """Create a real native engine project without opening or changing the interactive editor."""
+    """Create a real native engine project without opening or changing the interactive editor.
+    Keep sample_rate at 44100: vocal synthesis runs only at that rate, and the delivery rate
+    is chosen later in project_audio mixdown.
+    """
     return await _rpc("create", title=title, bpm=bpm, sample_rate=sample_rate)
 
 
@@ -167,16 +174,30 @@ def vocaloid_features() -> dict[str, Any]:
 
 
 @mcp.tool()
+def vocaloid_workflow() -> dict[str, Any]:
+    """Read this first when making a song: the tested steps from an empty session to a mixed WAV,
+    the lyric form each language accepts, the controls VOCALOID:AI actually sings and the ones
+    it only stores. Times are ticks, 480 per quarter note.
+    """
+    return {"mcp_version": __version__, "ticks_per_quarter": 480, "path": str(WORKFLOW),
+            "guide": WORKFLOW.read_text(encoding="utf-8")}
+
+
+@mcp.tool()
 def vocaloid_operations(domain: str | None = None, operation: str | None = None,
                         include_documentation: bool = False) -> dict[str, Any]:
     """Discover structured score/audio/library/clipboard/MIDI operations and their documented options.
     Use the returned tool with operation and options. This index is not functional-test evidence;
-    vocaloid_features reports verification. Select a domain and include_documentation for full rules.
+    vocaloid_features reports verification. Select a domain or an operation with
+    include_documentation for full rules; vocaloid_workflow gives the order to use them in.
     """
     index = json.loads((Path(__file__).with_name("operations.json")).read_text(encoding="utf-8"))
     domains = index["domains"]
     if domain is not None and domain not in domains:
         raise ValueError("domain must be score, audio, library, clipboard, or midi.")
+    if include_documentation and domain is None and operation is None:
+        raise ValueError("include_documentation needs a domain (score, audio, library, clipboard or midi) "
+                         "or an operation; the combined documents are too large for one result.")
     selected = {key: value for key, value in domains.items() if domain is None or key == domain}
     if operation is not None:
         selected = {key: {**value, "operations": [entry for entry in value["operations"] if entry["operation"] == operation]}
@@ -200,7 +221,10 @@ def feature_matrix() -> str:
 async def project_edit(session_id: str, operation: str,
                        options: dict[str, Any] | None = None) -> dict[str, Any]:
     """Execute a typed native score operation with its documented options.
-    Operations cover tracks, parts, notes, voices, tempo, meter, automation and history.
+    Operations cover tracks, parts, notes, voices, tempo, meter, curves, automation and history.
+    Ticks are 480 per quarter note. Lyrics are one syllable per note: Japanese kana, a
+    one-syllable English word, or unmarked pinyin for Chinese; other text needs explicit phonemes.
+    controller.types and performance.get mark which lanes the current part actually sings.
     """
     return await _rpc("score_edit", session_id=session_id, operation=operation, options=options or {})
 
@@ -219,7 +243,9 @@ async def project_midi(operation: str, options: dict[str, Any] | None = None,
 async def project_audio(session_id: str, operation: str,
                         options: dict[str, Any] | None = None) -> dict[str, Any]:
     """Execute a documented native audio operation without activating the editor.
-    Unsupported operations return explicit errors; no alternate audio backend is used.
+    mixdown is the deliverable render, with effects, at sample_rate 44100, 48000, 96000 or 192000;
+    it stops at the end of the last part. Unsupported operations return explicit errors; no
+    alternate audio backend is used.
     """
     parameters = {"session_id": session_id, "operation": operation, "options": options or {}}
     return await asyncio.to_thread(NATIVE.request, "audio_op", parameters, 180)
@@ -229,6 +255,9 @@ async def project_audio(session_id: str, operation: str,
 async def project_library(operation: str, options: dict[str, Any] | None = None,
                            session_id: str | None = None) -> dict[str, Any]:
     """Use native language, phoneme, style and media-library operations.
+    style_apply with the singer's "<name> Default" style gives a new part the editor's default
+    sound. lyrics_apply spreads a word or phrase over following notes. Attack/Release (dvqm_*)
+    and Singing Skill act on standard VOCALOID parts; an AI part stores them without singing them.
     phoneme_table returns a versioned manual reference, not native enumeration.
     Catalog reads need no project; operations changing notes or parts require a session_id.
     """
@@ -285,7 +314,10 @@ async def voicebanks() -> dict[str, Any]:
 @mcp.tool()
 async def project_render_part(session_id: str, output_name: str, track_index: int = 0,
                                part_index: int = 0, overwrite: bool = False) -> dict[str, Any]:
-    """Render a native vocal part to a verified WAV without playback or UI interaction."""
+    """Render the dry voice of one native vocal part to a verified WAV without playback or UI
+    interaction. The file is 44.1 kHz mono 16-bit; effects and the delivery format belong to
+    project_audio mixdown.
+    """
     parameters = {"session_id": session_id, "output_name": output_name,
                   "track_index": track_index, "part_index": part_index, "overwrite": overwrite}
     result = await asyncio.to_thread(NATIVE.request, "render_part", parameters, 180)
@@ -321,7 +353,8 @@ async def score_compose(output_name: str, title: str, bpm: float, notes: list[di
                         voice_comp_id: str | None = None) -> dict[str, Any]:
     """Author and open a vocal score. Notes use quarter-note start/duration, MIDI pitch, lyric,
     optional phoneme, lang_id (0 Japanese, 1 English, 4 Chinese) and native raw expression data.
-    Omitted AI-note phonemes use native G2PA for one complete syllable per note.
+    Omitted AI-note phonemes use native G2PA for one complete syllable per note: kana, a
+    one-syllable English word, or unmarked pinyin. Other lyric text needs an explicit phoneme.
     AI notes may select one template note with source={index, expected}; unselected notes are new.
     Uses an editor-authored template, then verifies loading in the real native engine.
     """
@@ -417,24 +450,31 @@ def midi_read(path: str) -> dict[str, Any]:
 def workflow() -> str:
     return json.dumps({
         "backend": "VOCALOID6 native VSM in an isolated Windows desktop",
-        "workflow": ["voicebanks", "score_compose or project_create", "vocaloid_operations",
-                     "project_edit/project_audio/project_library or exact native member calls", "project_save", "project_close"],
+        "workflow": ["vocaloid_workflow", "voicebanks", "score_compose or project_create",
+                     "project_edit track.create, part.create, voice.set", "project_library style_apply",
+                     "project_edit note.add and expression", "project_render_part", "project_audio mixdown",
+                     "project_save", "project_close"],
         "rules": ["Never use interactive-editor UI automation.", "Never silently switch backend.",
                   "A VPR or MIDI is not a synthesized WAV.", "Do not guess native member signatures.",
+                  "Lyrics are one syllable per note; Chinese lyrics are unmarked pinyin.",
                   "Save before close, or explicitly discard changes."],
+        "ticks_per_quarter": 480,
         "template": str(TEMPLATE),
-    })
+        "guide": WORKFLOW.read_text(encoding="utf-8"),
+    }, ensure_ascii=False)
 
 
 @mcp.prompt()
 def write_song(brief: str, language: str = "Chinese", bpm: str = "120", key: str = "C major") -> str:
     return (
         f"Write an original song from this brief: {brief}\nLanguage: {language}; tempo: {bpm}; key: {key}.\n"
-        "Plan sections, chords, melody, breath points and singable lyrics. Use one syllable per note or "
-        "explicit continuation syllables. Read voicebanks and the vocaloid://workflow resource. "
-        "Create a native project or use score_compose with explicit beat-based notes. Inspect native "
-        "members before adjusting expression or effects. Keep all work in the isolated engine, "
-        "save the result, and close its owned session. Never touch the interactive editor and never "
+        "Plan sections, chords, melody, breath points and singable lyrics. Call vocaloid_workflow and "
+        "follow its steps. Use one syllable per note in the written form the language needs: kana for "
+        "Japanese, one-syllable words for English, unmarked pinyin for Chinese. Read voicebanks, create "
+        "a native project or use score_compose with explicit beat-based notes, apply the singer's "
+        "default style, and shape the performance only with controls the guide lists as sung by "
+        "VOCALOID:AI. Render with project_audio mixdown, check the file with audio_inspect, save the "
+        "project and close its session. Never touch the interactive editor and never "
         "claim audio synthesis from a score file alone. Report the actual output paths."
     )
 

@@ -46,7 +46,7 @@
         {
           "operation": "controller.types",
           "contract_rows": [
-            "| `controller.types` | `track_index`, `part_index` | `types`: native names and min/max/default values |"
+            "| `controller.types` | `track_index`, `part_index` | `types`: native names, min/max/default values, `applies_to` (`Midi`, `MidiAi` or `Midi+MidiAi`) and `applicable_to_current_part` |"
           ]
         },
         {
@@ -130,7 +130,7 @@
         {
           "operation": "note.update",
           "contract_rows": [
-            "| `note.update` | `track_index`, `part_index`, `note_index`; one or more of `start_tick`, `duration_tick`, `number`, `velocity`, `lyric`, `phonemes`, `is_valid_phonemes`, `lang_id`, `expression`, `ai_expression`, `is_protected`, `ai_vibrato_enabled` | Updated note summary |"
+            "| `note.update` | `track_index`, `part_index`, `note_index`; one or more of `start_tick`, `duration_tick`, `number`, `velocity`, `lyric`, `phonemes`, `is_valid_phonemes`, `lang_id`, `expression`, `ai_expression`, `is_protected`, `ai_vibrato_enabled`. On an AI note a changed `lyric` without `phonemes` regenerates the phonemes through native G2PA unless the note is protected | Updated note summary |"
           ]
         },
         {
@@ -196,7 +196,7 @@
         {
           "operation": "performance.set",
           "contract_rows": [
-            "| `performance.set` | `track_index`, `part_index`; one or more of `robot_mode`, `breath_mode`, `breath_type`, `breath_exhalation`, `take_lane`, `voice_colors`, `bypass` | Updated native performance state |"
+            "| `performance.set` | `track_index`, `part_index`; one or more of `robot_mode`, `breath_mode`, `breath_type`, `breath_exhalation`, `take_lane`, `voice_colors`, `bypass`; supplied parameters enable their effects unless explicitly overridden by `bypass` | Updated native performance state |"
           ]
         },
         {
@@ -394,13 +394,13 @@
         {
           "operation": "vibrato.get",
           "contract_rows": [
-            "| `vibrato.get` | `track_index`, `part_index`, `note_index` | Type, duration, AI enable state and depth/rate events |"
+            "| `vibrato.get` | `track_index`, `part_index`, `note_index` | Type, duration, AI enable state, depth/rate events, the native `types` names and `depth_range`/`rate_range` |"
           ]
         },
         {
           "operation": "vibrato.set",
           "contract_rows": [
-            "| `vibrato.set` | `track_index`, `part_index`, `note_index`; one or more of `type`, `duration_tick`, `ai_enabled`, `depth`, `rate` | Updated vibrato state; supplied event arrays replace that event type |"
+            "| `vibrato.set` | `track_index`, `part_index`, `note_index`; one or more of `type`, `duration_tick`, `ai_enabled`, `depth`, `rate`. An AI note sings vibrato only with a `type` other than `None`, a `duration_tick` above zero (counted back from the note end) and a `depth` event; it uses the first depth and first rate event | Updated vibrato state; supplied event arrays replace that event type |"
           ]
         },
         {
@@ -461,7 +461,7 @@
         {
           "operation": "mixdown",
           "contract_rows": [
-            "| `mixdown` | `output_name`; optional `track_indices`, `sample_rate=44100`, `bits_per_sample=24`, `channels=2`, `bypass_effects=false`, `timeout_seconds=120`, `overwrite=false` | Native VAE manual mixdown with VEM effects, file placements, and VSM-rendered vocal parts. |"
+            "| `mixdown` | `output_name`; optional `track_indices`, `sample_rate=44100` (or 48000, 96000, 192000), `bits_per_sample=24` (or 16), `channels=2` (or 1), `bypass_effects=false`, `timeout_seconds=120`, `overwrite=false` | Native VAE manual mixdown with VEM effects, file placements, and VSM-rendered vocal parts. The file ends at the end of the last part. |"
           ]
         },
         {
@@ -540,13 +540,13 @@
         {
           "operation": "dvqm_get",
           "contract_rows": [
-            "| `dvqm_get` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true` | Native selection, component/level names, speed, top factor and protection |"
+            "| `dvqm_get` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true` | Native selection, component/level names, speed, top factor and protection, with `applies_to` (`Midi`) and `applicable_to_current_part` |"
           ]
         },
         {
           "operation": "dvqm_set",
           "contract_rows": [
-            "| `dvqm_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true`, `db_id`, `name_id`, optional `speed`, `top_factor`, `is_protected` | Committed native selection readback |"
+            "| `dvqm_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true`, `db_id`, `name_id`, optional `speed`, `top_factor`, `is_protected`. Attack/Release is a standard VOCALOID part function; an AI note stores the selection without singing it | Committed native selection readback |"
           ]
         },
         {
@@ -558,7 +558,7 @@
         {
           "operation": "lyrics_apply",
           "contract_rows": [
-            "| `lyrics_apply` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `lyrics`, optional `language_id`, `use_extension_dictionary=false`, `protect` | Mutation result below |"
+            "| `lyrics_apply` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `lyrics`, optional `language_id`, `use_extension_dictionary=false`, `protect`. A word or phrase is spread over the following notes; write kana, plain English words or unmarked pinyin | Mutation result below |"
           ]
         },
         {
@@ -642,7 +642,7 @@
         {
           "operation": "note_skill_set",
           "contract_rows": [
-            "| `note_skill_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`); optional `duration_tick`, `pre_weight`, `post_weight` (weights 0..127) | Committed note-level HMM weights |"
+            "| `note_skill_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`); optional `duration_tick`, `pre_weight`, `post_weight` (weights 0..127). Changing them left VOCALOID:AI synthesis unchanged | Committed note-level HMM weights |"
           ]
         },
         {
@@ -684,13 +684,13 @@
         {
           "operation": "style_apply",
           "contract_rows": [
-            "| `style_apply` | Required | Target part (optional `track_index=0`, `part_index=0`), `style_id`, `include_audio=true` | `{session_id,style_id,name,midi_effects_applied,audio_effects_applied,audio_effect_count,scope}` |"
+            "| `style_apply` | Required | Target part (optional `track_index=0`, `part_index=0`), `style_id`, `include_audio=true`; MIDI, audio and identity changes form one undoable transaction | `{session_id,style_id,name,midi_effects_applied,audio_effects_applied,audio_effect_count,scope}` |"
           ]
         },
         {
           "operation": "style_capture",
           "contract_rows": [
-            "| `style_capture` | Required | Target part (optional `track_index=0`, `part_index=0`), `name`; optional `sub_genres=[]`, `colors=[]`, `include_audio=true`, `overwrite_style_id` | Native private style snapshot and saved path |"
+            "| `style_capture` | Required | Target part (optional `track_index=0`, `part_index=0`), `name`; optional `sub_genres=[]`, `colors=[]`, `include_audio=true`, `overwrite_style_id`; requires no pending native edits | Native private style snapshot and saved path; links the source part to the saved style in one undoable transaction |"
           ]
         },
         {
@@ -708,7 +708,7 @@
         {
           "operation": "style_list",
           "contract_rows": [
-            "| `style_list` | Optional | `query=\"\"`, `sub_genres=[]`, `colors=[]` | `{total,styles:[Style]}` |"
+            "| `style_list` | Optional | `query=\"\"`, `sub_genres=[]`, `colors=[]`. A singer's default sound is the style named `<singer name> Default` | `{total,styles:[Style]}` |"
           ]
         },
         {

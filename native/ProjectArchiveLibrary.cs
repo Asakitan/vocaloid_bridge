@@ -20,7 +20,7 @@ internal sealed partial class EngineHost
 
     internal bool IsIndependentArchiveLibraryOperation(string? id, string operation, JsonElement options)
     {
-        if (operation is "style_capture" or "style_update" or "style_delete" or "media_update" or "media_delete" or "media_recovery_list" or "media_recovery_resolve")
+        if (operation is "style_update" or "style_delete" or "media_update" or "media_delete" or "media_recovery_list" or "media_recovery_resolve")
             return true;
         if (operation != "media_capture") return false;
         EngineSession session = LibrarySession(id);

@@ -26,6 +26,7 @@ internal sealed partial class EngineHost
             "note.list" => ScoreNoteList(session, options),
             "note.expression_bounds" => ScoreNoteExpressionBounds(session, options),
             "note.batch_update" => ScoreNoteBatchUpdate(session, options),
+            "batch.run" => ScoreBatchRun(id, options),
             "vibrato.get" or "vibrato.set" => ScoreVibrato(session, operation, options),
             "phoneme_timing.get" or "phoneme_timing.set" or "phoneme_timing.reset" => ScorePhonemeTiming(session, operation, options),
             "time.convert" => ScoreTimeConvert(session.Sequence, options),
@@ -62,6 +63,61 @@ internal sealed partial class EngineHost
             _ => throw new ArgumentException("Unsupported score operation: " + operation, nameof(operation))
         };
         return new { session_id = id, operation, native = true, result };
+    }
+
+    // Long hand-written inputs (curves, per-note tuning, edit lists) are read from a JSON file inside the
+    // workspace: several hundred values do not survive retyping into a tool call.
+    private JsonElement ScoreWorkspaceJson(JsonElement file, string name, long maximumBytes)
+    {
+        if (file.ValueKind != JsonValueKind.String)
+            throw new ArgumentException(name + " must be a workspace-relative path to a JSON file.");
+        string path = PathGuard.Under(Workspace, file.GetString()!);
+        PathGuard.NoLinks(path);
+        FileInfo info = new(path);
+        if (!info.Exists) throw new FileNotFoundException(name + " does not exist in the workspace.");
+        if (info.Length > maximumBytes) throw new ArgumentException(name + " is too large.");
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(path));
+        return document.RootElement.Clone();
+    }
+
+    // batch.run executes documented score operations in order, each through the same path as a single call
+    // and each as its own history step. It stops at the first failure; earlier operations stay applied.
+    private object ScoreBatchRun(string id, JsonElement options)
+    {
+        JsonElement operations;
+        if (options.TryGetProperty("operations_file", out JsonElement file))
+        {
+            if (options.TryGetProperty("operations", out _))
+                throw new ArgumentException("Give either operations or operations_file, not both.");
+            operations = ScoreWorkspaceJson(file, "operations_file", 8 << 20);
+        }
+        else if (!options.TryGetProperty("operations", out operations))
+            throw new ArgumentException("batch.run requires operations or operations_file.");
+        if (operations.ValueKind != JsonValueKind.Array || operations.GetArrayLength() is < 1 or > 8192)
+            throw new ArgumentException("operations must be an array of 1..8192 {operation, options} objects.");
+        using JsonDocument empty = JsonDocument.Parse("{}");
+        int total = operations.GetArrayLength(), executed = 0;
+        foreach (JsonElement item in operations.EnumerateArray())
+        {
+            string operation = item.ValueKind == JsonValueKind.Object && item.TryGetProperty("operation", out JsonElement name)
+                && name.ValueKind == JsonValueKind.String ? name.GetString()! : string.Empty;
+            try
+            {
+                if (operation.Length == 0) throw new ArgumentException("Each batch item needs an operation string.");
+                if (operation == "batch.run") throw new ArgumentException("batch.run cannot be nested.");
+                EditScore(id, operation, item.TryGetProperty("options", out JsonElement inner) ? inner : empty.RootElement);
+            }
+            catch (Exception error)
+            {
+                return new
+                {
+                    executed, total, failed_index = (int?)executed, failed_operation = operation,
+                    error = error.GetBaseException().Message, note = "Operations before failed_index stay applied."
+                };
+            }
+            executed++;
+        }
+        return new { executed, total, failed_index = (int?)null, failed_operation = (string?)null, error = (string?)null, note = "All operations applied." };
     }
 
     private static WIVSMTrack ScoreTrack(EngineSession session, int index)
@@ -484,9 +540,15 @@ internal sealed partial class EngineHost
             defaultLanguage = voice.NativeLangID;
         }
         int language = ScoreInt(options, "lang_id", 0, 255, defaultLanguage);
+        bool? protect = options.TryGetProperty("is_protected", out _) ? ScoreBool(options, "is_protected") : null;
+        // The editor regenerates an AI note's phonemes when its lyric is edited, unless the note is
+        // protected. Explicit phonemes, or an unchanged lyric and language, keep the stored phonemes.
+        bool relyric = note is not null && part.IsAi && options.TryGetProperty("lyric", out _)
+            && !options.TryGetProperty("phonemes", out _) && !options.TryGetProperty("is_valid_phonemes", out _)
+            && (lyric != note.Lyric || language != note.LangID) && !(protect ?? note.IsProtected);
         G2PAManager? noteConverter = null;
         ScoreAiLyricDefaults? automaticAiDefaults = null;
-        if (note is null && !options.TryGetProperty("phonemes", out _))
+        if ((note is null && !options.TryGetProperty("phonemes", out _)) || relyric)
         {
             noteConverter = LibraryLyrics((G2PAManagerLangID)language);
             if (!options.TryGetProperty("lyric", out _))
@@ -495,13 +557,14 @@ internal sealed partial class EngineHost
             {
                 string voiceId = part.AiVoiceBankID;
                 VoiceBank bank = EnsureDatabase().GetVoiceBankByCompID(voiceId, VDMVoiceBankType.Dnn)
-                    ?? throw new ArgumentException("Assign an installed AI voice before automatic note.add.");
+                    ?? throw new ArgumentException("Assign an installed AI voice before automatic lyric conversion.");
                 if (!bank.IsAvailableInSequence || !bank.IsSynthesizableVersion || !bank.LangIDs.Contains(language))
                     throw new ArgumentException("The assigned AI voice does not support this note language.");
                 if (!noteConverter.CanConvert(lyric, false, true))
-                    throw new ArgumentException("Native G2PA does not accept the requested note lyric.");
+                    throw new ArgumentException(ScoreLyricRejection(language, "note lyric"));
                 automaticAiDefaults = ScoreAiNoteDefaults(language);
-                phonemes = automaticAiDefaults.FirstPhonemes;
+                if (note is null)
+                    phonemes = automaticAiDefaults.FirstPhonemes;
             }
             else
             {
@@ -509,22 +572,23 @@ internal sealed partial class EngineHost
                     ?? throw new ArgumentException("The first note in an empty part requires explicit phonemes; native G2PA needs a note context.");
                 phonemes = context.Phonemes;
             }
-            validPhonemes = true;
+            if (note is null)
+                validPhonemes = true;
         }
         VSMNoteExpression expression = ScorePatchExpression(options, "expression", note?.GetNoteExpression() ?? part.GetDefaultNoteExpression(),
             part.GetMinNoteExpression(), part.GetMaxNoteExpression());
         VSMAiNoteExpression aiExpression = ScorePatchExpression(options, "ai_expression", note?.GetAiNoteExpression() ?? part.GetDefaultAiNoteExpression(),
             part.GetMinAiNoteExpression(), part.GetMaxAiNoteExpression());
-        bool? protect = options.TryGetProperty("is_protected", out _) ? ScoreBool(options, "is_protected") : null;
         bool? vibrato = options.TryGetProperty("ai_vibrato_enabled", out _) ? ScoreBool(options, "ai_vibrato_enabled") : null;
-        string[] mutable = ["start_tick", "duration_tick", "number", "velocity", "lyric", "phonemes", "is_valid_phonemes",
+        string[] mutable =["start_tick", "duration_tick", "number", "velocity", "lyric", "phonemes", "is_valid_phonemes",
             "lang_id", "expression", "ai_expression", "is_protected", "ai_vibrato_enabled"];
         if (note is not null && !mutable.Any(name => options.TryGetProperty(name, out _)))
             throw new ArgumentException("note.update requires a note field to update.");
         return ScoreMutate(session, operation, () =>
         {
             (WIVSMNote Note, string State)[] surrounding = automaticAiDefaults is null ? []
-                : part.Notes.Select(item => (item, ScoreNoteConversionState(item, true))).ToArray();
+                : part.Notes.Where(item => note is null || !item.Equals(note))
+                    .Select(item => (item, ScoreNoteConversionState(item, true))).ToArray();
             WIVSMNote edited;
             if (note is null)
             {
@@ -552,15 +616,34 @@ internal sealed partial class EngineHost
                     edited.NoteVelocity = velocity;
                     ScoreRequire(edited.NoteVelocity == velocity, operation, session.Sequence);
                 }
-                if (options.TryGetProperty("lyric", out _))
+                if (automaticAiDefaults is not null)
                 {
-                    edited.Lyric = lyric;
-                    ScoreRequire(edited.Lyric == lyric, operation, session.Sequence);
+                    // The native note refuses new phonemes while it is protected; a call that lifts the
+                    // protection and changes the lyric has to lift it first.
+                    if (edited.IsProtected)
+                    {
+                        edited.IsProtected = false;
+                        ScoreRequire(!edited.IsProtected, operation + " protection", session.Sequence);
+                    }
+                    // Seed the note like a new one so stale phonemes cannot pass as a conversion result.
+                    edited.Lyric = automaticAiDefaults.FirstLyric;
+                    ScoreRequire(edited.Lyric == automaticAiDefaults.FirstLyric
+                        && edited.SetPhonemes(automaticAiDefaults.FirstPhonemes, true, language),
+                        operation + " G2PA seed", session.Sequence);
+                    ScoreApplyAddedAiLyrics(session, part, edited, noteConverter!, automaticAiDefaults, lyric, language, surrounding);
                 }
-                if (options.TryGetProperty("phonemes", out _) || options.TryGetProperty("is_valid_phonemes", out _))
-                    ScoreRequire(edited.SetPhonemes(phonemes, validPhonemes, language), operation, session.Sequence);
-                else if (options.TryGetProperty("lang_id", out _))
-                    ScoreRequire(edited.SetLangID(language), operation, session.Sequence);
+                else
+                {
+                    if (options.TryGetProperty("lyric", out _))
+                    {
+                        edited.Lyric = lyric;
+                        ScoreRequire(edited.Lyric == lyric, operation, session.Sequence);
+                    }
+                    if (options.TryGetProperty("phonemes", out _) || options.TryGetProperty("is_valid_phonemes", out _))
+                        ScoreRequire(edited.SetPhonemes(phonemes, validPhonemes, language), operation, session.Sequence);
+                    else if (options.TryGetProperty("lang_id", out _))
+                        ScoreRequire(edited.SetLangID(language), operation, session.Sequence);
+                }
                 if (options.TryGetProperty("expression", out _))
                     ScoreRequire(edited.SetNoteExpression(expression), operation, session.Sequence);
                 if (options.TryGetProperty("ai_expression", out _))
@@ -590,6 +673,16 @@ internal sealed partial class EngineHost
         _ => throw new ArgumentException("Automatic note.add requires a supported native G2PA language.")
     };
 
+    // Written forms observed to pass the installed converters; anything else needs explicit phonemes.
+    private static string ScoreLyricRejection(int language, string subject) =>
+        "Native G2PA does not accept the requested " + subject + ". " + (language switch
+        {
+            0 => "Japanese lyrics are kana, one mora or syllable per note, for example ら.",
+            1 => "English lyrics are plain words, one syllable per note; project_library lyrics_apply spreads a word or phrase over the following notes.",
+            4 => "Chinese lyrics are unmarked pinyin, one syllable per note, for example wo; Han characters and tone numbers are not accepted.",
+            _ => "Use a written form that the native converter of this language accepts."
+        }) + " To keep any other lyric text, pass explicit phonemes.";
+
     private static string ScoreNoteConversionState(WIVSMNote note, bool includeLyrics) => JsonSerializer.Serialize(
         JsonSerializer.SerializeToElement(ScoreNoteSummary(note, 0)).EnumerateObject()
             .Where(item => includeLyrics || item.Name is not ("lyric" or "phonemes" or "is_valid_phonemes"))
@@ -605,7 +698,8 @@ internal sealed partial class EngineHost
         {
             if (!manager.SetLyrics((nint)note, lyric, false, true, out int affected) || affected != 1 ||
                 note.Lyric != lyric || note.LangID != language || string.IsNullOrEmpty(note.Phonemes) || !note.IsValidPhonemes)
-                throw new ArgumentException("Native G2PA did not resolve the complete single-syllable note lyric.");
+                throw new ArgumentException("Native G2PA did not resolve the complete single-syllable note lyric. "
+                    + "A note holds one syllable; project_library lyrics_apply spreads a word or phrase over several notes.");
             WIVSMNote[] current = part.Notes.ToArray();
             if (current.Length != surrounding.Length + 1 || !current.Any(item => item.Equals(note)) ||
                 ScoreNoteConversionState(note, false) != targetState ||
@@ -780,20 +874,36 @@ internal sealed partial class EngineHost
         return (T)result;
     }
 
-    private static object ScoreVoiceSummary(WIVSMMidiPart part) => new
+    private object ScoreVoiceSummary(WIVSMMidiPart part)
     {
-        ai = part.IsAi,
-        voice_bank_id = part.VoiceBankID,
-        ai_voice_bank_id = part.AiVoiceBankID,
-        secondary_voice_bank_id = part.SecondaryVoiceBankID,
-        secondary_ai_voice_bank_id = part.SecondaryAiVoiceBankID,
-        voice_name = part.VoiceName,
-        ai_voice_name = part.AiVoiceName,
-        secondary_voice_name = part.SecondaryVoiceName,
-        secondary_ai_voice_name = part.SecondaryAiVoiceName,
-        lang_id = part.LangID,
-        ai_lang_ids = part.AiLangIDs
-    };
+        // A new part keeps empty native name and language caches until it is saved and reopened.
+        // The installed database entry shows which singer the assigned ID resolves to meanwhile.
+        string voiceId = part.IsAi ? part.AiVoiceBankID : part.VoiceBankID;
+        VoiceBank? installed = string.IsNullOrEmpty(voiceId) ? null
+            : part.IsAi ? EnsureDatabase().GetVoiceBankByCompID(voiceId, VDMVoiceBankType.Dnn)
+            : EnsureDatabase().GetVoiceBankByCompID(voiceId);
+        return new
+        {
+            ai = part.IsAi,
+            voice_bank_id = part.VoiceBankID,
+            ai_voice_bank_id = part.AiVoiceBankID,
+            secondary_voice_bank_id = part.SecondaryVoiceBankID,
+            secondary_ai_voice_bank_id = part.SecondaryAiVoiceBankID,
+            voice_name = part.VoiceName,
+            ai_voice_name = part.AiVoiceName,
+            secondary_voice_name = part.SecondaryVoiceName,
+            secondary_ai_voice_name = part.SecondaryAiVoiceName,
+            lang_id = part.LangID,
+            ai_lang_ids = part.AiLangIDs,
+            installed_voice = installed is null ? null : new
+            {
+                name = installed.Name,
+                native_lang_id = installed.NativeLangID,
+                lang_ids = installed.LangIDs,
+                available_in_sequence = installed.IsAvailableInSequence
+            }
+        };
+    }
 
     private object ScoreVoiceEdit(EngineSession session, JsonElement options)
     {
@@ -1009,6 +1119,15 @@ internal sealed partial class EngineHost
         return type;
     }
 
+    // Lanes the installed editor offers on VOCALOID:AI tracks (Reference Manual 6.13, "Description of
+    // Each Control Parameter"): Dynamics, Pitch Bend, Pitch Bend Sensitivity, Air, Character, Expression.
+    // On AI parts Air and Character are the S5 lanes, and Expression exists only there.
+    private static bool ScoreControllerAiOnly(VSMControllerType type) =>
+        type is VSMControllerType.Expression or VSMControllerType.S5Air or VSMControllerType.S5Character;
+
+    private static bool ScoreControllerSungByAi(VSMControllerType type) => ScoreControllerAiOnly(type)
+        || type is VSMControllerType.Dynamics or VSMControllerType.PitchBend or VSMControllerType.PitchBendSens;
+
     private static object ScoreControllerTypes(EngineSession session, JsonElement options)
     {
         WIVSMMidiPart part = ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options);
@@ -1019,7 +1138,9 @@ internal sealed partial class EngineHost
                 type = type.ToString(),
                 minimum = part.MinControllerValue(type),
                 maximum = part.MaxControllerValue(type),
-                default_value = part.DefaultControllerValue(type)
+                default_value = part.DefaultControllerValue(type),
+                applies_to = ScoreControllerAiOnly(type) ? "MidiAi" : ScoreControllerSungByAi(type) ? "Midi+MidiAi" : "Midi",
+                applicable_to_current_part = part.IsAi ? ScoreControllerSungByAi(type) : !ScoreControllerAiOnly(type)
             }).ToArray()
         };
     }
@@ -1049,10 +1170,20 @@ internal sealed partial class EngineHost
         default_value = part.DefaultControllerValue(type)
     };
 
-    private static JsonElement ScorePoints(JsonElement options)
+    // points_file names a JSON file inside the workspace holding the same array that "points" would carry.
+    // It exists for long hand-drawn curves: several hundred points do not survive retyping into a tool call.
+    private JsonElement ScorePoints(JsonElement options)
     {
-        if (!options.TryGetProperty("points", out JsonElement points) || points.ValueKind != JsonValueKind.Array ||
-            points.GetArrayLength() is < 1 or > 8192)
+        JsonElement points;
+        if (options.TryGetProperty("points_file", out JsonElement file))
+        {
+            if (options.TryGetProperty("points", out _))
+                throw new ArgumentException("Give either points or points_file, not both.");
+            points = ScoreWorkspaceJson(file, "points_file", 1 << 20);
+        }
+        else if (!options.TryGetProperty("points", out points))
+            throw new ArgumentException("points must be an array of 1..8192 objects.");
+        if (points.ValueKind != JsonValueKind.Array || points.GetArrayLength() is < 1 or > 8192)
             throw new ArgumentException("points must be an array of 1..8192 objects.");
         foreach (JsonElement point in points.EnumerateArray())
             if (point.ValueKind != JsonValueKind.Object)
@@ -1246,6 +1377,11 @@ internal sealed partial class EngineHost
                 bypass.Add(name, entry.Value.GetBoolean());
             }
         }
+        if (robot.HasValue) bypass.TryAdd(VSMMidiEffectType.RobotVoice, false);
+        if (breathMode.HasValue || breathType.HasValue || exhalation.HasValue)
+            bypass.TryAdd(VSMMidiEffectType.Breath, false);
+        if (lane.HasValue) bypass.TryAdd(VSMMidiEffectType.Take, false);
+        if (colors.Count != 0) bypass.TryAdd(VSMMidiEffectType.VoiceColor, false);
         if (!robot.HasValue && !breathMode.HasValue && !breathType.HasValue && !exhalation.HasValue && !lane.HasValue
             && colors.Count == 0 && bypass.Count == 0)
             throw new ArgumentException("performance.set requires at least one performance value.");
@@ -1412,8 +1548,18 @@ internal sealed partial class EngineHost
 
     private static object ScorePitchList(WIVSMNote note)
     {
-        return ScorePitchList(ScorePitchPoints(note));
+        return ScorePitchList(ScorePitchPoints(note), note.NoteNumber);
     }
+
+    // The engine sings a direct-pitch point as an offset in cents from the note's own pitch
+    // (rendered pitch = note number + value / 100), measured on IA :[R] with a stepped curve on
+    // an E4 note: native -500 cents sang B3, -300 sang D4. The MCP contract is an absolute
+    // fractional MIDI note number, so convert relative to the note on the way in and out.
+    private static float ScorePitchToNative(double rawNoteNumber, int noteNumber) =>
+        (float)((rawNoteNumber - noteNumber) * 100.0);
+
+    private static double ScorePitchFromNative(float nativeCents, int noteNumber) =>
+        Math.Round(noteNumber + nativeCents / 100.0, 4);
 
     private static VSMDirectPitchData[] ScorePitchPoints(WIVSMNote note)
     {
@@ -1421,9 +1567,9 @@ internal sealed partial class EngineHost
             note.DirectPitchData((ulong)index) ?? throw new InvalidOperationException("Native direct pitch lookup failed.")).ToArray();
     }
 
-    private static object ScorePitchList(IEnumerable<VSMDirectPitchData> points)
+    private static object ScorePitchList(IEnumerable<VSMDirectPitchData> points, int noteNumber)
     {
-        return new { points = points.Select(point => new { tick = point.Tick, value = VSMScore.GetRawNoteNumberFromPitch(point.Value) }).ToArray() };
+        return new { points = points.Select(point => new { tick = point.Tick, value = ScorePitchFromNative(point.Value, noteNumber) }).ToArray() };
     }
 
     private object ScorePitchEdit(EngineSession session, string operation, JsonElement options)
@@ -1432,6 +1578,7 @@ internal sealed partial class EngineHost
         WIVSMNote note = ScoreNote(part, options);
         int start = checked((int)note.RelPosTick.Value);
         int duration = checked((int)note.DurationTick.Value);
+        int noteNumber = note.NoteNumber;
         VSMDirectPitchData[] before = ScorePitchPoints(note);
         if (operation == "pitch.clear")
         {
@@ -1445,7 +1592,7 @@ internal sealed partial class EngineHost
                     ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options), options));
                 ScoreRequire(actual.Length == expected.Length && expected.All(point => actual.Any(item =>
                     item.Tick == point.Tick && item.Value == point.Value)), operation + " readback", session.Sequence);
-                return ScorePitchList(actual);
+                return ScorePitchList(actual, noteNumber);
             }
             if (before.Length == expected.Length)
                 return ScoreMutate(session, operation, () => true, ReadClearedPitch);
@@ -1466,7 +1613,7 @@ internal sealed partial class EngineHost
         foreach (JsonElement point in ScorePoints(options).EnumerateArray())
         {
             int tick = ScoreInt(point, "tick", 0, duration - 1);
-            float value = VSMScore.GetPitchFromRawNoteNumber(ScoreFloat(point, "value", 0, 127));
+            float value = ScorePitchToNative(ScoreFloat(point, "value", 0, 127), noteNumber);
             if (!ticks.Add(tick))
                 throw new ArgumentException("Direct pitch points require distinct ticks.");
             points.Add(new VSMDirectPitchData(tick, value));
@@ -1475,9 +1622,20 @@ internal sealed partial class EngineHost
         VSMDirectPitchData[] ValidateRequestedPoints(WIVSMNote target)
         {
             VSMDirectPitchData[] actual = ScorePitchPoints(target);
+            // Direct pitch is sample-and-hold: the engine keeps a value until the next point and
+            // drops a point that repeats the value already in force. Such a point is satisfied by
+            // the retained point before it.
             foreach (VSMDirectPitchData point in points)
-                ScoreRequire(actual.Any(item => item.Tick == point.Tick && Math.Abs(item.Value - point.Value) <= 0.01f),
-                    operation + " point " + point.Tick + " readback", session.Sequence);
+            {
+                bool present = actual.Any(item => item.Tick == point.Tick && Math.Abs(item.Value - point.Value) <= 0.01f);
+                if (!present)
+                {
+                    VSMDirectPitchData[] earlier = actual.Where(item => item.Tick <= point.Tick).ToArray();
+                    present = earlier.Length != 0 &&
+                        Math.Abs(earlier.MaxBy(item => item.Tick)!.Value - point.Value) <= 0.01f;
+                }
+                ScoreRequire(present, operation + " point " + point.Tick + " readback", session.Sequence);
+            }
             return actual;
         }
         return ScoreMutate(session, operation, () =>
@@ -1492,7 +1650,7 @@ internal sealed partial class EngineHost
             ArchiveNoteArraySetStaged(session, note, points, replace);
             return true;
         }, () => ScorePitchList(ValidateRequestedPoints(ScoreNote(
-            ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options), options))));
+            ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options), options)), noteNumber));
     }
 
     private static object ScoreSequenceSummary(WIVSMSequence sequence) => new
@@ -1594,8 +1752,100 @@ internal sealed partial class EngineHost
         });
     }
 
-    private static object ScoreNoteBatchUpdate(EngineSession session, JsonElement options)
+    // Per-note tuning in one transaction: `updates` (or a workspace JSON file, `updates_file`) is an array of
+    // {note_index, number?, duration_tick?, velocity?, ai_expression?, expression?, ai_vibrato_enabled?}.
+    // Tuning a phrase touches every note in it; hundreds of single note.update calls are slow and easy to get wrong.
+    private object ScoreNoteBatchPatch(EngineSession session, JsonElement options)
     {
+        WIVSMMidiPart part = ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options);
+        JsonElement updates;
+        if (options.TryGetProperty("updates_file", out JsonElement file))
+        {
+            if (options.TryGetProperty("updates", out _))
+                throw new ArgumentException("Give either updates or updates_file, not both.");
+            updates = ScoreWorkspaceJson(file, "updates_file", 4 << 20);
+        }
+        else
+            updates = options.GetProperty("updates");
+        if (updates.ValueKind != JsonValueKind.Array || updates.GetArrayLength() is < 1 or > 65536)
+            throw new ArgumentException("updates must be an array of 1..65536 objects.");
+        int count = ScoreCount(part.NumNotes);
+        VSMNoteEvent minimum = part.GetMinNoteEvent();
+        string[] allowed = ["note_index", "number", "duration_tick", "velocity", "ai_expression", "expression", "ai_vibrato_enabled"];
+        List<(WIVSMNote Note, int Index, int? Number, int? Duration, int? Velocity, VSMAiNoteExpression? Ai, VSMNoteExpression? Classic, bool? Vibrato)> plan = [];
+        HashSet<int> seen = [];
+        foreach (JsonElement update in updates.EnumerateArray())
+        {
+            if (update.ValueKind != JsonValueKind.Object)
+                throw new ArgumentException("Each update must be an object.");
+            foreach (JsonProperty entry in update.EnumerateObject())
+                if (!allowed.Contains(entry.Name))
+                    throw new ArgumentException("Unknown update field: " + entry.Name);
+            int index = ScoreInt(update, "note_index", 0, count - 1);
+            if (!seen.Add(index))
+                throw new ArgumentException("updates must name each note once: " + index);
+            WIVSMNote note = part.GetNote((ulong)index)
+                ?? throw new InvalidOperationException("Native note lookup failed: " + part.LastError);
+            VSMNoteEvent maximum = part.GetMaxNoteEvent(checked((int)note.RelPosTick.Value));
+            int? number = update.TryGetProperty("number", out _) ? ScoreInt(update, "number", minimum.Number, maximum.Number) : null;
+            int? duration = null;
+            if (update.TryGetProperty("duration_tick", out _))
+            {
+                duration = ScoreInt(update, "duration_tick", 1, int.MaxValue);
+                if (duration > part.DurationTick.Value - note.RelPosTick.Value || duration > maximum.Duration)
+                    throw new ArgumentOutOfRangeException("duration_tick", "Note " + index + " must fit in the part and native note range.");
+            }
+            int? velocity = update.TryGetProperty("velocity", out _) ? ScoreInt(update, "velocity", minimum.Velocity, maximum.Velocity) : null;
+            VSMAiNoteExpression? ai = update.TryGetProperty("ai_expression", out _)
+                ? ScorePatchExpression(update, "ai_expression", note.GetAiNoteExpression(), part.GetMinAiNoteExpression(), part.GetMaxAiNoteExpression()) : null;
+            VSMNoteExpression? classic = update.TryGetProperty("expression", out _)
+                ? ScorePatchExpression(update, "expression", note.GetNoteExpression(), part.GetMinNoteExpression(), part.GetMaxNoteExpression()) : null;
+            bool? vibrato = update.TryGetProperty("ai_vibrato_enabled", out _) ? ScoreBool(update, "ai_vibrato_enabled") : null;
+            if (number is null && duration is null && velocity is null && ai is null && classic is null && vibrato is null)
+                throw new ArgumentException("Update " + index + " changes nothing.");
+            plan.Add((note, index, number, duration, velocity, ai, classic, vibrato));
+        }
+        return ScoreMutate(session, "note.batch_update", () =>
+        {
+            foreach (var item in plan)
+            {
+                if (item.Duration is not null)
+                    ScoreRequire(item.Note.SetDuration(new VSMRelTick(item.Duration.Value)), "note.batch_update duration", session.Sequence);
+                if (item.Number is not null)
+                    ScoreRequire(item.Note.SetNoteNumber(item.Number.Value), "note.batch_update number", session.Sequence);
+                if (item.Velocity is not null)
+                {
+                    item.Note.NoteVelocity = item.Velocity.Value;
+                    ScoreRequire(item.Note.NoteVelocity == item.Velocity.Value, "note.batch_update velocity", session.Sequence);
+                }
+                if (item.Classic is not null)
+                    ScoreRequire(item.Note.SetNoteExpression(item.Classic.Value), "note.batch_update expression", session.Sequence);
+                if (item.Ai is not null)
+                    ScoreRequire(item.Note.SetAiNoteExpression(item.Ai.Value), "note.batch_update ai_expression", session.Sequence);
+                if (item.Vibrato is not null)
+                    ScoreRequire(item.Note.SetAiVibratoEnabled(item.Vibrato.Value), "note.batch_update ai_vibrato", session.Sequence);
+            }
+            return true;
+        }, () =>
+        {
+            WIVSMMidiPart current = ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options);
+            foreach (var item in plan)
+            {
+                WIVSMNote note = current.GetNote((ulong)item.Index)!;
+                ScoreRequire((item.Number is null || note.NoteNumber == item.Number)
+                    && (item.Duration is null || note.DurationTick.Value == item.Duration)
+                    && (item.Velocity is null || note.NoteVelocity == item.Velocity)
+                    && (item.Vibrato is null || note.IsAiVibratoEnabled == item.Vibrato),
+                    "note.batch_update readback", session.Sequence);
+            }
+            return new { updated = plan.Count, note_count = ScoreCount(current.NumNotes) };
+        });
+    }
+
+    private object ScoreNoteBatchUpdate(EngineSession session, JsonElement options)
+    {
+        if (options.TryGetProperty("updates", out _) || options.TryGetProperty("updates_file", out _))
+            return ScoreNoteBatchPatch(session, options);
         WIVSMMidiPart part = ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options);
         int[] indices = ScoreIndices(options, "note_indices", ScoreCount(part.NumNotes), 1);
         int? transpose = options.TryGetProperty("transpose", out _) ? ScoreInt(options, "transpose", -127, 127) : null;
@@ -1638,8 +1888,10 @@ internal sealed partial class EngineHost
             WIVSMNote n = GetNote();
             object[] Events(VSMVibratoEventType type) => Enumerable.Range(0, ScoreCount(n.GetNumVibratoEvent(type)))
                 .Select(i => n.GetVibratoEvent(type, (ulong)i)!).Select(e => (object)new { tick = e.RelPosTick.Value, value = e.Value }).ToArray();
+            object Range(VSMVibratoEventType type) => new { minimum = n.GetMinVibratoEventValue(type), maximum = n.GetMaxVibratoEventValue(type) };
             return new { type = n.VibratoType.ToString(), duration_tick = n.VibratoDurationTick.Value, ai_enabled = n.IsAiVibratoEnabled,
-                depth = Events(VSMVibratoEventType.Depth), rate = Events(VSMVibratoEventType.Rate) };
+                depth = Events(VSMVibratoEventType.Depth), rate = Events(VSMVibratoEventType.Rate),
+                types = Enum.GetNames<VSMVibratoType>(), depth_range = Range(VSMVibratoEventType.Depth), rate_range = Range(VSMVibratoEventType.Rate) };
         }
         if (operation == "vibrato.get") return Read();
         WIVSMNote note = GetNote();

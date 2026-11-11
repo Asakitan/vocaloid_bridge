@@ -21,6 +21,8 @@ async def library_independent(check):
     seq["tracks"][0]["x_library_track"] = "track"
     seq["tracks"][0]["parts"][0]["x_library_part"] = "part"
     seq["tracks"][0]["parts"][0]["notes"][0]["x_library_note"] = "note"
+    seq["tracks"][0]["parts"][0]["audioEffects"][0]["x_library_effect"] = "audio"
+    seq["tracks"][0]["parts"][0]["midiEffects"][0]["x_library_effect"] = "midi"
     seq["masterTrack"]["tempo"]["events"][0]["x_library_tempo"] = "tempo"
     members["Project/sequence.json"] = json.dumps(seq, ensure_ascii=False).encode("utf-8")
     source = v.ROOT / "output" / check.output("archive-library-source")
@@ -31,15 +33,22 @@ async def library_independent(check):
     style_id = clip_id = None
     try:
         await check.edit(sid, "note.update", track_index=0, part_index=0, note_index=0, number=61)
-        before = await check.call("project_status", session_id=sid)
-        history = await check.edit(sid, "history.status")
         style = (await check.library("style_capture", sid, track_index=0, part_index=0,
                                      name="Archive style " + check.run_id))["style"]
         style_id = style["style_id"]
+        captured, _ = await check.save(sid, "archive-style-captured")
+        v.require(v.contains_atom(captured["tracks"][0]["parts"][0], style_id),
+              "Extended source did not retain the captured style identity")
         updated = (await check.library("style_update", sid, style_id=style_id,
                                        name="Archive updated " + check.run_id))["style"]
         v.require(updated["style_id"] == style_id and updated["name"].startswith("Archive updated"),
                   "Private style update failed")
+        await check.library("style_apply", sid, style_id=style_id, track_index=0, part_index=0)
+        applied, _ = await check.save(sid, "archive-style-applied")
+        v.require(v.contains_atom(applied["tracks"][0]["parts"][0], updated["name"]),
+              "Extended source did not retain the applied style name")
+        before = await check.call("project_status", session_id=sid)
+        history = await check.edit(sid, "history.status")
         extended = (await check.library("media_capture", sid, track_index=0, part_index=0,
                                         name="Archive extended clip " + check.run_id))["clip"]
         clip_id = extended["clip_id"]
@@ -61,13 +70,25 @@ async def library_independent(check):
         v.require(await check.call("project_status", session_id=sid) == before and
                   await check.edit(sid, "history.status") == history, "Private library operations changed source history")
         await check.edit(sid, "undo")
+        undo_style, _ = await check.save(sid, "archive-style-undo")
+        v.require(undo_style["tracks"][0]["parts"] == captured["tracks"][0]["parts"],
+              "Style undo did not restore extended MIDI/audio state in one step")
+        await check.edit(sid, "undo")
+        undo_capture, _ = await check.save(sid, "archive-style-capture-undo")
+        v.require(not v.contains_atom(undo_capture["tracks"][0]["parts"][0], style["style_id"])
+              and undo_capture["tracks"][0]["parts"][0]["notes"][0]["number"] == 61,
+              "Style capture undo did not restore its source identity independently")
+        await check.edit(sid, "undo")
         undone, _ = await check.save(sid, "archive-library-undo")
         v.require(undone["tracks"][0]["parts"][0]["notes"][0]["number"] == 60, "Library operations damaged undo")
-        await check.edit(sid, "redo")
+        for step in range(3):
+            await check.edit(sid, "redo")
         saved, path = await check.save(sid, "archive-library-redo")
         v.require(saved["x_library_root"] == "root" and saved["tracks"][0]["x_library_track"] == "track" and
                   saved["tracks"][0]["parts"][0]["x_library_part"] == "part" and
                   saved["tracks"][0]["parts"][0]["notes"][0]["x_library_note"] == "note" and
+                  saved["tracks"][0]["parts"][0]["audioEffects"][0]["x_library_effect"] == "audio" and
+                  saved["tracks"][0]["parts"][0]["midiEffects"][0]["x_library_effect"] == "midi" and
                   saved["masterTrack"]["tempo"]["events"][0]["x_library_tempo"] == "tempo",
                   "Library operations lost source extensions")
         reopened = (await check.call("project_open", path=str(path)))["session_id"]

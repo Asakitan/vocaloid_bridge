@@ -2,6 +2,10 @@
 
 在独立后台进程中调用本机 VOCALOID6 原生 VSM 引擎。MCP 创建并管理自己的工程会话，不接管正在使用的 VOCALOID 编辑器窗口。
 
+## 许可证
+
+本项目桥接代码以 [MIT 许可证](LICENSE) 发布，版权署名为 Asakitan（2026）。VOCALOID 引擎、声库及其他第三方组件不包含在此许可证中，运行时仍需本机已安装且正常授权的 VOCALOID6。源码托管于 [Asakitan/vocaloid_bridge](https://github.com/Asakitan/vocaloid_bridge)。
+
 ## 运行方式
 
 需要 Windows、本机已安装且正常授权的 VOCALOID6、Python 3.11+ 和 .NET 8 SDK/Windows Desktop Runtime。
@@ -33,13 +37,14 @@ powershell -NoProfile -File .\tools\setup.ps1
 
 这些条目均使用 `E:/VC/vocaloid_bridge/.venv/Scripts/python.exe -m vocaloid_bridge`，并显式设置 `VOCALOID_WORKSPACE`、`PYTHONPATH` 为 `E:/VC/vocaloid_bridge`，`PYTHONUTF8` 为 `1`。从其他目录启动时，输出仍写到本项目的 `output`。Codex 的 `tool_timeout_sec` 为 180。
 
-Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.26.0 提供 38 个工具和 127 个结构化操作，独立 stdio 客户端的定向测试已通过。此前 Codex 聊天的旧连接曾报告 Python MCP 0.4.0，其运行中的原生宿主经比对为 0.5.0 构建；0.25.0 提交全局重载后该聊天仍返回 `Transport closed`，旧绑定没有再重试。会话 36 在新建的 Claude Code 聊天中经其自身连接确认 38 个工具、`mcp_version=0.26.0` 和原生引擎 6.13.3.1，见 [会话 36](docs/session-log/session-36.md)。其他客户端此前已建立的长连接仍应在重新连接后核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
+Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均已校验，并从用户主目录完成实际 MCP 握手和 24 个工具发现。当前源码 0.27.0 提供 39 个工具和 127 个结构化操作，独立 stdio 客户端的定向测试已通过。此前 Codex 聊天的旧连接曾报告 Python MCP 0.4.0，其运行中的原生宿主经比对为 0.5.0 构建；0.25.0 提交全局重载后该聊天仍返回 `Transport closed`，旧绑定没有再重试。会话 36 在新建的 Claude Code 聊天中经其自身连接确认 38 个工具、`mcp_version=0.26.0` 和原生引擎 6.13.3.1，见 [会话 36](docs/session-log/session-36.md)。该聊天的服务进程启动于 0.27.0 之前，重新连接后才会载入新版本。其他客户端此前已建立的长连接仍应在重新连接后核对版本；没有强制重启客户端或改变登录、模型与其他 MCP 服务。
 
 ## 工具
 
 | 功能 | 工具 |
 | --- | --- |
 | 原生引擎状态及 MCP 托管启停 | `vocaloid_status`, `vocaloid_runtime` |
+| 作曲流程、歌词写法与 AI 实际演唱的控制项 | `vocaloid_workflow` |
 | 完整功能清单、结构化操作与真实接口目录 | `vocaloid_features`, `vocaloid_operations`, `native_api_catalog` |
 | 真正新建、打开、保存、关闭工程 | `project_create`, `project_open`, `project_save`, `project_close` |
 | 原生格式导入、MIDI 导出 | `project_import`, `project_export_midi` |
@@ -68,7 +73,11 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 
 > 写一段 8 小节的旋律和歌词，使用本机 asa 声库，创建后台工程，保存 VPR 并合成人声 WAV 到 output，然后关闭这次创建的工程。不要操作我的编辑器窗口。
 
-`write_song` 提示模板和 `vocaloid://workflow` 资源也提供了写歌流程。
+写歌时先调用 `vocaloid_workflow`：它返回 [作曲流程](docs/song-workflow.md)，包括从空工程到混缩 WAV 的步骤、各语言的歌词写法，以及 VOCALOID:AI 实际演唱和只保存不演唱的控制项。`write_song` 提示模板和 `vocaloid://workflow` 资源提供同一份流程。
+
+歌词按一个音符一个音节填写：日语用假名，英语用单音节单词，中文用不带声调数字的拼音；汉字和带数字的拼音会被原生转换器拒绝，报错信息会说明应有的写法。要显示汉字，需同时给出 `lyric` 和 `phonemes`。新建声部在 `voice.set` 后应用 `<声库名> Default` 样式，才具备编辑器默认音色。
+
+`performance.set` 调整 Robot、Breath、Take 或 VoiceColor 时默认启用对应效果，显式 `bypass` 仍优先。`style_capture` 保存预设并关联来源声部，随后用 `project_save` 保存到 VPR；`style_apply` 的 MIDI、音频和身份变更支持一次撤销及受支持的扩展工程。会话 38 的保存重开与字段保留验证见 [样式修复记录](docs/session-log/session-38.md)。已运行的 MCP 需先保存并关闭工程，再重新连接以载入修复。
 
 ## 后台约束
 
@@ -170,7 +179,9 @@ Claude Code 注册时曾报告 Connected；六处配置的启动参数当时均�
 
 0.25.0 已实现剩余复杂时间编辑、素材元数据 v2、其他数组和事务边界；[契约与必要证据](docs/completion-34.md) 区分实现完成与当前聊天连接刷新。
 
-0.26.0 的客户端绑定已由 Claude Code 新聊天的单次状态检查确认，[TODO](TODO.md) 没有未完成项；该确认没有重跑功能测试，范围见 [STATUS](STATUS.md)。
+0.26.0 的客户端绑定已由 Claude Code 新聊天的单次状态检查确认；该确认没有重跑功能测试，范围见 [STATUS](STATUS.md)。
+
+0.27.0 面向 Agent 实际作曲：新增 `vocaloid_workflow`；AI 音符用 `note.update` 改词时重新生成音素，不再留下旧发音；歌词被拒绝时提示可接受的写法；`controller.types`、`vibrato.get`、`dvqm_get` 和 `voice.get` 标出适用范围、取值范围和已安装声库。[逐样本审计](artifacts/feature-acceptance-ca89e374bac1/agent.ai_effect_audit_36.json) 用 asa 测出 34 项控制改变 AI 合成、53 项不改变，结论与手册的 AI 参数表一致；[四项定向用例](artifacts/feature-acceptance-ee0bdfc0c02a/summary.json) 和相关回归通过，Haiku 子 agent 仅凭 MCP 自身说明做出了一段中文演唱。已打开的客户端需重新连接才会载入 0.27.0，见 [TODO](TODO.md)。
 
 ## MCP 自动管理后台实例
 

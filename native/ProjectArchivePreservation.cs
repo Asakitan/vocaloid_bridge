@@ -1114,7 +1114,7 @@ internal sealed partial class EngineHost
     {
         if (id is null || !HasArchiveEntityExtensions(GetSession(id))) return;
         RequireArchiveNoteArrayExternalOperation(GetSession(id), domain, operation);
-        if (domain == "library" && operation is ("lyrics_apply" or "lyrics_reset" or "phonemes_apply" or "phonemes_reset"))
+        if (domain == "library" && operation is ("lyrics_apply" or "lyrics_reset" or "phonemes_apply" or "phonemes_reset" or "style_capture" or "style_apply"))
         {
             RequireArchiveMutationSupported(GetSession(id), operation);
             return;
@@ -1145,7 +1145,7 @@ internal sealed partial class EngineHost
             "tuning.set" or "vibrato.set" or "phoneme_timing.set" or "phoneme_timing.reset" or
             "pitch.set" or "pitch.clear" or "performance.set" or "selection.set" or "sequence.update" or
             "undo" or "redo" or "history.rollback" or "time.insert" or "time.delete" or "clipboard.paste" or "clipboard.cut" or "project.merge" or "media_import" or
-            "lyrics_apply" or "lyrics_reset" or "phonemes_apply" or "phonemes_reset" or "audio.set_effect"))
+            "lyrics_apply" or "lyrics_reset" or "phonemes_apply" or "phonemes_reset" or "audio.set_effect" or "style_capture" or "style_apply"))
             throw new InvalidOperationException("project_preservation: this mutation has no verified identity transaction: " + operation);
     }
 
@@ -1156,7 +1156,7 @@ internal sealed partial class EngineHost
         "note.add" or "note.update" or "note.duplicate" or "note.batch_update" or "track.duplicate" or "part.duplicate" or
         "note.split" or "note.join" or
         "clipboard.paste" or "project.merge" or "media_import" or
-        "lyrics_apply" or "lyrics_reset" or "phonemes_apply" or "phonemes_reset" or "audio.set_effect" or
+        "lyrics_apply" or "lyrics_reset" or "phonemes_apply" or "phonemes_reset" or "audio.set_effect" or "style_capture" or "style_apply" or
         "voice.set" or "vibrato.set" or "phoneme_timing.set" or "phoneme_timing.reset" or "pitch.set" or "pitch.clear" or
         "performance.set" or "selection.set" or "sequence.update" or "tempo.set" or "tempo.remove" or
         "time_signature.set" or "time_signature.remove" or "loop.set" or "tuning.set";

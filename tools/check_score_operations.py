@@ -100,7 +100,7 @@ def run(fixture: Path) -> dict:
         require(added["number"] == 60, "Native note insert readback failed")
         stale = reference_in(client.request("get", {"session_id": session_id, "member": "Tracks"}), root_ref)
         require(stale is not None, "Generic Tracks getter did not create a child reference")
-        edit("note.update", **scope, note_index=0, number=62, lyric="la",
+        edit("note.update", **scope, note_index=0, number=62, lyric="la", phonemes="a",
              expression={"Accent": added["expression"]["Accent"]})
         try:
             client.request("members", {"session_id": session_id, "ref": stale})

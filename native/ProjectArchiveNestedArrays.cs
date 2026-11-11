@@ -183,7 +183,7 @@ internal sealed partial class EngineHost
         {
             "vibrato.set" => path.Contains("/vibrato/", StringComparison.Ordinal),
             "phoneme_timing.set" or "phoneme_timing.reset" or "lyrics_apply" or "phonemes_apply" or "lyrics_reset" or "phonemes_reset" => path.Contains("/phonemePositions", StringComparison.Ordinal),
-            "audio.set_effect" => path.Contains("Effects", StringComparison.Ordinal) || path.Contains("/parameters", StringComparison.Ordinal),
+            "audio.set_effect" or "style_apply" => path.Contains("Effects", StringComparison.Ordinal) || path.Contains("/parameters", StringComparison.Ordinal),
             "voice.set" => path.Contains("/voices", StringComparison.Ordinal) || path.Contains("/langIDs", StringComparison.Ordinal),
             _ => false
         };

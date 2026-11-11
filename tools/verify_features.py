@@ -1146,13 +1146,14 @@ async def interchange_vpr(check: Acceptance) -> None:
                              notes=[{"start": 0, "duration": 2, "pitch": 60}, {"start": 1, "duration": 1, "pitch": 62}])
 
 
-def read_audio(path: str | Path, *, nonzero: bool = True) -> tuple[dict[str, Any], Any]:
+def read_audio(path: str | Path, *, nonzero: bool = True, max_seconds: int = 30) -> tuple[dict[str, Any], Any]:
     import numpy as np
     import soundfile as sf
     source = Path(path)
     with sf.SoundFile(source) as audio:
         require(audio.format in ("WAV", "WAVEX"), "Expected native WAV output", audio.format)
-        require(0 < audio.frames <= audio.samplerate * 30, "Audio must be nonempty and bounded to 30 seconds", audio.frames)
+        require(0 < audio.frames <= audio.samplerate * max_seconds,
+            f"Audio must be nonempty and bounded to {max_seconds} seconds", audio.frames)
         require(audio.channels in (1, 2), "Expected mono or stereo WAV", audio.channels)
         samples = audio.read(dtype="float64", always_2d=True)
         metadata = {"frames": audio.frames, "sample_rate": audio.samplerate, "channels": audio.channels,
@@ -1655,6 +1656,63 @@ async def mixdown_guards(check: Acceptance) -> None:
         for option in ("start_seconds", "end_seconds", "tail_seconds"):
             await check.rejected("project_audio", "not supported|complete selected tracks", session_id=identifier,
                                  operation="mixdown", options={"output_name": check.output("range-rejected", ".wav"), option: 1})
+
+
+@feature("mixdown.multiple_parts", "mixdown", "project_audio", "project_edit", "score_compose")
+async def mixdown_multiple_parts(check: Acceptance) -> None:
+    import numpy as np
+    async with check.project(score=True) as identifier:
+        await check.edit(identifier, "part.duplicate", track_index=0, part_index=0, start_tick=3840)
+        result = await check.audio(identifier, "mixdown", output_name=check.output("multiple-parts", ".wav"),
+                                   timeout_seconds=30)
+        metadata, samples = read_audio(result["path"])
+        compare_audio_reports(result, metadata)
+        sample_rate = metadata["sample_rate"]
+        require(len(samples) > 5 * sample_rate, "Mixdown omitted the later part", metadata)
+        for start_seconds in (0, 4):
+            segment = samples[start_seconds * sample_rate:(start_seconds + 2) * sample_rate]
+            require(float(np.max(np.abs(segment))) > 0.001, "Mixdown contains a silent part", start_seconds)
+        check.evidence("multiple_parts_wave", {"path": result["path"], **metadata})
+
+
+@feature("mixdown.project_fixture", "mixdown", "project_audio", "project_open", "project_render_part", "project_edit")
+async def mixdown_project_fixture(check: Acceptance) -> None:
+    import numpy as np
+    fixture = check.arguments.mixdown_fixture
+    if fixture is None:
+        raise Skipped("Supply --mixdown-fixture to verify an existing multi-part project")
+    sequence, _ = read_vpr(fixture)
+    check.evidence("source", {"path": str(fixture.resolve()), "parts_per_track": [
+        len(track.get("parts", [])) for track in sequence["tracks"]]})
+    identifier = (await check.call("project_open", path=str(fixture.resolve())))["session_id"]
+    try:
+        first = next((index for index, track in enumerate(sequence["tracks"])
+                      if track.get("type") in (0, 2) and track.get("parts")), None)
+        require(first is not None, "Fixture has no vocal part")
+        single = await check.call("project_render_part", session_id=identifier, track_index=first, part_index=0,
+                                  output_name=check.output("fixture-single", ".wav"))
+        read_audio(single["path"], max_seconds=600)
+        result = await check.audio(identifier, "mixdown", output_name=check.output("fixture-mix", ".wav"),
+                                   timeout_seconds=30)
+        metadata, samples = read_audio(result["path"], max_seconds=600)
+        compare_audio_reports(result, metadata)
+        peaks = []
+        for part in sequence["tracks"][first]["parts"]:
+            if not part.get("notes"):
+                continue
+            start = await check.edit(identifier, "time.convert", **{"from": "tick", "value": part["pos"]})
+            end = await check.edit(identifier, "time.convert", **{
+                "from": "tick", "value": part["pos"] + part["duration"]})
+            segment = samples[int(start["seconds"] * metadata["sample_rate"]):
+                              int(end["seconds"] * metadata["sample_rate"])]
+            require(segment.size > 0, "Mixdown omitted a part", part.get("name"))
+            peak = float(np.max(np.abs(segment)))
+            require(peak > 0.001, "Mixdown contains a silent part", part.get("name"))
+            peaks.append({"name": part.get("name"), "peak": peak})
+        check.evidence("fixture_mix", {"path": result["path"], "part_peaks": peaks, **metadata})
+    finally:
+        if identifier in check.sessions:
+            await check.close(identifier)
 
 
 @feature("mixdown.master_effect", "mixdown", "project_audio")
@@ -2251,6 +2309,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--case", action="append", help="Run an exact feature ID; repeat as needed")
     parser.add_argument("--list", action="store_true", help="List planned cases without starting MCP or the host")
     parser.add_argument("--audio-fixture", type=Path, help="Existing native singing WAV; never substituted with generated fake audio")
+    parser.add_argument("--mixdown-fixture", type=Path, help="Existing multi-part VPR; opened privately and never overwritten")
     parser.add_argument("--phoneme-manual-text", type=Path, help="Optional extracted official manual to cross-check phoneme symbols")
     parser.add_argument("--vsqx-fixture", type=Path, help="Actual VSQX 4 file for native legacy-format verification")
     parser.add_argument("--vsqx3-fixture", type=Path, help="Actual VSQX 3 file for native legacy-format verification")

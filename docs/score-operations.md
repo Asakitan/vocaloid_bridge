@@ -126,7 +126,7 @@ All note operations require `track_index` and `part_index`.
 | `note.list` | `track_index`, `part_index` | `notes`: note summaries |
 | `note.expression_bounds` | `track_index`, `part_index` | Current native part's minimum, maximum and default dictionaries for `expression` and `ai_expression` |
 | `note.add` | `track_index`, `part_index`, `start_tick`, `duration_tick`; optional `number`, `velocity`, `lyric`, `phonemes`, `is_valid_phonemes`, `lang_id`, `expression`, `ai_expression`, `is_protected`, `ai_vibrato_enabled` | Inserted note summary |
-| `note.update` | `track_index`, `part_index`, `note_index`; one or more of `start_tick`, `duration_tick`, `number`, `velocity`, `lyric`, `phonemes`, `is_valid_phonemes`, `lang_id`, `expression`, `ai_expression`, `is_protected`, `ai_vibrato_enabled` | Updated note summary |
+| `note.update` | `track_index`, `part_index`, `note_index`; one or more of `start_tick`, `duration_tick`, `number`, `velocity`, `lyric`, `phonemes`, `is_valid_phonemes`, `lang_id`, `expression`, `ai_expression`, `is_protected`, `ai_vibrato_enabled`. On an AI note a changed `lyric` without `phonemes` regenerates the phonemes through native G2PA unless the note is protected | Updated note summary |
 | `note.remove` | `track_index`, `part_index`, `note_index` | `removed`, old `note_index` |
 | `note.duplicate` | `track_index`, `part_index`, `note_index`, new `start_tick` | Native duplicate summary |
 | `note.clear` | `track_index`, `part_index` | `removed`, remaining `note_count` |
@@ -146,9 +146,21 @@ accept the lyric. The full requested lyric, exactly one syllable, valid phonemes
 candidates where available and unchanged surrounding notes are checked. Empty
 candidates require agreement from two different seed phonemes. Failures use the
 existing score rollback; successful insertion is one undo step. Explicit phonemes
-and the existing classic-note context path are retained. An update without
-phoneme fields preserves them. See [current evidence](native-authoring-31.md)
-and [historical observations](native-note-27.md).
+and the existing classic-note context path are retained. See
+[current evidence](native-authoring-31.md) and
+[historical observations](native-note-27.md).
+
+Since 0.27.0 `note.update` follows the same conversion when an AI note's `lyric`
+or its `lyric` and `lang_id` change and neither `phonemes` nor
+`is_valid_phonemes` is supplied. The note is reseeded like a new note, the
+single-syllable result is checked in the same way, and a rejected lyric leaves
+the note and the history unchanged. Explicit phonemes, an unchanged lyric, a
+protected note (`is_protected` true, either stored or set in the same call) and
+every standard-part note keep their stored phonemes. A rejected lyric names the
+written form the language accepts: kana, a one-syllable English word, or
+unmarked pinyin. Note `velocity` and the `expression` fields are stored on an
+AI note but do not change VOCALOID:AI synthesis; see
+[the measured list](song-workflow.md).
 
 Expression objects patch only supplied native fields, preserving other fields.
 Names are case-sensitive:
@@ -180,7 +192,11 @@ Both operations require `track_index`, `part_index`.
 
 IDs must be installed IDs accepted by VSM, not display names. MIDI and AI option
 names cannot be mixed. Voice summaries contain `ai`, all four IDs and names,
-`lang_id`, and `ai_lang_ids`. The existing voice inventory API supplies installed
+`lang_id`, and `ai_lang_ids`. A new part reports empty native names and
+languages until it is saved and reopened, so the summary also carries
+`installed_voice` (`name`, `native_lang_id`, `lang_ids`,
+`available_in_sequence`) resolved from the installed database for the primary
+ID, or null when no installed voice matches. The existing voice inventory API supplies installed
 voice information; this operation does not change licensing or install voices.
 
 ## Tempo and Time Signatures
@@ -266,7 +282,7 @@ Controller operations require `track_index`, `part_index`. Except
 
 | Operation | Additional Options | `result` |
 | --- | --- | --- |
-| `controller.types` | `track_index`, `part_index` | `types`: native names and min/max/default values |
+| `controller.types` | `track_index`, `part_index` | `types`: native names, min/max/default values, `applies_to` (`Midi`, `MidiAi` or `Midi+MidiAi`) and `applicable_to_current_part` |
 | `controller.list` | `track_index`, `part_index`, native controller `type` | `type`, `points`, min/max/default values |
 | `controller.set` | `track_index`, `part_index`, native controller `type`, `points` array of `{tick,value}`; optional `replace=false`, `controller_index` to move one selected point with one point and `replace=false` | Updated controller list |
 | `controller.remove` | `track_index`, `part_index`, native controller `type`, `controller_index` | `removed`, old index |
@@ -274,11 +290,24 @@ Controller operations require `track_index`, `part_index`. Except
 | `pitch.set` | `track_index`, `part_index`, `note_index`, `points` array of `{tick,value}`; optional `replace` | Updated pitch list |
 | `pitch.clear` | `track_index`, `part_index`, `note_index`; optional `begin_tick=0`, exclusive `end_tick` (default note duration) | Updated pitch list |
 
+Long curves do not have to travel inline. `controller.set`, `pitch.set` and
+`automation.set` accept `points_file` in place of `points`: a path relative to
+the bridge workspace (for example `curves/A_pb.json`) holding the same JSON
+array of `{tick,value}`. The file is read inside the workspace only (no links,
+size-capped) and is otherwise treated exactly like inline points.
+
 Controller types in the inspected assembly are `DynamicsHmm`, `Dynamics`,
 `PitchBendSens`, `PitchBendHmm`, `PitchBend`, `WeightHmm`, `Breathiness`,
 `Brightness`, `Clearness`, `Portamento`, `Growl`, `Exciter`, `Air`, `Character`,
 `XSynth`, `Expression`, `S5Air`, `S5Character`. Native acceptance remains
 part/voice dependent. Point lists include `controller_index` for controllers.
+
+VOCALOID:AI parts sing `Dynamics`, `PitchBend`, `PitchBendSens`, `Expression`,
+`S5Air` and `S5Character`, the lanes the installed editor offers on an AI
+track. The other lanes are accepted and saved on an AI part without changing
+its audio. `controller.types` reports this as `applicable_to_current_part`;
+the standard-part side of the mapping follows the editor and has no audio
+evidence here because no standard voicebank is installed.
 
 Controller writes upsert specified ticks without removing unspecified data.
 Direct pitch uses `WIVSMNote.SetDirectPitch` and `ClearDirectPitches` inside the
@@ -323,15 +352,18 @@ effect-bypass availability, modes, values and native bounds for a selected
 `breath_mode`, `breath_type`, `breath_exhalation`, `take_lane`, a
 `voice_colors` object keyed by native color name, and a `bypass` object keyed
 by native MIDI effect name. Unsupported effects, invalid enums and out-of-range
-values are rejected before mutation. Changes use native transaction/commit and
-post-commit readback.
+values are rejected before mutation. Changes use native transactions with
+staged readback before commit. Supplying a Robot, Breath, Take or VoiceColor
+parameter also enables that effect, even when its value is unchanged. An explicit
+entry in the same call's `bypass` object takes precedence, so `true` stores the
+value while leaving the effect bypassed. Unrelated effects are not enabled.
 
 Each VoiceColor descriptor also includes `applies_to` (`Midi` or `MidiAi`)
 and `applicable_to_current_part`, following the installed editor's classic/AI
 parameter mapping. The three `S5` fields apply to AI parts; the other six to
 classic parts. Native storage of an inactive field is still supported, but is
-not advertised as an audible effect on the current part. Bypass remains a
-separate setting.
+not advertised as an audible effect on the current part. Bypass can also be
+changed independently without supplying a parameter.
 
 `artifacts/feature-acceptance-f01a08f3680e/session.breath_audio.json` adds
 actual Breath audio evidence on a gapped AI phrase: enabled versus bypassed
@@ -452,15 +484,16 @@ sections above. Track, part and note indices refer to the current native state.
 | `automation.set` | `scope` is `master_volume`, `track_volume`, or `track_pan`; track scopes require `track_index`; distinct `points` of `{tick,value}`; optional `replace=false` | Current automation list; replacement retains the zero-tick baseline |
 | `automation.remove` | `scope` is `master_volume`, `track_volume`, or `track_pan`; track scopes require `track_index`; `event_index` | Current automation list; the zero-tick baseline is protected |
 | `history.rollback` | None | `rolled_back` and `staged` |
-| `note.batch_update` | `track_index`, `part_index`, distinct `note_indices`; `transpose` and/or a `lyrics` array | Updated note list; lyrics do not run G2PA |
+| `batch.run` | `operations` (array of `{operation, options}`) or `operations_file` (workspace-relative JSON with that array) | `executed`, `total`, `failed_index`, `failed_operation`, `error`; stops at the first failure |
+| `note.batch_update` | `track_index`, `part_index`, distinct `note_indices`; `transpose` and/or a `lyrics` array. Or `updates` / `updates_file`: one object per note with `note_index` and any of `number`, `duration_tick`, `velocity`, `ai_expression`, `expression`, `ai_vibrato_enabled` | Updated note list; lyrics do not run G2PA |
 | `performance.get` | `track_index`, `part_index` | Native Robot, Breath, Take, VoiceColor and MIDI-effect bypass state and bounds |
-| `performance.set` | `track_index`, `part_index`; one or more of `robot_mode`, `breath_mode`, `breath_type`, `breath_exhalation`, `take_lane`, `voice_colors`, `bypass` | Updated native performance state |
+| `performance.set` | `track_index`, `part_index`; one or more of `robot_mode`, `breath_mode`, `breath_type`, `breath_exhalation`, `take_lane`, `voice_colors`, `bypass`; supplied parameters enable their effects unless explicitly overridden by `bypass` | Updated native performance state |
 | `phoneme_timing.get` | `track_index`, `part_index`, `note_index` | Current and original phoneme positions and native ranges |
 | `phoneme_timing.set` | `track_index`, `part_index`, `note_index`, `phoneme_index`, `tick` | Updated phoneme positions and ranges |
 | `phoneme_timing.reset` | `track_index`, `part_index`, `note_index`, `phoneme_index` | Reset phoneme positions and ranges |
 | `time.convert` | `from` is `tick`, `bar`, `sample`, or `seconds`; `value` | Seconds, tick, zero-based bar/beat/clock, sample and sample rate |
-| `vibrato.get` | `track_index`, `part_index`, `note_index` | Type, duration, AI enable state and depth/rate events |
-| `vibrato.set` | `track_index`, `part_index`, `note_index`; one or more of `type`, `duration_tick`, `ai_enabled`, `depth`, `rate` | Updated vibrato state; supplied event arrays replace that event type |
+| `vibrato.get` | `track_index`, `part_index`, `note_index` | Type, duration, AI enable state, depth/rate events, the native `types` names and `depth_range`/`rate_range` |
+| `vibrato.set` | `track_index`, `part_index`, `note_index`; one or more of `type`, `duration_tick`, `ai_enabled`, `depth`, `rate`. An AI note sings vibrato only with a `type` other than `None`, a `duration_tick` above zero (counted back from the note end) and a `depth` event; it uses the first depth and first rate event | Updated vibrato state; supplied event arrays replace that event type |
 
 The following changes were checked against installed managed wrapper signatures.
 The integrated host built with zero warnings/errors. A private-session smoke
@@ -490,6 +523,15 @@ see `audio-operations.md` for the corresponding receipts.
   one of integer `transpose` or `lyrics` (one string per selected note). Lyrics
   are written as note text; this operation does not run G2PA or regenerate
   phonemes. Changes are submitted in one native transaction and read back.
+- `note.batch_update` with `updates` (or `updates_file`, workspace-relative):
+  per-note patches in one native transaction, for tuning passes that touch
+  hundreds of notes - each entry names `note_index` and the fields to change
+  (`ai_expression` patches only the supplied fields, as in `note.update`).
+- `batch.run`: runs documented score operations in order through the same code
+  path as single calls (`operations`, or `operations_file` for large jobs such
+  as a whole section of `note.add`). It stops at the first failure and reports
+  `failed_index`; the operations before it stay applied, so read the state back
+  before continuing. It does not make the batch atomic.
 - `phoneme_timing.get`, `.set`, `.reset`: select a note with `track_index`,
   `part_index`, `note_index`. Get returns current/original positions and native
   ranges. Set/reset additionally require `phoneme_index`; set requires `tick`.
@@ -498,6 +540,16 @@ see `audio-operations.md` for the corresponding receipts.
   `{tick,value}`. A supplied event array replaces that event type; an empty
   array clears it. Nonempty depth/rate events passed native readback and VPR
   save/reopen on the tested voice; other voice combinations remain unverified.
+  Get also returns the native `types` names and the `depth_range` and
+  `rate_range` bounds. In the session 36 audit an AI note rendered vibrato only
+  with a non-`None` type, a positive duration and a depth event; type and
+  duration alone, events without a type, and rate events without depth left the
+  audio unchanged. The vibrato occupied the last `duration_tick` ticks of the
+  note. Only the first depth and the first rate event were sung: later events
+  and the choice among the non-`None` type names made no difference. With such
+  a vibrato present, `ai_enabled` false and the `ai_expression` fields
+  `VibratoLeadingDepth` and `VibratoFollowingDepth` changed the audio; without
+  one they did not.
 - `time.convert`: `from` is `tick`, zero-based `bar`, `sample`, or `seconds`;
   `value` is converted using the sequence tempo map and sample rate. The result
   includes seconds, tick, zero-based bar/beat/clock and sample. Integer inputs

@@ -499,12 +499,12 @@ internal sealed partial class EngineHost : IDisposable
                 for (int notification = 0; notification < 64 && sequence.InvokeRendererObserver(); notification++) { }
                 if (cancellation is not null)
                     throw new InvalidOperationException("Native rendering cancelled: " + cancellation);
-                if (part.HasValidRenderedWave && (completed || sequence.IsFinishedRendering))
+                if (part.HasValidRenderedWave && sequence.IsFinishedRendering)
                     break;
                 if (elapsed.Elapsed > TimeSpan.FromMinutes(2))
                 {
                     VSMRendererProgress progress = part.RendererProgress;
-                    throw new TimeoutException($"Native part rendering timed out: first_end={progress.FirstEnd}, second_begin={progress.SecondBegin}, second_end={progress.SecondEnd}, paused={progress.IsPaused}, finished={sequence.IsFinishedRendering}.");
+                    throw new TimeoutException($"Native part rendering timed out: part={part.Name}, first_end={progress.FirstEnd}, second_begin={progress.SecondBegin}, second_end={progress.SecondEnd}, paused={progress.IsPaused}, finished={sequence.IsFinishedRendering}, started={started}, completed={completed}, valid_wave={part.HasValidRenderedWave}.");
                 }
                 Thread.Sleep(20);
             }

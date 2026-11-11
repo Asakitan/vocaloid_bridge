@@ -43,6 +43,22 @@ async def operation_catalog(check):
 async def private_styles(check):
     async with check.project(score=True) as sid:
         scope = {"track_index": 0, "part_index": 0}
+        performance = await check.edit(sid, "performance.get", **scope)
+        colors = {item["name"]: item["setting"]["UpperBoundValue"]
+                  for item in performance["voice_colors"] if item["applicable_to_current_part"]}
+        for effect, fields in (
+            ("VoiceColor", {"voice_colors": colors}),
+            ("Breath", {"breath_exhalation": performance["breath"]["setting"]["UpperBoundValue"]}),
+            ("Take", {"take_lane": performance["take"]["setting"]["UpperBoundValue"]}),
+            ("RobotVoice", {"robot_mode": performance["robot"]["mode"]}),
+        ):
+            disabled = await check.edit(sid, "performance.set", **scope, **fields, bypass={effect: True})
+            v.require(next(item["bypassed"] for item in disabled["bypass"] if item["effect"] == effect),
+                      "Parameter edit ignored explicit bypass", effect)
+            enabled = await check.edit(sid, "performance.set", **scope, **fields)
+            v.require(not next(item["bypassed"] for item in enabled["bypass"] if item["effect"] == effect),
+                      "Parameter edit left its effect bypassed", effect)
+        expected_performance = await check.edit(sid, "performance.get", **scope)
         effects = await check.audio(sid, "effects", scope="catalog")
         gain = next(effect for effect in effects["effects"] if effect["name"] == "Gain")
         original_chain = await check.audio(sid, "effects", scope="part", **scope)
@@ -54,18 +70,50 @@ async def private_styles(check):
         style_id = captured["style_id"]
         v.require(captured["audio_effect_count"] == len(ids) + 1 and captured["midi_effect_count"] > 0, "Native style capture lost effects", captured)
         try:
+            source_sequence, source_path = await check.save(sid, "captured-style-source")
+            source_linked = (v.contains_atom(source_sequence["tracks"][0], style_id)
+                             and v.contains_atom(source_sequence["tracks"][0], captured["name"]))
+            color_enabled = not next(item["bypassed"] for item in expected_performance["bypass"]
+                                     if item["effect"] == "VoiceColor")
+            check.evidence("authoring", {"source_linked": source_linked, "voice_color_enabled": color_enabled,
+                                         "source_vpr": str(source_path)})
+            v.require(source_linked and color_enabled,
+                      "Style capture did not link its source or parameter editing left the effect bypassed",
+                      {"source_linked": source_linked, "voice_color_enabled": color_enabled})
             updated = (await check.library("style_update", sid, style_id=style_id, name="Updated " + check.run_id,
                                           add_sub_genres=["additional"], add_colors=["bright"]))["style"]
             v.require(set(updated["sub_genres"]) == {"original", "additional"} and set(updated["colors"]) == {"warm", "bright"}, "Property update lost existing tags", updated)
             target = (await check.edit(sid, "track.create", type="MidiAi", name="Style target"))["track_index"]
             await check.edit(sid, "part.create", track_index=target, start_tick=0, duration_tick=1920)
+            target_performance = await check.edit(sid, "performance.get", track_index=target, part_index=0)
+            target_audio = await check.audio(sid, "effects", scope="part", track_index=target, part_index=0)
             await check.library("style_apply", sid, style_id=style_id, track_index=target, part_index=0)
+            applied_performance = await check.edit(sid, "performance.get", track_index=target, part_index=0)
+            for field in ("robot", "breath", "take", "voice_colors", "bypass"):
+                v.require(applied_performance[field] == expected_performance[field],
+                          "Applied private style lost " + field,
+                          {"expected": expected_performance[field], "actual": applied_performance[field]})
             before = await check.audio(sid, "effects", scope="part", track_index=target, part_index=0)
-            _, path = await check.save(sid, "private-style")
+            await check.edit(sid, "undo")
+            v.require(await check.edit(sid, "performance.get", track_index=target, part_index=0) == target_performance,
+                      "Style undo did not restore all MIDI parameters in one step")
+            undone_audio = await check.audio(sid, "effects", scope="part", track_index=target, part_index=0)
+            v.require(undone_audio["effects"] == target_audio["effects"], "Style undo did not restore the audio chain")
+            await check.edit(sid, "redo")
+            v.require(await check.edit(sid, "performance.get", track_index=target, part_index=0) == applied_performance,
+                      "Style redo did not restore MIDI parameters")
+            sequence, path = await check.save(sid, "private-style")
+            v.require(v.contains_atom(sequence["tracks"][target], style_id)
+                      and v.contains_atom(sequence["tracks"][target], updated["name"]),
+                      "Saved VPR lost the applied style identity", sequence["tracks"][target])
             reopened = (await check.call("project_open", path=str(path)))["session_id"]
             try:
                 after = await check.audio(reopened, "effects", scope="part", track_index=target, part_index=0)
                 v.require(after["effects"] == before["effects"], "Applied private style changed after reopen")
+                reopened_performance = await check.edit(reopened, "performance.get", track_index=target, part_index=0)
+                for field in ("robot", "breath", "take", "voice_colors", "bypass"):
+                    v.require(reopened_performance[field] == applied_performance[field],
+                              "Saved private style lost " + field, reopened_performance[field])
             finally:
                 await check.close(reopened)
             overwritten = (await check.library("style_capture", sid, **scope, name="Overwritten " + check.run_id,

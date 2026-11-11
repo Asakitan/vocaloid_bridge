@@ -637,6 +637,16 @@ internal sealed partial class EngineHost
             (json["isSoloMode"] is not null && json["isSoloMode"]!.GetValue<bool>() != V7Compat.IsSolo(track)) ||
             (json["busNo"] is not null && json["busNo"]!.GetValue<uint>() != track.GetBusNo()))
             throw new InvalidDataException("project_preservation: native track order or identity differs from serialized data.");
+#if VOCALOID7
+        if (track.Type is VSMTrackType.Midi or VSMTrackType.MidiAi)
+        {
+            WIVSMMidiTrack midi = track as WIVSMMidiTrack ?? new WIVSMMidiTrack(track);
+            foreach ((string property, string nativeId) in new[] {
+                ("voice", midi.VoiceBankID), ("secondaryVoice", midi.SecondaryVoiceBankID) })
+                if (json[property] is JsonObject voice && ArchiveString(voice, "compID") != nativeId)
+                    throw new InvalidDataException("project_preservation: native track voice identity differs from serialized data.");
+        }
+#endif
     }
 
     private static void ArchiveValidatePart(WIVSMPart part, JsonObject json)
@@ -656,6 +666,10 @@ internal sealed partial class EngineHost
             JsonObject track = ArchiveObject(trackNode, "tracks[]");
             HashSet<string> partKeys = new(StringComparer.Ordinal);
             List<string> trackShape = [Key(track, "type", "name", "color", "isMuted", "isSoloMode", "busNo")];
+#if VOCALOID7
+            foreach (string property in new[] { "voice", "secondaryVoice" })
+                trackShape.Add(track[property] is JsonObject voice ? Key(voice, "compID") : "null");
+#endif
             foreach (JsonNode? partNode in ArchiveArray(track["parts"], "parts"))
             {
                 JsonObject part = ArchiveObject(partNode, "parts[]");
@@ -1082,6 +1096,16 @@ internal sealed partial class EngineHost
         if (method == "score_edit")
         {
             string operation = parameters.GetProperty("operation").GetString() ?? "";
+            if (operation == "batch.run") return;
+            if (operation == "ai.status") return;
+            if (operation == "ai.generate")
+            {
+                RequireArchiveMutationSupported(session, "performance.set");
+                if (parameters.TryGetProperty("options", out JsonElement options) &&
+                    options.TryGetProperty("preserve_pitch", out JsonElement preserve) && preserve.ValueKind == JsonValueKind.True)
+                    RequireArchiveMutationSupported(session, "pitch.set");
+                return;
+            }
             if (operation.EndsWith(".get", StringComparison.Ordinal) || operation.EndsWith(".list", StringComparison.Ordinal) ||
                 operation is "controller.types" or "note.expression_bounds" or "time.convert" or "history.status" or "track.freeze_state") return;
             RequireArchiveMutationSupported(session, operation);

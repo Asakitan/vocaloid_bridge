@@ -1,5 +1,27 @@
 # Native VPR unknown-data preservation
 
+## V7 track identity and AI edits
+
+V7 stores primary and secondary voices on the track. Its archive identity
+signature now includes both track compIDs and checks them against native IDs;
+different-voice tracks with otherwise identical shapes are no longer falsely
+rejected. Identical signatures with conflicting opaque fields remain errors.
+The snapshot voice-table and structural checks remain unchanged.
+
+`batch.run` dispatches each child through its own archive preflight. `ai.status`
+is read-only; `ai.generate` admits the existing performance preparation and,
+when requested, pitch mutation contracts. Selected-note pitch preservation
+uses one native pitch transaction and the existing note-array metadata hooks;
+it does not bypass unknown-field protection. Existing curves require explicit
+overwrite authorization before generation.
+
+Session 46 verifies seven read-only identity cases and one real V7 GekiyakuV
+stdio roundtrip: parameters, two-note pitch preservation, undo/redo, rejection
+of implicit overwrite, and root/track/part/note/voice/effect/parameter extensions
+plus an extra ZIP member survive save/reopen. Source bytes remain unchanged.
+Evidence: `artifacts/feature-acceptance-78bc268d0a70/summary.json`. This is not
+acceptance of every possible V7 extension schema or mutation combination.
+
 ## Reproduction
 
 `tools/check_project_preservation.py --case preservation.unknown_fields` makes a

@@ -1,6 +1,6 @@
 # 模块映射
 
-0.29.0 新增 V6/V7 适配。下表未标明 V7 的历史验收仍是 V6 范围；V7 实际证据与不支持项见 [兼容说明](vocaloid7.md)。
+0.30.0 在 0.29.0 的 V6/V7 适配之上补齐 V7 参数与 AI 入口。下表未标明 V7 的历史验收仍是 V6 范围；V7 实际证据与不支持项见 [兼容说明](vocaloid7.md)。
 
 | 源文件 | 功能 | Status |
 | --- | --- | --- |
@@ -9,11 +9,12 @@
 | `vocaloid_bridge/install.py`、`tools/setup.ps1`、`tools/check_install_selection.py` | 最新安装发现、显式覆盖与构建标记 | 6 项选择器用例通过；实际默认 V7、显式 V6 均已运行 |
 | `native/EngineSession.cs` | VSM 会话、工程生命周期、声库、片段渲染和归档校验钩子 | V7 缺省 VoiceType 初始化及渲染校验；V6/V7 保存重开非静音合成通过；历史 V6 12 段混缩证据保留 |
 | `native/ProjectIntegrity.cs` | 原生打开与发布前的结构和声库身份检查 | 缺经典声库预检、丢失身份阻止覆盖、AI 正例通过；不代替经典声库 |
-| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 69 操作（补计既有 batch.run）；V7 声库和自动音素读回通过，其他参数声音证据仍为 V6 范围 |
+| `native/ScoreOperations.cs` | 结构化轨道、片段、音符、曲线与历史编辑 | 71 操作；V7 VoiceType/Attack、Robot 后台 setter、AI 默认颤音、batch 与参数撤销/重开定向通过 |
+| `native/V7AiOperations.cs` | 原生 AI 缓存生成与音高固化 | ai.status/generate；双音符 129/190 点一次事务固化、撤销/重做、防覆盖与保存重开通过 |
 | `native/AudioOperations.cs` | 原生离线音频、效果与整轨混缩 | 16 操作；扩展工程音频导入/编辑及效果添加/撤销通过，复杂资源组合另列边界 |
 | `native/TransportOperations.cs` | 原生设备枚举与私有会话播放、停止、定位、释放 | 普通及扩展工程快照的 DirectSound 静音闭环通过；定位区分异步请求与观测 |
 | `native/TrackFreezeOperations.cs` | 会话自有冻结缓存、时基物化和作者态保存 | 多片段/非零起点/效果/自动化与正式 MCP 通过；不持久化冻结标志 |
-| `native/ProjectArchivePreservation.cs`、`native/ProjectArchiveArrays.cs` | 实体身份、事件与未知字段 | 原生身份映射、音频 region 区分、元数据地图 no-op/历史通过；样式捕获/应用进入身份保护事务并通过定向往返 |
+| `native/ProjectArchivePreservation.cs`、`native/ProjectArchiveArrays.cs` | 实体身份、事件与未知字段 | V7 主/副声库加入轨道身份，7 项正负例通过；batch 子项及 AI 写入保留原有事务预检，V7 未知字段/资源往返通过 |
 | `native/ProjectArchiveTimeEdit.cs`、`native/ProjectArchiveNoteArrays.cs`、`native/ProjectArchiveNoteIntegration.cs`、`native/ProjectArchiveMasterAutomation.cs`、`native/ProjectArchiveTrackAutomation.cs` | 复杂时间编辑与曲线元数据 | MIDI/AI/音频跨边界、曲线迁移、起始 tempo 及历史的必要用例通过 |
 | `native/MidiRecordingOperations.cs`、`native/MidiRecordingGuards.cs` | 设备枚举、MIDI 事件队列、事务录制及会话保护 | 六操作、静音同步、回调保护及自有虚拟输入通过；物理设备和驱动错误路径未验 |
 | `native/LibraryOperations.cs` | 原生音素、样式与媒体库 | 32 操作；样式捕获关联来源声部，样式应用一次提交；普通/扩展工程及单步撤销、保存重开通过；Attack/Release 适用性标注保留 |
@@ -24,10 +25,10 @@
 | `native/ProjectArchiveLibrary.cs`、`native/ProjectArchiveMedia.cs` | 素材元数据 v1/v2、音频绑定与候选核对 | 控制器/音高/其他数组/音频捕获导入、单次历史及重开通过 |
 | `native/RpcServer.cs` | 单线程 JSON 行协议、原生对象发现与精确签名调用 | 已编译 |
 | `vocaloid_bridge/native_client.py` | 私有进程、握手、代次、缓存及故障生命周期 | 新宿主重选、活动身份固定、产品专属缓存；取消关闭失步连接，不重放；双产品运行通过 |
-| `vocaloid_bridge/server.py` | 39 个 MCP 工具、资源、写歌提示、启动清理 | 增加 `vocaloid_workflow` 和面向 Agent 的工具说明；启动时开启后台临时清理并在 `vocaloid_status.temp_cleanup` 返回回执；不带范围的整库文档请求明确报错 |
+| `vocaloid_bridge/server.py` | 41 个 MCP 工具、资源、写歌提示、启动清理 | 新增 project_inspect/project_ai_adjust；V7 39 项功能导航含不支持项，真实 stdio 读回与 AI 生成通过；V6 历史证据分开标注 |
 | `docs/song-workflow.md` | Agent 作曲流程、歌词写法、AI 演唱与仅保存的控制项 | 由 `vocaloid_workflow` 原样返回；内容与操作目录的一致性有定向检查 |
 | `vocaloid_bridge/compose.py` | AI 编曲/替换缺省音素共用原生 G2PA、临时会话和独占发布 | asa 日英中单音节、替换源身份及保存重开定向通过；其他声库、扩展源及发音质量待验 |
-| `vocaloid_bridge/operations.json` | 原生 dispatch 对照的随包操作索引 | 128 操作均有契约行；补齐旧索引缺失 batch.run，V7 作用域契约已同步；发现与实测分开 |
+| `vocaloid_bridge/operations.json` | 原生 dispatch 对照的随包操作索引 | 130 操作均有契约行，含 ai.status/generate；V7 作用域、音高保留及默认颤音契约同步；发现与实测分开 |
 | `tools/generate_operation_catalog.py` | 操作目录生成及漂移检查 | 按源码与文档操作首列精确生成，缺契约行时检查失败 |
 | `vocaloid_bridge/projects.py` | VPR 结构化编排 | 优先 V7 轨道 voice，保留 V6 aiVoice；V7 原生 asa 替换、自动音素、重开通过；显式源音符身份检查保持 |
 | `vocaloid_bridge/music.py` | MIDI、音符与路径校验 | 定向检查通过 |
@@ -84,8 +85,8 @@
 | `.gitignore` | 运行缓存、构建输出、证据、音频与调教中间数据排除 | `curves/` 保留本机；随包仅保留自有 `ai-starter.vpr` 模板 |
 | `.vscode/mcp.json` | 工作区 stdio 服务配置 | 已配置；使用 `${workspaceFolder}` 占位符，可随仓库发布 |
 | `.vscode/tasks.json` | 安装、工程验收和原生合成验收任务 | 原生合成任务已运行通过 |
-| `README.md` | 项目说明（猫娘助手语气） | 安装、39 工具、后台约束与验证入口；本机部署细节已移出，版本变化见 `CHANGELOG.md` |
-| `CHANGELOG.md` | 版本变化记录（Keep a Changelog） | 记录至 0.29.0；未发布段保留会话 42 文档说明 |
+| `README.md` | 项目说明（猫娘助手语气） | 安装、41 工具/130 操作、AI 调整与后台约束；本机部署细节已移出，版本变化见 `CHANGELOG.md` |
+| `CHANGELOG.md` | 版本变化记录（Keep a Changelog） | 记录至 0.30.0；未发布段已并入该版本 |
 | `docs/vocaloid7.md` | V7 选择、构建、参数迁移和验收边界 | 本次双产品证据与 V7 不支持项集中说明 |
 | `.vscode/handoff/local-environment.md` | 本机客户端注册、声库、输出与验收记录 | 本机笔记；`.vscode/handoff/` 被忽略，不随公开仓库发布 |
 | VS Code Stable/Insiders 用户 `mcp.json` | 跨工作区启动原生 MCP | 已注册；配置及共用启动检查通过 |
@@ -104,11 +105,14 @@
 
 | `tools/check_ai_effect_audit_36.py` | 逐样本比较各表现控制对 AI 合成的影响 | asa：34 项改变、53 项不改变、1 项拒绝；基线两次渲染逐样本相同 |
 | `tools/check_agent_song_36.py` | 作曲指引、改词转换、适用性标注和完整做歌流程 | 四项用例通过；首次批次的两处失败回执保留 |
+| `tools/check_v7_integrity_offline.py`、`tools/check_v7_controls_46.py` | V7 身份保护与截图参数/AI 调整集中验收 | 7 项身份正负例、GekiyakuV 真实 stdio 用例及清理通过；保存重开非静音 WAV，早期失败详见会话46 |
 
 ## 更新记录
 
 | 日期 | 更新 |
 | --- | --- |
+| 2026-11-11 | 会话46：修复V7轨道声库身份误报与Robot App依赖；41工具/130操作，新增AI生成和事务音高保留；GekiyakuV定向stdio验收通过，V6历史矩阵不作V7证据。 |
+| 2026-11-11 | 修复扩展工程 batch 外层误拒绝，逐子操作保留归档保护；V7 七音正例、嵌套负例及保存重开渲染通过，未扩为全量验收。 |
 | 2026-11-11 | 0.29.0：V6/V7 自动选择、隔离构建、缺省 VoiceType 和取消修复；双产品 stdio 非静音合成、纯 V7 工程往返通过；索引补计既有 batch.run 为 128 操作。 |
 | 2026-11-09 | 建立原生后台 MCP；用私有 desktop 和原生 VSM 替代早期 UI 探针。 |
 | 2026-11-09 | 原生 MCP 生命周期通过；加入用户提供仓库的结构和功能边界对照。 |

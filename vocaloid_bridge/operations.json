@@ -8,6 +8,18 @@
       "documentation": "docs/score-operations.md",
       "operations": [
         {
+          "operation": "ai.generate",
+          "contract_rows": [
+            "| `ai.generate` | `track_index`, `part_index`; optional `preserve_pitch=false`, `note_indices`, `overwrite_existing=false` | Native AI synthesis observation and state; optional preservation writes generated direct pitch for selected notes, with existing curves protected by default |"
+          ]
+        },
+        {
+          "operation": "ai.status",
+          "contract_rows": [
+            "| `ai.status` | `track_index`, `part_index` | Native rendered-score/wave validity, rendering completion and note state |"
+          ]
+        },
+        {
           "operation": "automation.list",
           "contract_rows": [
             "| `automation.list` | `scope` is `master_volume`, `track_volume`, or `track_pan`; track scopes require `track_index` | Bounds, default and indexed `{tick,value}` points |"
@@ -196,7 +208,7 @@
         {
           "operation": "performance.get",
           "contract_rows": [
-            "| `performance.get` | `track_index`; V6: `part_index`; V7: explicit `scope=\"track\"` | Native Robot, Breath, Take, VoiceColor and MIDI-effect bypass state and bounds |"
+            "| `performance.get` | `track_index`; V6: `part_index`; V7: explicit `scope=\"track\"` | Native Robot, Breath, Take, VoiceColor and MIDI-effect bypass state and bounds; V7 S5Attack applicability additionally requires a V7 AI bank |"
           ]
         },
         {
@@ -238,7 +250,7 @@
         {
           "operation": "pitch.set",
           "contract_rows": [
-            "| `pitch.set` | `track_index`, `part_index`, `note_index`, `points` array of `{tick,value}`; optional `replace` | Updated pitch list |"
+            "| `pitch.set` | `track_index`, `part_index`, `note_index`, `points` array of `{tick,value}`; optional `replace`. V7 alternatively accepts `from_rendered=true`, optional `overwrite_existing=false`; cannot combine with points/points_file/replace | Updated pitch list; rendered-pitch preservation requires valid completed native rendering and refuses existing direct points unless explicitly authorized |"
           ]
         },
         {
@@ -406,19 +418,19 @@
         {
           "operation": "vibrato.set",
           "contract_rows": [
-            "| `vibrato.set` | `track_index`, `part_index`, `note_index`; one or more of `type`, `duration_tick`, V6 `ai_enabled` or V7 `curve_model`, `depth`, `rate`. Query `vibrato.get` for supported values; V6 audio observations below are not V7 acceptance | Updated vibrato state; supplied event arrays replace that event type |"
+            "| `vibrato.set` | `track_index`, `part_index`, `note_index`; one or more of `type`, `duration_tick`, V6 `ai_enabled` or V7 `curve_model`, `depth`, `rate`; V7 also supports `reset_ai_defaults=true`. Query `vibrato.get` for supported values; V6 audio observations below are not V7 acceptance | Updated vibrato state; supplied event arrays replace that event type; resetting uses the native AI vibrato defaults |"
           ]
         },
         {
           "operation": "voice.get",
           "contract_rows": [
-            "| `voice.get` | `track_index`; V6: `part_index`; V7: explicit `scope=\"track\"` | Voice summary; V7 adds `voice_type_id` and `affects_all_parts_on_track` |"
+            "| `voice.get` | `track_index`; V6: `part_index`; V7: explicit `scope=\"track\"` | Voice summary; V7 adds `voice_type_id`, `voice_type_name`, `voice_type_supported`, `default_voice_type_id`, installed `voice_types` and `affects_all_parts_on_track` |"
           ]
         },
         {
           "operation": "voice.set",
           "contract_rows": [
-            "| `voice.set` | `track_index`; V6: `part_index`; V7: explicit `scope=\"track\"`; MIDI: `voice_bank_id` and/or `secondary_voice_bank_id`; AI: `ai_voice_bank_id` and/or `secondary_ai_voice_bank_id` | Voice summary after native setters and readback; V7 initializes the selected bank's default VoiceType when needed |"
+            "| `voice.set` | `track_index`; V6: `part_index`; V7: explicit `scope=\"track\"`; MIDI: `voice_bank_id` and/or `secondary_voice_bank_id`; AI: `ai_voice_bank_id` and/or `secondary_ai_voice_bank_id`; V7 AI banks also accept `voice_type_id` alone or with a primary bank change | Voice summary after native setters and readback; VoiceType must belong to the selected V7 bank; default type initialization remains |"
           ]
         }
       ]

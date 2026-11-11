@@ -17,6 +17,21 @@ alternate engine, JSON reconstruction of projects, or audio synthesis in these
 operations. The caller opens a session and saves it through the existing project
 lifecycle. Original project files are not written by score operations.
 
+## Native AI Generation
+
+VOCALOID:AI estimates the performance from notes, lyrics, voice and expression
+settings. These operations use the installed engine, not a local tuning model or
+an automatic musical-quality scoring algorithm. They are V7 AI-part operations.
+
+| Operation | Options | `result` |
+| --- | --- | --- |
+| `ai.status` | `track_index`, `part_index` | Native rendered-score/wave validity, rendering completion and note state |
+| `ai.generate` | `track_index`, `part_index`; optional `preserve_pitch=false`, `note_indices`, `overwrite_existing=false` | Native AI synthesis observation and state; optional preservation writes generated direct pitch for selected notes, with existing curves protected by default |
+
+Generation does not change note pitches, lyrics or hand-drawn curves by default.
+Preservation is a separate requested mutation. Native generation is not a claim
+that the result has been listened to or that the engine selected the best take.
+
 ## Indices and Bounds
 
 VOCALOID7 voice and performance get/set require explicit `scope="track"` and
@@ -193,8 +208,8 @@ Both operations require `track_index`, `part_index`.
 
 | Operation | Additional Options | `result` |
 | --- | --- | --- |
-| `voice.get` | `track_index`; V6: `part_index`; V7: explicit `scope="track"` | Voice summary; V7 adds `voice_type_id` and `affects_all_parts_on_track` |
-| `voice.set` | `track_index`; V6: `part_index`; V7: explicit `scope="track"`; MIDI: `voice_bank_id` and/or `secondary_voice_bank_id`; AI: `ai_voice_bank_id` and/or `secondary_ai_voice_bank_id` | Voice summary after native setters and readback; V7 initializes the selected bank's default VoiceType when needed |
+| `voice.get` | `track_index`; V6: `part_index`; V7: explicit `scope="track"` | Voice summary; V7 adds `voice_type_id`, `voice_type_name`, `voice_type_supported`, `default_voice_type_id`, installed `voice_types` and `affects_all_parts_on_track` |
+| `voice.set` | `track_index`; V6: `part_index`; V7: explicit `scope="track"`; MIDI: `voice_bank_id` and/or `secondary_voice_bank_id`; AI: `ai_voice_bank_id` and/or `secondary_ai_voice_bank_id`; V7 AI banks also accept `voice_type_id` alone or with a primary bank change | Voice summary after native setters and readback; VoiceType must belong to the selected V7 bank; default type initialization remains |
 
 IDs must be installed IDs accepted by VSM, not display names. MIDI and AI option
 names cannot be mixed. Voice summaries contain `ai`, all four IDs and names,
@@ -293,7 +308,7 @@ Controller operations require `track_index`, `part_index`. Except
 | `controller.set` | `track_index`, `part_index`, native controller `type`, `points` array of `{tick,value}`; optional `replace=false`, `controller_index` to move one selected point with one point and `replace=false` | Updated controller list |
 | `controller.remove` | `track_index`, `part_index`, native controller `type`, `controller_index` | `removed`, old index |
 | `pitch.list` | `track_index`, `part_index`, `note_index` | `points`: `{tick, value}` |
-| `pitch.set` | `track_index`, `part_index`, `note_index`, `points` array of `{tick,value}`; optional `replace` | Updated pitch list |
+| `pitch.set` | `track_index`, `part_index`, `note_index`, `points` array of `{tick,value}`; optional `replace`. V7 alternatively accepts `from_rendered=true`, optional `overwrite_existing=false`; cannot combine with points/points_file/replace | Updated pitch list; rendered-pitch preservation requires valid completed native rendering and refuses existing direct points unless explicitly authorized |
 | `pitch.clear` | `track_index`, `part_index`, `note_index`; optional `begin_tick=0`, exclusive `end_tick` (default note duration) | Updated pitch list |
 
 Long curves do not have to travel inline. `controller.set`, `pitch.set` and
@@ -492,14 +507,14 @@ sections above. Track, part and note indices refer to the current native state.
 | `history.rollback` | None | `rolled_back` and `staged` |
 | `batch.run` | `operations` (array of `{operation, options}`) or `operations_file` (workspace-relative JSON with that array) | `executed`, `total`, `failed_index`, `failed_operation`, `error`; stops at the first failure |
 | `note.batch_update` | `track_index`, `part_index`, distinct `note_indices`; `transpose` and/or a `lyrics` array. Or `updates` / `updates_file`: one object per note with `note_index` and any of `number`, `duration_tick`, `velocity`, `ai_expression`, `expression`, `ai_vibrato_enabled` | Updated note list; lyrics do not run G2PA |
-| `performance.get` | `track_index`; V6: `part_index`; V7: explicit `scope="track"` | Native Robot, Breath, Take, VoiceColor and MIDI-effect bypass state and bounds |
+| `performance.get` | `track_index`; V6: `part_index`; V7: explicit `scope="track"` | Native Robot, Breath, Take, VoiceColor and MIDI-effect bypass state and bounds; V7 S5Attack applicability additionally requires a V7 AI bank |
 | `performance.set` | `track_index`; V6: `part_index`; V7: explicit `scope="track"`; one or more of `robot_mode`, `breath_mode`, `breath_type`, `breath_exhalation`, V6 `take_lane` or V7 `take_number`, `voice_colors`, `bypass`; supplied effect parameters enable their effects unless explicitly overridden by `bypass` | Updated native performance state |
 | `phoneme_timing.get` | `track_index`, `part_index`, `note_index` | Current and original phoneme positions and native ranges |
 | `phoneme_timing.set` | `track_index`, `part_index`, `note_index`, `phoneme_index`, `tick` | Updated phoneme positions and ranges |
 | `phoneme_timing.reset` | `track_index`, `part_index`, `note_index`, `phoneme_index` | Reset phoneme positions and ranges |
 | `time.convert` | `from` is `tick`, `bar`, `sample`, or `seconds`; `value` | Seconds, tick, zero-based bar/beat/clock, sample and sample rate |
 | `vibrato.get` | `track_index`, `part_index`, `note_index` | Type, duration, depth/rate events and native bounds; V6 AI enable state; V7 `curve_model` and `curve_models` |
-| `vibrato.set` | `track_index`, `part_index`, `note_index`; one or more of `type`, `duration_tick`, V6 `ai_enabled` or V7 `curve_model`, `depth`, `rate`. Query `vibrato.get` for supported values; V6 audio observations below are not V7 acceptance | Updated vibrato state; supplied event arrays replace that event type |
+| `vibrato.set` | `track_index`, `part_index`, `note_index`; one or more of `type`, `duration_tick`, V6 `ai_enabled` or V7 `curve_model`, `depth`, `rate`; V7 also supports `reset_ai_defaults=true`. Query `vibrato.get` for supported values; V6 audio observations below are not V7 acceptance | Updated vibrato state; supplied event arrays replace that event type; resetting uses the native AI vibrato defaults |
 
 The following changes were checked against installed managed wrapper signatures.
 The integrated host built with zero warnings/errors. A private-session smoke

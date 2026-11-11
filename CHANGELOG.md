@@ -2,9 +2,26 @@
 
 记录 `vocaloid6-mcp` 的版本变化。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，日期为本地日期。实现状态、失败项和回执见 [STATUS](STATUS.md)，逐次会话见 [会话索引](docs/session-log/README.md)。
 
-## [未发布]
+## [0.30.0] - 2026-11-11
 
-- 暂无。
+### 新增
+
+- `project_inspect` 按功能读取真实原生参数、枚举、范围与调用模板；`project_ai_adjust` 调用原生 VOCALOID:AI 生成演唱，可选整轨 Take 和可编辑音高保留。当前 41 工具 / 130 操作。
+- V7 Voice Type 选择与真实类型列表、Attack 的声库代际限制、原生 AI 默认颤音恢复，以及 `pitch.set` / `ai.generate` 的生成音高保留；已有曲线默认拒绝覆盖，多音符保留一次事务可撤销。
+- V7 功能导航区分调用契约、V6 历史证据和纯界面不支持项。
+
+### 修复
+
+- V7 主/副声库未进入轨道归档指纹，导致不同声库的同形轨道误报身份歧义；真实冲突与声库表缺失仍拒绝。
+- V7 Robot 轨道便利 setter 依赖交互编辑器的 `App.SequenceManager`；后台宿主改用原生效果 setter 并保留私有脚本准备。
+- `project_ai_adjust` 按真实回执读取 AI 状态，并在非保留模式下省略原生不接受的覆盖参数。
+- 带扩展工程的 `batch.run` 外层误拒绝；每个子操作仍独立经过归档保护，失败前已执行项保持原有语义。
+
+### 验证
+
+- V6/V7 语义预检各 35 文件、218 引用、零错误；V7 Release 构建通过。归档身份 7 项正负例通过。
+- GekiyakuV 真实 stdio：Style、Voice Type、表现参数、`batch.run`、AI 生成、双音符 129/190 个音高点、撤销/重做、防覆盖、未知字段与资源保留、保存重开及非静音 WAV 通过；见 [会话 46](docs/session-log/session-46.md)。
+- V7 七音 `batch.run` 正例、嵌套负例及保存重开渲染通过；未跑全部扩展组合或 V6 构建，见 [会话 45](docs/session-log/session-45.md)。
 
 ## [0.29.0] - 2026-11-11
 

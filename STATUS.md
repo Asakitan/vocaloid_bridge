@@ -1,6 +1,19 @@
 # 当前状态
 
-日期：2026-11-11。版本：0.29.0。39 个工具、128 个结构化操作；V7 可用范围见下文。生成目录补齐此前漏列的既有 `batch.run`，并非新增原生功能。
+日期：2026-11-11。版本：0.30.0。41 个工具、130 个结构化操作；V7 功能导航为 39 项（含明确不支持项），不等于全量验收。
+
+## 0.30.0：V7 工程保护与 AI 调整
+
+- 修复 V7 轨道主/副声库未纳入归档指纹造成的同形轨道误拒绝；真实身份冲突及声库表缺失仍拒绝，未知字段不清空。
+- 新增 `project_inspect`，按截图功能读取实际参数、枚举与范围；`vocaloid_features` 区分 V6 历史证据和 V7 调用契约。Voice Type 可选择，Attack 按声库代际校验，Robot 模式修改不再调用交互编辑器的 `App.SequenceManager`。
+- 新增 `project_ai_adjust` 与 `ai.status/generate`：使用原生 VOCALOID:AI 生成演唱数据，可选择 Take 和将生成音高保留为可编辑曲线；默认不覆盖已有曲线。支持原生 AI 默认颤音恢复，多个音符保留为一次可撤销事务。生成不是独立审美优化，也不自动保存 VPR 或导出交付 WAV。
+- 验证：V6/V7 语义预检各 35 文件、218 引用、零错误；V7 Release 构建通过。修后身份保护 7 项正负例通过；真实 stdio GekiyakuV 的 Style、Voice Type、参数、batch、AI 生成、双音符固化、撤销/重做、防覆盖、未知字段与资源保留、保存重开及非静音渲染通过。固化点数 129/190，WAV 342877 帧、peak 0.1215209961、RMS 0.0152129538。
+
+证据：`artifacts/feature-acceptance-78bc268d0a70/summary.json`；该运行 2 项通过（功能用例及清理），结束后零会话、无自有进程抢占前台。早期夹具声库选择错误、Robot App 依赖和 Python 回执解析失败均已修复，原回执保留，见 [会话 46](docs/session-log/session-46.md)。当前聊天未暴露 VOCALOID MCP 工具；保存关闭工程后重新连接 `vocaloid6-native`，看到 41 工具及 `project_ai_adjust` 才表示客户端载入了本轮代码。未重跑全量套件、V6 构建或主观听音。
+
+## 0.30.0：batch.run 归档保护修复
+
+带扩展的工程此前在外层把 `batch.run` 当作未知 mutation 直接拒绝。现允许 batch 分发，但每个子操作仍在执行前进入 `CheckArchiveRequest`；嵌套 batch 仍拒绝，首个失败前已完成的操作不会自动回滚。V7 语义预检 34 文件 / 218 引用 / 零错误，V7 构建通过；实际 stdio 七音工程的 batch 正例、嵌套 batch 负例、保存重开与非静音渲染通过，回执位于 `E:/VC/LabyRinth/production/vocal/gkv7/native_probe_75ef6c62a9.json`。后续五段 GekiyakuV 994 个音节的保存、重开与渲染通过；未重跑全量扩展组合或 V6 构建。详见 [会话 45](docs/session-log/session-45.md)。
 
 ## VOCALOID7 与自动选择（0.29.0）
 

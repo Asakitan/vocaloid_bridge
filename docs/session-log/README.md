@@ -46,3 +46,5 @@
 | [session-42](session-42.md) | 2026-11-11 | 跳进音符的滑音破音（PitchTransition / PitchDrift 实测）、句末爆音、take 与 `batch.run` 使用经验、渲染前导 0.5 秒；无代码改动 |
 | [session-43](session-43.md) | 2026-11-11 | 0.28.0：临时文件自动清理（默认 1 小时，启动后每 10 分钟）、手动 dry-run/apply 入口、`vocaloid_status.temp_cleanup`；真实工作区首次清理删除 4573 个文件 / 5.5 GB |
 | [session-44](session-44.md) | 2026-11-11 | 0.29.0：V6/V7 自动选择与产品隔离构建、VoiceTypeID 渲染修复、纯 V7 文件编曲；双版本 stdio 非静音合成通过，V7 不支持项显式保留 |
+| [session-45](session-45.md) | 2026-11-11 | 修复扩展工程 batch.run 外层误拒绝，逐项保留归档保护；V7 正例、嵌套负例及实际作品渲染通过 |
+| [session-46](session-46.md) | 2026-11-11 | 0.30.0：V7 轨道声库身份误报与 Robot App 依赖修复；41 工具/130 操作，参数检查、原生 AI 生成及双音符音高固化、撤销、保存重开与非静音渲染通过 |

@@ -41,6 +41,9 @@ mcp = FastMCP(
         "Check vocaloid_status for the selected product. On VOCALOID7, voice/style/performance "
         "settings require explicit scope='track' and affect all parts on that track; "
         "media library operations and part-level audio effects are unavailable. "
+        "Use vocaloid_features for executable feature contracts and project_inspect for real "
+        "current enums/bounds before edits. project_ai_adjust runs VOCALOID7 native AI generation "
+        "from existing notes and lyrics; it is not aesthetic optimization or an exported WAV. "
         "Never automate, activate, minimize, close or send input to the user's interactive editor. "
         "There is no UI or alternate-backend fallback. When making a song, call vocaloid_workflow first: "
         "it gives the tested steps, the lyric form each language accepts and the controls VOCALOID:AI "
@@ -181,11 +184,244 @@ async def native_api_catalog(type: str | None = None, namespace: str | None = No
                       offset=offset, limit=limit, include_members=include_members)
 
 
+def _feature_catalog(product: str) -> dict[str, dict[str, Any]]:
+    version7 = product == "VOCALOID7"
+    track = {"track_index": "TRACK_INDEX"}
+    part = {**track, "part_index": "PART_INDEX"}
+    note = {**part, "note_index": "NOTE_INDEX"}
+    settings = {**track, "scope": "track"} if version7 else part
+    catalog: dict[str, dict[str, Any]] = {}
+
+    def call(operation: str, options: dict[str, Any], tool: str = "project_edit") -> dict[str, Any]:
+        return {"tool": tool, "arguments": {"session_id": "SESSION_ID", "operation": operation, "options": options}}
+
+    def add(name: str, label: str, scope: str, reads: list[dict[str, Any]],
+            writes: list[dict[str, Any]], parameters: dict[str, Any]) -> None:
+        catalog[name] = {"label": label, "product": product, "support": "native_contract",
+                         "scope": scope, "read_calls": reads, "write_calls": writes,
+                         "parameters": parameters, "verification": "Contract discovery, not audio or roundtrip acceptance."}
+
+    scope = "track" if version7 else "part"
+    performance = call("performance.get", settings)
+    voice = call("voice.get", settings)
+    add("voice", "Voice", scope, [{"tool": "voicebanks", "arguments": {}}, voice],
+        [call("voice.set", {**settings, "ai_voice_bank_id": "VOICE_BANK_ID"})],
+        {"ai_voice_bank_id": {"type": "string", "source": "voicebanks; select an installed AI bank compatible with the target"},
+         "classic_alternative": "voice_bank_id; never pass both AI and classic ID keys"})
+    if version7:
+        add("voice_type", "Voice Type", "track", [voice],
+            [call("voice.set", {**settings, "voice_type_id": "VOICE_TYPE_ID"})],
+            {"voice_type_id": {"type": "string", "source": "voice.get.voice_types[].voice_type_id",
+                               "requires": "voice.get.voice_type_supported=true; VOCALOID7 AI bank only"}})
+    else:
+        catalog["voice_type"] = {"label": "Voice Type", "product": product, "support": "unsupported",
+                                 "reason": "Voice Type requires VOCALOID7 and a VOCALOID7 AI voice bank.",
+                                 "read_calls": [], "write_calls": []}
+    add("style", "Style", scope,
+        [call("style_list", {}, "project_library"), performance],
+        [call("style_apply", {**settings, "style_id": "STYLE_ID", "include_audio": True}, "project_library")],
+        {"style_id": {"type": "string", "source": "style_list.styles[].style_id"},
+         "include_audio": {"type": "boolean", "default": True},
+         "readback": "style_apply receipt and performance.get; inspect track/master audio effects separately"})
+    for name, label, field, source in (
+        ("robot", "Robot", "robot_mode", "performance.get.robot.modes"),
+        ("breath", "Breath", "breath_mode", "performance.get.breath.modes"),
+        ("breath_type", "Breath Type", "breath_type", "performance.get.breath.types"),
+        ("exhalation", "Exhalation", "breath_exhalation", "performance.get.breath.setting"),
+        ("take", "Take", "take_number" if version7 else "take_lane",
+         "performance.get.take.max_take_number (minimum 0)" if version7 else "performance.get.take.setting"),
+    ):
+        add(name, label, scope, [performance], [call("performance.set", {**settings, field: "VALUE"})],
+            {field: {"type": "integer" if name in {"exhalation", "take"} else "string", "source": source},
+             "availability": "Null effect means unavailable; do not invent an enum or range."})
+    for name, label, color, controller in (
+        ("expression", "Expression", "S5Expression", "Expression"),
+        ("air", "Air", "S5Air", "S5Air"),
+        ("character", "Character", "S5Character", "S5Character"),
+        ("attack", "Attack", "S5Attack", None),
+    ):
+        if name == "attack" and not version7:
+            catalog[name] = {"label": label, "product": product, "support": "unsupported",
+                             "reason": "VOCALOID7 AI Attack macro is not a VOCALOID6 control; classic dvqm Attack is different.",
+                             "read_calls": [], "write_calls": []}
+            continue
+        add(name, label + " Macro", scope, [performance],
+            [call("performance.set", {**settings, "voice_colors": {color: "VALUE"}})],
+            {"voice_colors." + color: {"type": "integer", "source": "performance.get.voice_colors[] where name=" + color,
+                                       "bounds": "setting.LowerBoundValue/UpperBoundValue", "require_applicable": True}})
+        if controller is not None:
+            add(name + "_curve", label + " Curve", "part",
+                [call("controller.types", part), call("controller.list", {**part, "type": controller})],
+                [call("controller.set", {**part, "type": controller, "points": [{"tick": "TICK", "value": "VALUE"}], "replace": False})],
+                {"value": {"type": "integer", "source": "controller.types.types[] where type=" + controller,
+                           "bounds": "minimum/maximum/default_value", "require_applicable": True},
+                 "tick": {"type": "integer", "unit": "part-relative ticks; 480 per quarter note"}})
+    for name, label, lane in (("volume", "Track Volume", "track_volume"), ("pan", "Track Pan", "track_pan")):
+        add(name, label, "track", [call("automation.list", {**track, "scope": lane})],
+            [call("automation.set", {**track, "scope": lane, "points": [{"tick": 0, "value": "VALUE"}], "replace": False})],
+            {"value": {"type": "integer", "source": "automation.list.minimum/maximum/default_value", "unit": "native raw value, not normalized"},
+             "tick": {"type": "integer", "unit": "sequence ticks; zero sets the baseline without deleting later automation"}})
+    for name in ("mute", "solo"):
+        add(name, name.title(), "track", [call("track.list", {})],
+            [call("track.update", {**track, name: True})], {name: {"type": "boolean", "enum": [False, True]}})
+    for name, effect in (("robot_bypass", "RobotVoice"), ("breath_bypass", "Breath"),
+                         ("voice_color_bypass", "VoiceColor")):
+        add(name, effect + " Switch", scope, [performance],
+            [call("performance.set", {**settings, "bypass": {effect: False}})],
+            {"bypass." + effect: {"type": "boolean", "false": "enabled", "true": "bypassed",
+                                  "source": "performance.get.bypass[]; require available=true"}})
+    add("record_arm", "MIDI Recording Arm", "track", [call("track.list", {})],
+        [call("track.update", {**track, "midi_recording": True})],
+        {"midi_recording": {"type": "boolean", "semantics": "Arm only; use project_midi for actual recording."}})
+    add("tempo", "Tempo", "sequence", [call("tempo.list", {})],
+        [call("tempo.set", {"start_tick": "TICK", "bpm": "VALUE"})],
+        {"bpm": {"type": "number", "source": "tempo.list.min_bpm/max_bpm"}, "start_tick": {"type": "integer", "minimum": 0}})
+    add("time_signature", "Time Signature", "sequence", [call("time_signature.list", {}),
+        {"tool": "project_get", "arguments": {"session_id": "SESSION_ID", "member": "MinTimeSigValue"}},
+        {"tool": "project_get", "arguments": {"session_id": "SESSION_ID", "member": "MaxTimeSigValue"}}],
+        [call("time_signature.set", {"bar": "BAR", "numerator": "NUMERATOR", "denominator": "DENOMINATOR"})],
+        {"bar": {"type": "integer", "minimum": 0}, "numerator": {"type": "integer", "source": "project_get MinTimeSigValue/MaxTimeSigValue"},
+         "denominator": {"type": "integer", "constraint": "positive power of two within native MinTimeSigValue/MaxTimeSigValue"}})
+    add("notes", "Notes", "part", [call("note.list", part), call("note.expression_bounds", part)],
+        [call("note.add", {**part, "start_tick": "TICK", "duration_tick": "DURATION", "number": "PITCH", "lyric": "LYRIC"}),
+         call("note.update", {**note, "number": "PITCH"})],
+        {"number": {"type": "integer", "unit": "MIDI note number"}, "start_tick": {"type": "integer", "unit": "part-relative ticks"},
+         "expression": {"type": "object", "source": "note.expression_bounds"}})
+    add("lyrics", "Lyrics", "note", [call("note.list", part)],
+        [call("note.update", {**note, "lyric": "LYRIC"})],
+        {"lyric": {"type": "string", "rule": "one syllable per note; AI changes without explicit phonemes run native G2PA unless protected"},
+         "phrase_tool": "project_library lyrics_apply; discover options with vocaloid_operations"})
+    add("pitch", "Direct Pitch", "note", [call("pitch.list", note)],
+        [call("pitch.set", {**note, "points": [{"tick": "TICK", "value": "VALUE"}], "replace": False})],
+        {"points": {"type": "array", "source": "pitch.list", "rule": "value is an absolute fractional MIDI note number; tick is note-relative, not sequence-relative"}})
+    add("vibrato", "Vibrato", "note", [call("vibrato.get", note)],
+        [call("vibrato.set", {**note, "curve_model" if version7 else "ai_enabled": "VALUE"})],
+        {"curve_model" if version7 else "ai_enabled": {"type": "string" if version7 else "boolean", "source": "vibrato.get"}})
+    add("note_expression", "Note Expression Actions", "note",
+        [call("note.expression_bounds", part), call("note.list", part)],
+        [call("note.update", {**note, "ai_expression": {"PitchTransitionStart": "VALUE"}})],
+        {"ai_expression": {"type": "object", "source": "note.expression_bounds.ai_expression",
+                           "semantics": "Native pitch transitions, drift and amplitude; not GUI tool selection."}})
+    add("phoneme_timing", "Phoneme Timing", "note", [call("phoneme_timing.get", note)],
+        [call("phoneme_timing.reset", note)],
+        {"timing": {"source": "phoneme_timing.get; discover phoneme_timing.set options through vocaloid_operations",
+                    "requires": "A generated native score; call project_ai_adjust on V7 first."}})
+    if version7:
+        add("pitch_preserve", "Preserve Generated Pitch", "note", [call("ai.status", part), call("pitch.list", note)],
+            [call("pitch.set", {**note, "from_rendered": True, "overwrite_existing": False})],
+            {"overwrite_existing": {"type": "boolean", "default": False},
+             "prerequisite": "ai.generate on this session, not an archive export snapshot",
+             "multiple_notes": "Use project_ai_adjust preserve_pitch=true for one atomic native transaction."})
+        add("ai_vibrato_defaults", "AI Vibrato Defaults", "note", [call("vibrato.get", note)],
+            [call("vibrato.set", {**note, "reset_ai_defaults": True})],
+            {"reset_ai_defaults": {"type": "boolean", "requires": "vibrato.get.reset_ai_defaults_available",
+                                    "semantics": "Reset native AI vibrato defaults and select AiEstimatedBase."}})
+        add("ai_adjust", "Native AI Generation", "part", [call("ai.status", part), performance],
+            [{"tool": "project_ai_adjust", "arguments": {"session_id": "SESSION_ID", **part}}, call("ai.generate", part)],
+            {"take_number": {"type": "integer", "optional": True, "source": "performance.get.take.max_take_number (minimum 0)",
+                             "scope": "track; affects every part on the track"},
+             "preserve_pitch": {"type": "boolean", "default": False, "effect": "copy real generated pitch into editable direct-pitch curves in one native transaction"},
+             "note_indices": {"type": "array", "items": "distinct nonnegative integers", "optional": True,
+                              "requires": "preserve_pitch=true; omit to preserve all renderable notes"},
+             "overwrite_existing": {"type": "boolean", "default": False, "requires": "preserve_pitch=true; explicit permission to replace existing direct pitches"},
+             "semantics": "Native AI synthesis from existing notes and lyrics, not aesthetic optimization or an independent AutoTune API.",
+             "output": "Native rendering cache and status; use project_render_part for a verified deliverable WAV."})
+    else:
+        catalog["ai_adjust"] = {"label": "Native AI Generation", "product": product, "support": "unsupported",
+                                "reason": "ai.status/ai.generate require VOCALOID7 AI; V6 rendering remains project_render_part.",
+                                "read_calls": [], "write_calls": []}
+    for name, label, reason in (
+        ("media", "VMM Media Library", "VOCALOID7 native VMM interface is unavailable."),
+        ("part_effects", "Part Audio Effects", "VOCALOID7 supports track/master audio effects, not part scope."),
+        ("reverse", "Reverse", "VOCALOID7 native reverse is unavailable."),
+        ("voice_change", "VOCALO CHANGER", "VOCALOID7 native voice change is unavailable."),
+    ):
+        catalog[name] = {"label": label, "product": product,
+                         "support": "unsupported" if version7 else "operation_catalog",
+                         "reason": reason if version7 else "Discover the existing library/audio operation with vocaloid_operations.",
+                         "read_calls": [], "write_calls": []}
+    catalog["editor_view"] = {"label": "Grid, Zoom, Panels and Character Image", "product": product,
+                              "support": "unsupported", "reason": "Interactive editor layout is not operated by the private native host.",
+                              "read_calls": [], "write_calls": []}
+    return catalog
+
+
 @mcp.tool()
-def vocaloid_features() -> dict[str, Any]:
-    """Read the complete feature matrix, including unverified and unavailable items."""
+def vocaloid_features(feature: str | None = None, include_matrix: bool = False) -> dict[str, Any]:
+    """Read feature evidence with explicit product attribution, without starting the engine.
+    Lists UI feature IDs with executable write templates, scope, parameter types and live
+    enum/bounds sources. Use project_inspect(session_id, feature, indices) before editing.
+    The optional historical matrix covers VOCALOID6 only, never VOCALOID7 acceptance.
+    """
     path = WORKSPACE / "docs" / "feature-matrix.md"
-    return {"engine_version": "6.13.3.1", "path": str(path), "matrix": path.read_text(encoding="utf-8")}
+    catalog = _feature_catalog(NATIVE.installation.product)
+    if feature is not None:
+        if feature not in catalog:
+            raise ValueError("Unknown feature; call vocaloid_features for available feature IDs.")
+        catalog = {feature: catalog[feature]}
+    result = {"product": NATIVE.installation.product, "engine_version": NATIVE.installation.version,
+            "matrix_product": "VOCALOID6", "matrix_engine_version": "6.13.3.1",
+            "matrix_applies_to_selected_product": NATIVE.installation.product == "VOCALOID6",
+            "verification": "Historical VOCALOID6 evidence only; VOCALOID7 requires separate native acceptance.",
+            "path": str(path), "features": catalog,
+            "template_rule": "Replace uppercase value placeholders using native discovery; templates are not submitted automatically."}
+    if include_matrix:
+        result["matrix"] = path.read_text(encoding="utf-8")
+    return result
+
+
+@mcp.tool()
+async def project_inspect(session_id: str, feature: str, track_index: int | None = None,
+                          part_index: int | None = None, note_index: int | None = None) -> dict[str, Any]:
+    """Read a UI feature's actual native state and enum/bounds sources, without changing the project.
+    Get feature IDs from vocaloid_features. Supply explicit indices for the feature's scope;
+    VOCALOID7 voice/style/performance automatically read scope=track, never a guessed part.
+    Returns readback receipts and bound write-call templates; no write, synthesis or retry occurs.
+    """
+    catalog = _feature_catalog(NATIVE.installation.product)
+    if feature not in catalog:
+        raise ValueError("Unknown feature; call vocaloid_features for available feature IDs.")
+    for name, value in (("track_index", track_index), ("part_index", part_index), ("note_index", note_index)):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+            raise ValueError(name + " must be a nonnegative integer.")
+    replacements = {"SESSION_ID": session_id, "TRACK_INDEX": track_index,
+                    "PART_INDEX": part_index, "NOTE_INDEX": note_index}
+
+    def bind(value: Any, required: bool) -> Any:
+        if isinstance(value, dict):
+            return {key: bind(item, required) for key, item in value.items()}
+        if isinstance(value, list):
+            return [bind(item, required) for item in value]
+        if isinstance(value, str) and value in replacements:
+            replacement = replacements[value]
+            if replacement is None and required:
+                raise ValueError(value.lower() + " is required for " + feature + ".")
+            return value if replacement is None else replacement
+        return value
+
+    contract = catalog[feature]
+    if contract["support"] == "native_contract":
+        required = {"track": ("TRACK_INDEX",), "part": ("TRACK_INDEX", "PART_INDEX"),
+                    "note": ("TRACK_INDEX", "PART_INDEX", "NOTE_INDEX"), "sequence": ()}[contract["scope"]]
+        for placeholder in required:
+            bind(placeholder, True)
+    calls = [bind(item, True) for item in contract["read_calls"]]
+    readbacks = []
+    for invocation in calls:
+        tool = invocation["tool"]
+        method = {"project_edit": "score_edit", "project_library": "library_op", "voicebanks": "voices", "project_get": "get"}[tool]
+        value = await _rpc(method, **invocation["arguments"])
+        if feature == "time_signature" and tool == "project_get":
+            reference = value["value"]["$ref"]
+            fields = {}
+            for member in ("Numer", "Denom"):
+                field = await _rpc("get", session_id=session_id, ref=reference, member=member)
+                fields[member] = field["value"]
+            value = {**value, "fields": fields}
+        readbacks.append({**invocation, "result": value})
+    return {"session_id": session_id, "feature": feature, "product": NATIVE.installation.product,
+            "read_only": True, "contract": bind(contract, False), "readbacks": readbacks,
+            "verification": "Readback only; no save/reopen or synthesized-audio acceptance is implied."}
 
 
 @mcp.tool()
@@ -194,7 +430,14 @@ def vocaloid_workflow() -> dict[str, Any]:
     the lyric form each language accepts, the controls VOCALOID:AI actually sings and the ones
     it only stores. Times are ticks, 480 per quarter note.
     """
-    return {"mcp_version": __version__, "ticks_per_quarter": 480, "path": str(WORKFLOW),
+    version7 = NATIVE.installation.product == "VOCALOID7"
+    return {"mcp_version": __version__, "product": NATIVE.installation.product,
+            "settings_scope": "track" if version7 else "part",
+            "feature_discovery": {"tool": "vocaloid_features", "arguments": {}},
+            "before_edit": {"tool": "project_inspect", "arguments": {"session_id": "SESSION_ID", "feature": "FEATURE_ID",
+                                     "track_index": "TRACK_INDEX"}},
+            "verification": "The guide's V6 historical audio evidence does not establish V7 behavior; inspect current native values and verify saved files/audio separately.",
+            "ticks_per_quarter": 480, "path": str(WORKFLOW),
             "guide": WORKFLOW.read_text(encoding="utf-8")}
 
 
@@ -220,16 +463,30 @@ def vocaloid_operations(domain: str | None = None, operation: str | None = None,
         selected = {key: value for key, value in selected.items() if value["operations"]}
         if not selected:
             raise ValueError("operation is not present in the selected domain.")
+    product = NATIVE.installation.product
+    catalog = _feature_catalog(product)
     for value in selected.values():
         value["documentation_path"] = str(WORKSPACE / value["documentation"])
         if include_documentation:
             value["documentation_text"] = (WORKSPACE / value["documentation"]).read_text(encoding="utf-8")
-    return {**index, "domains": selected, "total": sum(len(value["operations"]) for value in selected.values())}
+        for entry in value["operations"]:
+            entry["features"] = [name for name, feature in catalog.items() if any(
+                invocation["tool"] == value["tool"] and invocation["arguments"].get("operation") == entry["operation"]
+                for invocation in feature["read_calls"] + feature["write_calls"])]
+            unsupported = (product == "VOCALOID6" and entry["operation"] in {"ai.status", "ai.generate"}) or (product == "VOCALOID7" and (
+                (value["tool"] == "project_library" and entry["operation"].startswith("media_")) or
+                (value["tool"] == "project_audio" and entry["operation"] in {"reverse", "voice_change"})))
+            entry["product_support"] = "unsupported" if unsupported else "see_contract_and_live_inspect"
+    return {**index, "product": product, "settings_scope": "track" if product == "VOCALOID7" else "part",
+            "verification": "Discovery only. Historical VOCALOID6 evidence is not VOCALOID7 acceptance.",
+            "feature_discovery_tool": "vocaloid_features", "live_inspection_tool": "project_inspect",
+            "domains": selected, "total": sum(len(value["operations"]) for value in selected.values())}
 
 
 @mcp.resource("vocaloid://features")
 def feature_matrix() -> str:
-    return (WORKSPACE / "docs" / "feature-matrix.md").read_text(encoding="utf-8")
+    return ("Historical VOCALOID6 6.13.3.1 evidence only; this is not VOCALOID7 acceptance.\n\n"
+            + (WORKSPACE / "docs" / "feature-matrix.md").read_text(encoding="utf-8"))
 
 
 @mcp.tool()
@@ -237,6 +494,8 @@ async def project_edit(session_id: str, operation: str,
                        options: dict[str, Any] | None = None) -> dict[str, Any]:
     """Execute a typed native score operation with its documented options.
     Operations cover tracks, parts, notes, voices, tempo, meter, curves, automation and history.
+    Discover editable UI controls through vocaloid_features and their actual state/bounds through
+    project_inspect. VOCALOID7 voice/performance need scope='track'; AI generation uses ai.generate.
     Ticks are 480 per quarter note. Lyrics are one syllable per note: Japanese kana, a
     one-syllable English word, or unmarked pinyin for Chinese; other text needs explicit phonemes.
     controller.types and performance.get mark which lanes the current part actually sings.
@@ -273,7 +532,9 @@ async def project_library(operation: str, options: dict[str, Any] | None = None,
     """Use native language, phoneme, style and media-library operations.
     style_apply with the singer's "<name> Default" style gives a new part the editor's default
     sound. lyrics_apply spreads a word or phrase over following notes. Attack/Release (dvqm_*)
-    and Singing Skill act on standard VOCALOID parts; an AI part stores them without singing them.
+    and Singing Skill act on standard VOCALOID parts; this is not the VOCALOID7 AI Attack macro.
+    The V7 AI Attack macro uses project_edit performance.set voice_colors.S5Attack after
+    performance.get confirms bank compatibility and bounds.
     phoneme_table returns a versioned manual reference, not native enumeration.
     Catalog reads need no project; operations changing notes or parts require a session_id.
     VOCALOID7 style and Singing Skill settings need explicit scope='track' and affect every
@@ -327,6 +588,70 @@ async def project_items(session_id: str, ref: str, offset: int = 0, limit: int =
 async def voicebanks() -> dict[str, Any]:
     """Read installed voicebank names, IDs and availability from the native database."""
     return await _rpc("voices")
+
+
+@mcp.tool()
+async def project_ai_adjust(session_id: str, track_index: int, part_index: int,
+                            take_number: int | None = None, preserve_pitch: bool = False,
+                            note_indices: list[int] | None = None,
+                            overwrite_existing: bool = False) -> dict[str, Any]:
+    """Generate the selected VOCALOID7 AI part's real native singing/pitch cache from its notes/lyrics.
+    Optional take_number changes the whole track, including other parts, before generation.
+    preserve_pitch copies generated pitch to editable curves in one native transaction;
+    note_indices selects notes (omit for all renderable notes), and overwrite_existing permits replacement.
+    This is native AI synthesis, not aesthetic optimization or a separate AutoTune algorithm.
+    It does not save a VPR or export WAV; use project_save or project_render_part separately.
+    If generation fails after a Take change, the explicit Take edit remains; no automatic retry.
+    """
+    if NATIVE.installation.product != "VOCALOID7":
+        raise ValueError("project_ai_adjust requires VOCALOID7 AI; use project_render_part for V6 synthesis.")
+    for name, value in (("track_index", track_index), ("part_index", part_index)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(name + " must be a nonnegative integer.")
+    if take_number is not None and (isinstance(take_number, bool) or not isinstance(take_number, int) or take_number < 0):
+        raise ValueError("take_number must be a nonnegative integer from performance.get bounds.")
+    if not preserve_pitch and (note_indices is not None or overwrite_existing):
+        raise ValueError("note_indices and overwrite_existing require preserve_pitch=true.")
+    if note_indices is not None and (not note_indices or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in note_indices)
+            or len(set(note_indices)) != len(note_indices)):
+        raise ValueError("note_indices must be a nonempty array of distinct nonnegative integers.")
+    options = {"track_index": track_index, "part_index": part_index}
+    before = await _rpc("score_edit", session_id=session_id, operation="ai.status", options=options)
+    notes = {note["note_index"]: note for note in before["result"]["notes"]}
+    renderable = [index for index, note in notes.items() if note["renderable"]]
+    if not renderable:
+        raise ValueError("Native AI generation requires at least one renderable note with valid lyrics and phonemes.")
+    if preserve_pitch:
+        for index in renderable if note_indices is None else note_indices:
+            if index not in notes or not notes[index]["renderable"]:
+                raise ValueError(f"Selected AI note is missing or not renderable: {index}.")
+            if notes[index]["direct_pitch_points"] and not overwrite_existing:
+                raise ValueError(f"Selected AI note {index} already has direct pitches; explicit overwrite_existing=true is required.")
+    take = None
+    if take_number is not None:
+        take = await _rpc("score_edit", session_id=session_id, operation="performance.set",
+                          options={"track_index": track_index, "scope": "track", "take_number": take_number})
+    generation_options: dict[str, Any] = {**options, "preserve_pitch": preserve_pitch}
+    if preserve_pitch:
+        generation_options["overwrite_existing"] = overwrite_existing
+    if note_indices is not None:
+        generation_options["note_indices"] = note_indices
+    try:
+        result = await asyncio.to_thread(NATIVE.request, "score_edit",
+                                        {"session_id": session_id, "operation": "ai.generate", "options": generation_options}, 180)
+    except Exception as error:
+        if take is None:
+            raise
+        raise RuntimeError(f"ai.generate failed after track {track_index} Take was set to {take_number}: {error}. "
+                           "The track-wide Take edit remains applied; generation/pitch state needs readback. "
+                           "No automatic retry or rollback was performed.") from error
+    return {"session_id": session_id, "track_index": track_index, "part_index": part_index,
+            "product": "VOCALOID7", "before": before, "generation": result,
+            "take_change": take, "take_affects_all_parts_on_track": take_number is not None,
+            "preserve_pitch_requested": preserve_pitch,
+            "delivery_audio_exported": False,
+            "semantics": "Native AI generation; no aesthetic optimization, fallback synthesis or automatic retry."}
 
 
 @mcp.tool()

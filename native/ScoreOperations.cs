@@ -49,6 +49,12 @@ internal sealed partial class EngineHost
             "automation.set" or "automation.remove" => ScoreAutomationEdit(session, operation, options),
             "performance.get" => ScorePerformanceView(ScoreSettingsTarget(session, options)),
             "performance.set" => ScorePerformanceEdit(session, options),
+#if VOCALOID7
+            "ai.status" => ScoreAiStatus(session, options),
+            "ai.generate" => ScoreAiGenerate(session, options),
+#else
+            "ai.status" or "ai.generate" => throw new NotSupportedException("Native AI generation operations require VOCALOID7."),
+#endif
             "pitch.list" => ScorePitchList(session, options),
             "pitch.set" or "pitch.clear" => ScorePitchEdit(session, operation, options),
             "sequence.get" => ScoreSequenceSummary(session.Sequence),
@@ -105,7 +111,9 @@ internal sealed partial class EngineHost
             {
                 if (operation.Length == 0) throw new ArgumentException("Each batch item needs an operation string.");
                 if (operation == "batch.run") throw new ArgumentException("batch.run cannot be nested.");
-                EditScore(id, operation, item.TryGetProperty("options", out JsonElement inner) ? inner : empty.RootElement);
+                JsonElement innerOptions = item.TryGetProperty("options", out JsonElement inner) ? inner : empty.RootElement;
+                CheckArchiveRequest(GetSession(id), "score_edit", JsonSerializer.SerializeToElement(new { operation, options = innerOptions }));
+                EditScore(id, operation, innerOptions);
             }
             catch (Exception error)
             {
@@ -949,6 +957,17 @@ internal sealed partial class EngineHost
             lang_id = V7Compat.LangId(part),
             ai_lang_ids = V7Compat.LangIds(part),
             voice_type_id = part.VoiceTypeID,
+            voice_type_supported = installed is { IsAi: true, MajorVersion: >= 7 },
+            voice_type_name = installed?.VoiceTypeByVoiceTypeID(part.VoiceTypeID)?.VoiceTypeName,
+            default_voice_type_id = installed?.DefaultVoiceTypeID,
+            voice_types = installed is { IsAi: true, MajorVersion: >= 7 }
+                ? LibraryValues(installed.NumVoiceTypes, index =>
+                {
+                    var voiceType = installed.VoiceTypeByIndex(index)
+                        ?? throw new InvalidOperationException("Native voice type lookup failed.");
+                    return new { voice_type_id = voiceType.VoiceTypeID, name = voiceType.VoiceTypeName,
+                        is_default = voiceType.VoiceTypeID == installed.DefaultVoiceTypeID };
+                }) : [],
 #else
             voice_bank_id = part.VoiceBankID,
             ai_voice_bank_id = part.AiVoiceBankID,
@@ -985,12 +1004,28 @@ internal sealed partial class EngineHost
             throw new ArgumentException("Voice ID option does not match the target's native MIDI/AI type.");
         string? primary = options.TryGetProperty(primaryKey, out _) ? ScoreString(options, primaryKey) : null;
         string? secondary = options.TryGetProperty(secondaryKey, out _) ? ScoreString(options, secondaryKey) : null;
+#if VOCALOID7
+        string? voiceTypeId = options.TryGetProperty("voice_type_id", out _) ? ScoreString(options, "voice_type_id") : null;
+        if (primary is null && secondary is null && voiceTypeId is null)
+            throw new ArgumentException("voice.set requires " + primaryKey + ", " + secondaryKey + " or voice_type_id.");
+#else
+        if (options.TryGetProperty("voice_type_id", out _))
+            throw new NotSupportedException("voice_type_id requires VOCALOID7 and a VOCALOID7 AI voice bank.");
         if (primary is null && secondary is null)
             throw new ArgumentException("voice.set requires " + primaryKey + " or " + secondaryKey + ".");
+#endif
         EnsureVoiceServices();
 #if VOCALOID7
         VoiceBank? primaryBank = primary is null ? null : ScoreV7VoiceBank(primary, isAi);
         if (!string.IsNullOrEmpty(secondary)) ScoreV7VoiceBank(secondary, isAi);
+        if (voiceTypeId is not null)
+        {
+            VoiceBank targetBank = primaryBank ?? ScoreV7VoiceBank(V7Compat.VoiceBankId(part), isAi);
+            if (!isAi || targetBank.MajorVersion is not >= 7)
+                throw new NotSupportedException("Voice TYPE selection requires a VOCALOID7 AI voice bank.");
+            if (targetBank.VoiceTypeByVoiceTypeID(voiceTypeId) is null)
+                throw new ArgumentException("voice_type_id does not belong to the selected voice bank; use voice.get voice_types.");
+        }
 #endif
         return ScoreMutate(session, "voice.set", () =>
         {
@@ -1012,6 +1047,14 @@ internal sealed partial class EngineHost
                 ScoreRequire(V7Compat.SetSecondaryVoice(part, secondary), "voice.set", session.Sequence);
                 ScoreRequire(V7Compat.SecondaryVoiceBankId(part) == secondary, "voice.set readback", session.Sequence);
             }
+#if VOCALOID7
+            if (voiceTypeId is not null)
+            {
+                if (part.VoiceTypeID != voiceTypeId)
+                    ScoreRequire(part.SetVoiceTypeID(voiceTypeId), "voice.set voice type", session.Sequence);
+                ScoreRequire(part.VoiceTypeID == voiceTypeId, "voice.set voice type readback", session.Sequence);
+            }
+#endif
             return ScoreVoiceSummary(part);
         });
     }
@@ -1348,7 +1391,7 @@ internal sealed partial class EngineHost
     }
 
 #if VOCALOID7
-    private static object ScorePerformanceView(WIVSMMidiTrack part)
+    private object ScorePerformanceView(WIVSMMidiTrack part)
 #else
     private static object ScorePerformanceView(WIVSMMidiPart part)
 #endif
@@ -1357,6 +1400,10 @@ internal sealed partial class EngineHost
         WIVSMRobotVoiceEffect? robot = track.RobotVoiceEffect;
         WIVSMBreathEffect? breath = track.BreathEffect;
         WIVSMVoiceColorEffect? color = track.VoiceColorEffect;
+    #if VOCALOID7
+        bool supportsAttack = V7Compat.IsAi(part)
+            && EnsureDatabase().GetVoiceBankByCompID(V7Compat.VoiceBankId(part))?.MajorVersion is >= 7;
+    #endif
         return new
         {
             robot = robot is null ? null : new { mode = robot.RobotVoiceMode.ToString(), modes = Enum.GetNames<VSMRobotVoiceMode>() },
@@ -1379,11 +1426,13 @@ internal sealed partial class EngineHost
 #else
                 name = value.ToString(), value = color.VoiceColorValue(value), setting = color.VoiceColorSetting(value),
 #endif
-                applies_to = value is VSMVoiceColor.S5Expression or VSMVoiceColor.S5Air or VSMVoiceColor.S5Character ? "MidiAi" : "Midi",
+                applies_to = ScoreAiVoiceColor(value) ? "MidiAi" : "Midi",
 #if VOCALOID7
-                applicable_to_current_track = V7Compat.IsAi(part) == (value is VSMVoiceColor.S5Expression or VSMVoiceColor.S5Air or VSMVoiceColor.S5Character)
+                requires_voice_bank_major_version = value == VSMVoiceColor.S5Attack ? 7 : (int?)null,
+                applicable_to_current_track = V7Compat.IsAi(part) == ScoreAiVoiceColor(value)
+                    && (value != VSMVoiceColor.S5Attack || supportsAttack)
 #else
-                applicable_to_current_part = part.IsAi == (value is VSMVoiceColor.S5Expression or VSMVoiceColor.S5Air or VSMVoiceColor.S5Character)
+                applicable_to_current_part = part.IsAi == ScoreAiVoiceColor(value)
 #endif
             }).ToArray(),
             bypass = Enum.GetValues<VSMMidiEffectType>().Select(value => new
@@ -1393,6 +1442,13 @@ internal sealed partial class EngineHost
             }).ToArray()
         };
     }
+
+    private static bool ScoreAiVoiceColor(VSMVoiceColor value)
+        => value is VSMVoiceColor.S5Expression or VSMVoiceColor.S5Air or VSMVoiceColor.S5Character
+#if VOCALOID7
+            or VSMVoiceColor.S5Attack
+#endif
+            ;
 
     private static T ScorePerformanceEnum<T>(JsonElement options, string name) where T : struct, Enum
     {
@@ -1473,6 +1529,11 @@ internal sealed partial class EngineHost
             {
                 if (!Enum.TryParse(entry.Name, true, out VSMVoiceColor name) || !Enum.IsDefined(name) || colors.ContainsKey(name))
                     throw new ArgumentException("Unknown or duplicate voice color: " + entry.Name);
+                if (V7Compat.IsAi(track) != ScoreAiVoiceColor(name))
+                    throw new NotSupportedException("Voice color is not applicable to the target track type: " + name);
+                if (name == VSMVoiceColor.S5Attack
+                    && EnsureDatabase().GetVoiceBankByCompID(V7Compat.VoiceBankId(track))?.MajorVersion is not >= 7)
+                    throw new NotSupportedException("S5Attack requires a VOCALOID7 AI voice bank.");
                 VSMMidiEffectSetting bounds = color.VoiceColorSetting(name);
                 if (!entry.Value.TryGetInt32(out int value) || value < bounds.LowerBoundValue || value > bounds.UpperBoundValue)
                     throw new ArgumentOutOfRangeException(entry.Name, "Voice color exceeds its native bounds.");
@@ -1503,7 +1564,7 @@ internal sealed partial class EngineHost
         return ScoreMutate(session, "performance.set", () =>
         {
             if (robot.HasValue && track.RobotVoiceMode != robot.Value)
-                ScoreRequire(track.SetRobotVoiceMode(robot.Value), "performance.set robot", session.Sequence);
+                ScoreRequire(track.RobotVoiceEffect!.SetRobotVoiceMode(robot.Value), "performance.set robot", session.Sequence);
             if (breathMode.HasValue && track.BreathMode != breathMode.Value)
                 ScoreRequire(track.SetBreathMode(breathMode.Value), "performance.set breath mode", session.Sequence);
             if (breathType.HasValue && track.BreathType != breathType.Value)
@@ -1789,6 +1850,38 @@ internal sealed partial class EngineHost
         int duration = checked((int)note.DurationTick.Value);
         int noteNumber = note.NoteNumber;
         VSMDirectPitchData[] before = ScorePitchPoints(note);
+        if (ScoreBool(options, "from_rendered"))
+        {
+#if VOCALOID7
+            if (operation != "pitch.set" || options.TryGetProperty("points", out _)
+                || options.TryGetProperty("points_file", out _) || options.TryGetProperty("replace", out _))
+                throw new ArgumentException("from_rendered requires pitch.set without points, points_file, or replace; it replaces the selected note's direct pitches.");
+            if (before.Length != 0 && !ScoreBool(options, "overwrite_existing"))
+                throw new InvalidOperationException("The note already has direct pitches; preserve them or explicitly set overwrite_existing=true.");
+            if (!part.HasValidRenderedScore || !session.Sequence.IsFinishedRendering || !note.IsRenderable)
+                throw new InvalidOperationException("Pitch preservation requires a valid completed native rendered score. Render this part first, then preserve before changing voice, Take, or notes.");
+            VSMDirectPitchData[] preserved = [];
+            return ScoreMutate(session, operation, () =>
+            {
+                ArchiveNoteArrayValidateBeforeEdit(session, note);
+                ScoreRequire(note.SetDirectPitchesFromRenderedPitches(), "pitch.set from rendered", session.Sequence);
+                preserved = ScorePitchPoints(note);
+                ScoreRequire(preserved.Length != 0 && preserved.All(point => float.IsFinite(point.Value)),
+                    "pitch.set from rendered points", session.Sequence);
+                ArchiveNoteArraySetStaged(session, note, preserved, true);
+                return true;
+            }, () =>
+            {
+                VSMDirectPitchData[] actual = ScorePitchPoints(ScoreNote(
+                    ScorePart(ScoreMidiTrack(session, ScoreTrackIndex(session, options)), options), options));
+                ScoreRequire(actual.Length == preserved.Length && preserved.All(point => actual.Any(item =>
+                    item.Tick == point.Tick && item.Value == point.Value)), "pitch.set from rendered readback", session.Sequence);
+                return ScorePitchList(actual, noteNumber);
+            });
+#else
+            throw new NotSupportedException("from_rendered pitch preservation requires VOCALOID7.");
+#endif
+        }
         if (operation == "pitch.clear")
         {
             int begin = ScoreInt(options, "begin_tick", 0, duration - 1, 0);
@@ -2102,6 +2195,7 @@ internal sealed partial class EngineHost
             return new { type = n.VibratoType.ToString(), duration_tick = n.VibratoDurationTick.Value, ai_enabled = V7Compat.IsAiVibratoEnabled(n),
 #if VOCALOID7
                 curve_model = n.VibratoAiCurveModel.ToString(), curve_models = Enum.GetNames<VSMVibratoAiCurveModel>(),
+                reset_ai_defaults_available = n.IsAi,
 #endif
                 depth = Events(VSMVibratoEventType.Depth), rate = Events(VSMVibratoEventType.Rate),
                 types = Enum.GetNames<VSMVibratoType>(), depth_range = Range(VSMVibratoEventType.Depth), rate_range = Range(VSMVibratoEventType.Rate) };
@@ -2109,9 +2203,31 @@ internal sealed partial class EngineHost
         if (operation == "vibrato.get") return Read();
         V7Compat.RejectLegacyVibrato(options, "ai_enabled");
     #if VOCALOID7
+        if (ScoreBool(options, "reset_ai_defaults"))
+        {
+            WIVSMNote target = GetNote();
+            if (!target.IsAi)
+                throw new NotSupportedException("reset_ai_defaults requires an AI note.");
+            if (new[] { "type", "duration_tick", "curve_model", "depth", "rate" }.Any(name => options.TryGetProperty(name, out _)))
+                throw new ArgumentException("reset_ai_defaults cannot be combined with manual vibrato fields.");
+            return ScoreMutate(session, operation, () =>
+            {
+                ScoreRequire(target.ResetAiVibratoDefault(), operation + " AI defaults", session.Sequence);
+                ScoreRequire(target.SetVibratoAiCurveModel(VSMVibratoAiCurveModel.AiEstimatedBase),
+                    operation + " AI estimated model", session.Sequence);
+                return true;
+            }, () =>
+            {
+                ScoreRequire(GetNote().VibratoAiCurveModel == VSMVibratoAiCurveModel.AiEstimatedBase,
+                    operation + " AI estimated readback", session.Sequence);
+                return Read();
+            });
+        }
         VSMVibratoAiCurveModel? curveModel = options.TryGetProperty("curve_model", out _)
             ? ScorePerformanceEnum<VSMVibratoAiCurveModel>(options, "curve_model") : null;
     #else
+        if (options.TryGetProperty("reset_ai_defaults", out _))
+            throw new NotSupportedException("reset_ai_defaults requires VOCALOID7.");
         if (options.TryGetProperty("curve_model", out _))
             throw new NotSupportedException("curve_model requires VOCALOID7; VOCALOID6 uses ai_enabled.");
     #endif

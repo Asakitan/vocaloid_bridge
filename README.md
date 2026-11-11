@@ -37,13 +37,15 @@ V7 的声库、样式和表现设置要显式传 `scope="track"`，会作用于�
 
 ## 工具都有哪些喵
 
-一共 39 个工具、128 个结构化操作喵。表格里是 MCP 工具名，代码和参数里就不加喵喵叫啦喵。
+一共 41 个工具、130 个结构化操作喵。表格里是 MCP 工具名，代码和参数里就不加喵喵叫啦喵。
 
 | 功能 | 工具 |
 | --- | --- |
 | 原生引擎状态及 MCP 托管启停 | `vocaloid_status`, `vocaloid_runtime` |
 | 作曲流程、歌词写法与 AI 实际演唱的控制项 | `vocaloid_workflow` |
 | 完整功能清单、结构化操作与真实接口目录 | `vocaloid_features`, `vocaloid_operations`, `native_api_catalog` |
+| 按功能读取真实参数、枚举、范围与编辑模板 | `project_inspect` |
+| V7 原生 AI 演唱生成、Take 与可编辑音高保留 | `project_ai_adjust` |
 | 真正新建、打开、保存、关闭工程 | `project_create`, `project_open`, `project_save`, `project_close` |
 | 原生格式导入、MIDI 导出 | `project_import`, `project_export_midi` |
 | 独立工程副本、恢复、合并 | `project_clone`, `project_revert`, `project_merge` |
@@ -61,7 +63,7 @@ V7 的声库、样式和表现设置要显式传 `scope="track"`，会作用于�
 
 原生对象用会话内的 `$ref` 当门牌号喵。先 `project_members` 问清楚真实属性、参数类型和 `member_id`，再动其他对象工具喵；重载签名不要猜喵。会话一关，引用就作废喵。
 
-完整清单在 [功能矩阵](docs/feature-matrix.md)，运行时也能读 `vocaloid://features` 喵。`vocaloid_operations` 会列出全部结构化操作名和对应文档喵，用 `domain`、`operation` 找接口，`include_documentation=true` 拿完整约定喵。参数说明在 [乐谱操作](docs/score-operations.md)、[音频操作](docs/audio-operations.md)、[MIDI 录制](docs/midi-recording.md)、[媒体与音素操作](docs/library-operations.md) 和 [原生协议](docs/native-protocol.md) 喵。`native_api_catalog` 能看未开放成员和原因喵；能发现接口不等于已经验收过喵。
+`vocaloid_features` 按产品列出功能、作用域和调用模板，`project_inspect` 读取选中轨道/片段/音符的真实参数喵。[功能矩阵](docs/feature-matrix.md) 与 `vocaloid://features` 保留的是 V6 历史证据，V7 的截图对照和实测见 [V7 说明](docs/vocaloid7.md) 喵。`vocaloid_operations` 会列出全部结构化操作名和对应文档喵，用 `domain`、`operation` 找接口，`include_documentation=true` 拿完整约定喵。参数说明在 [乐谱操作](docs/score-operations.md)、[音频操作](docs/audio-operations.md)、[MIDI 录制](docs/midi-recording.md)、[媒体与音素操作](docs/library-operations.md) 和 [原生协议](docs/native-protocol.md) 喵。能发现接口不等于已经验收过喵。
 
 `score_compose` 先拿编辑器生成的模板写音符，再让原生引擎打开生成的工程喵。音符时间单位是四分音符拍，`pitch` 可以写 MIDI 数字或 `C4` 喵，`lang_id` 是模板声明支持的语言编号喵。缺省模板引用项目自带的 `asa` 声库，换其他声库时用相应模板或原生声库设置接口喵。省略音素的 AI 音符会实际调用目标声库和原生 G2PA，在临时会话里转换完整单音节并检查结果喵；不接受的输入要显式给音素，或者走原生歌词分配喵。已测范围和限制在 [自动音素转换](docs/compose-phonemes-29.md) 喵。`score_replace_notes` 复用同一套转换，但返回仍然只有 `path` 和 `summary`，跑完会关掉内部原生会话喵。
 
@@ -72,6 +74,8 @@ V7 的声库、样式和表现设置要显式传 `scope="track"`，会作用于�
 > 写一段 8 小节的旋律和歌词，用模板里的 asa 声库，创建后台工程，保存 VPR 并把人声 WAV 合成到 output，然后关掉这次创建的工程。不要操作我的编辑器窗口喵。
 
 写歌前先调 `vocaloid_workflow` 喵：它会原样返回 [作曲流程](docs/song-workflow.md)，从空工程到混缩 WAV 的步骤、各语言歌词怎么写、哪些控制项 VOCALOID:AI 真的会唱、哪些只是存着，都在里面喵。`write_song` 提示模板和 `vocaloid://workflow` 资源指向同一份流程喵。
+
+V7 的自动 AI 生成用 `project_ai_adjust(session_id, track_index, part_index)` 喵：原生引擎按已有音符、歌词和表现参数生成演唱数据，默认不改手绘曲线喵。加 `preserve_pitch=true` 可把生成音高写成可编辑曲线，`note_indices` 选择音符；已有曲线需要明确 `overwrite_existing=true` 才覆盖喵。可选 `take_number` 会作用于整轨，不是只改一个片段喵。完成后仍需 `project_save` 保存 VPR、`project_render_part` 或混缩工具导出 WAV；这不是自动评选最好唱法或保证音质的算法喵。
 
 歌词要一个音符一个音节地填喵：日语用假名，英语用单音节单词，中文用不带声调数字的拼音喵；汉字和带数字的拼音会被原生转换器拒绝，报错里会写清楚该怎么写喵。想显示汉字就同时给 `lyric` 和 `phonemes` 喵。新声部在 `voice.set` 之后还要套上 `<声库名> Default` 样式，才有编辑器默认音色喵。
 

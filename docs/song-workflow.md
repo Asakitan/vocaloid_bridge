@@ -27,6 +27,58 @@ are exact. `vocaloid_operations` gives the complete contract of every operation.
 
 ## Steps
 
+### V7 discovery and native AI generation
+
+Call `vocaloid_features` for feature IDs, then `project_inspect` with the session
+and explicit target indices. V7 voice, type, style, Robot, Breath and Voice Color
+settings apply to the whole track. `voice.get.voice_types` contains real IDs;
+`performance.get` supplies bounds and bank applicability. `S5Attack` requires a
+V7 AI bank. MIDI-effect bypass `false` means enabled.
+
+After writing notes and lyrics, call the actual MCP tool:
+
+```json
+{
+  "name": "project_ai_adjust",
+  "arguments": {
+    "session_id": "SESSION_ID",
+    "track_index": 0,
+    "part_index": 0,
+    "preserve_pitch": true,
+    "note_indices": [0, 1],
+    "overwrite_existing": false
+  }
+}
+```
+
+Omit `preserve_pitch` and `note_indices` to generate native AI singing data
+without writing direct-pitch curves. With preservation, the selected notes are
+captured in one undoable native pitch transaction. Existing points are rejected
+before generation unless `overwrite_existing=true` is explicit. The optional
+`take_number` changes every part on the track; a later generation failure does
+not undo that separate Take edit. Inspect state after any failure, never replay
+automatically.
+
+The tool returns the actual `generation.result.render_observation`, current
+`generation.result.status`, and selected-note point counts under
+`generation.result.preservation`. Capturing pitches can invalidate the current
+render cache after successful generation; current validity and the completed
+generation observation are deliberately separate. No deliverable WAV or VPR is
+saved by this tool. Use `project_save` and `project_render_part`/mixdown afterwards.
+
+`vibrato.set` with `reset_ai_defaults=true` restores the native AI vibrato default
+and selects `AiEstimatedBase`; do not combine it with other vibrato edits in the
+same call. `pitch.set` with `from_rendered=true` captures one note from a valid
+rendered score in the same session; an archive-export snapshot is not that cache.
+Prefer `project_ai_adjust` for the full generate-and-preserve workflow.
+
+This is the installed VOCALOID:AI synthesis engine, not an independent AutoTune
+or aesthetic optimization algorithm. The V7 GekiyakuV roundtrip, two-note
+preservation, undo/redo and nonzero-WAV evidence is recorded in session 46. The
+sample-exact control audit later in this guide remains V6 evidence.
+
+### Authoring sequence
+
 1. `voicebanks`: choose a singer's `comp_id`. `kind` `Dnn` is VOCALOID:AI.
 2. `project_create(title, bpm)`: leave `sample_rate` at 44100.
 3. `project_edit` `track.create` `{name}`: creates a VOCALOID:AI track.

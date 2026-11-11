@@ -26,7 +26,9 @@
 ## 验证
 
 - `pyproject.toml` 可被 `tomllib` 解析，`license` 字段解析为 `{"file": "LICENSE"}`；许可证正文 21 行，标题与版权署名正确。
-- 推送后以远端分支、最新提交和 GitHub 许可证接口回读确认，不把本地命令成功当作远端状态。
+- `git push -u origin master` 写入 1,165 个对象（约 981 KiB），新分支 `master` 跟踪 `origin/master`。
+- GitHub API 回读：`visibility=PUBLIC`，默认分支 `master`，远端 HEAD `165a478df47e78b4ef4f60a52963fca93952b09d`；`/license` 返回 `MIT|MIT License|LICENSE`；递归文件树 315 个文件，`curves/` 命中 0。
+- 远端状态来自 API 回读，不以本地命令成功代替。
 
 ## 未完成
 

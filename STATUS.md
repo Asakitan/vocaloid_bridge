@@ -6,7 +6,9 @@
 
 源码以 MIT 许可证发布：根目录 `LICENSE` 版权署名为 Asakitan（2026），`pyproject.toml` 的 `project.license` 引用该文件，README 说明桥接代码与 VOCALOID 第三方组件的授权范围区别。公开仓库为 [Asakitan/vocaloid_bridge](https://github.com/Asakitan/vocaloid_bridge)，`origin` 使用 HTTPS，默认分支 `master`。
 
-发布前核对了 401 个候选文件：无 `.env`、访问令牌、私钥或证书；`output/`、`artifacts/`、`.runtime/`、`.venv/`、`native/bin|obj/`、`.vscode/handoff/` 已忽略，`curves/` 的 96 个整曲调教中间文件保留本机。随包模板 `vocaloid_bridge/templates/ai-starter.vpr` 是项目自有的起始工程。推送后以远端分支和 GitHub 许可证接口回读确认。
+发布前核对了 401 个候选文件：无 `.env`、访问令牌、私钥或证书；`output/`、`artifacts/`、`.runtime/`、`.venv/`、`native/bin|obj/`、`.vscode/handoff/` 已忽略，`curves/` 的 96 个整曲调教中间文件保留本机。随包模板 `vocaloid_bridge/templates/ai-starter.vpr` 是项目自有的起始工程。
+
+推送提交 `165a478df47e78b4ef4f60a52963fca93952b09d` 成功，GitHub 回读为 PUBLIC、默认分支 `master`、`LICENSE` 识别为 MIT；远端文件树 315 个文件，`curves/` 为 0。
 
 ## 样式与细项参数修复（会话 38）
 

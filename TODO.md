@@ -16,6 +16,8 @@
 
 ## 交付项
 
+- [x] 公开仓库与 MIT 许可证：`Asakitan/vocaloid_bridge` 为 PUBLIC，默认分支 `master`；`LICENSE` 由 GitHub 识别为 MIT；远端 315 个文件，未包含 `curves/` 或运行产物。
+
 - [x] 客户端绑定确认 0.26.0：新建的 Claude Code 聊天经自身 MCP 连接列出 38 个工具，单次 `vocaloid_status` 返回 `mcp_version=0.26.0`、原生引擎 6.13.3.1、0 会话，实际 desktop 与预期私有 desktop 一致。随后用 `vocaloid_runtime stop` 结束这次拉起的空闲实例，缓存、运行副本和私有临时目录已清理。只查了这一次状态，没有重跑功能测试；原 Codex 聊天返回 `Transport closed` 的旧传输没有再重试，也不称为已恢复。回执：`artifacts/mcp-binding-confirmed-36.json`。
 
 - [ ] 客户端重新连接后确认 0.27.0：已打开的客户端仍运行各自启动时载入的版本，会话 36 的聊天连接在停止实例时仍报告 0.26.0。需要用户在客户端里重新连接 `vocaloid6-native` 或新开会话，之后只查一次状态，确认 39 个工具和 `vocaloid_workflow` 可见。独立 stdio 连接已确认 0.27.0。
@@ -37,3 +39,5 @@
 - [会话 36](docs/session-log/session-36.md)：Claude Code 新聊天的绑定确认，以及 0.27.0 的 Agent 作曲流程。
 - [会话 37](docs/session-log/session-37.md)：多片段混缩超时修复与实际工程回归。
 - [会话 38](docs/session-log/session-38.md)：样式与细项参数修复，普通/扩展工程的定向验收。
+- [会话 39](docs/session-log/session-39.md)：整曲制作中的 `points_file`、逐音符批量补丁与 `batch.run`，AI 声库实测。
+- [会话 40](docs/session-log/session-40.md)：公开仓库、MIT 许可证与远端回读。

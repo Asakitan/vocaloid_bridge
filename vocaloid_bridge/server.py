@@ -21,7 +21,7 @@ from mcp.server.fastmcp import FastMCP
 import numpy as np
 import soundfile as sf
 
-from . import __version__
+from . import __version__, cleanup as temp_cleanup
 from .compose import compose as compose_native, replace_notes as replace_notes_native
 from .music import _source, export_midi, import_midi
 from .native_client import NativeClient
@@ -33,6 +33,7 @@ WORKFLOW = WORKSPACE / "docs" / "song-workflow.md"
 STORE = ProjectStore(WORKSPACE)
 NATIVE = NativeClient(WORKSPACE)
 atexit.register(NATIVE.close)
+temp_cleanup.start_background_sweep(WORKSPACE)
 mcp = FastMCP(
     "VOCALOID6 Native",
     instructions=(
@@ -59,6 +60,7 @@ async def vocaloid_status() -> dict[str, Any]:
     return {**result, "mcp_version": __version__, "workspace": str(WORKSPACE), "server_pid": os.getpid(),
             "generation": NATIVE.generation, "managed_by_mcp": True,
             "isolation_desktop_expected": NATIVE.child.desktop_name, "fallbacks": False,
+            "temp_cleanup": temp_cleanup.summary(WORKSPACE),
             "known_limitations": ["Complete editor-feature coverage has not been validated."]}
 
 

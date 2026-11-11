@@ -20,4 +20,5 @@ Use the official MCP Python SDK v1 documentation at https://py.sdk.modelcontextp
 - [x] User-level VS Code, Claude Code/Desktop, and Codex MCP registration; shared launch configuration verified outside the workspace.
 - [x] Expanded 36-tool interface and 119 structured operations; session 08 adds standalone native transport, session-owned freezing and supported VPR extension preservation. Historical full runs and focused deltas are distinguished in STATUS.md.
 - [x] Agent song workflow at 0.27.0: 39 tools with `vocaloid_workflow`, lyric conversion on edit, written-form hints and applicability markers, backed by a sample-exact audit of what VOCALOID:AI sings.
+- [x] 0.28.0 automatic temporary-file cleanup at server start and every 10 minutes (1 h cutoff), manual dry-run/apply tool, and a `vocaloid_status.temp_cleanup` receipt.
 - [ ] Complete editor-feature coverage fully validated.

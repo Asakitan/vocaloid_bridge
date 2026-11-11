@@ -20,7 +20,7 @@
 | `native/ProjectArchiveLibrary.cs`、`native/ProjectArchiveMedia.cs` | 素材元数据 v1/v2、音频绑定与候选核对 | 控制器/音高/其他数组/音频捕获导入、单次历史及重开通过 |
 | `native/RpcServer.cs` | 单线程 JSON 行协议、原生对象发现与精确签名调用 | 已编译 |
 | `vocaloid_bridge/native_client.py` | 私有进程、握手、代次、缓存及故障生命周期 | 按需启动、默认保护、确认退出重建和不重放失联请求通过定向验证 |
-| `vocaloid_bridge/server.py` | 39 个 MCP 工具、资源、写歌提示 | 增加 `vocaloid_workflow` 和面向 Agent 的工具说明；不带范围的整库文档请求明确报错 |
+| `vocaloid_bridge/server.py` | 39 个 MCP 工具、资源、写歌提示、启动清理 | 增加 `vocaloid_workflow` 和面向 Agent 的工具说明；启动时开启后台临时清理并在 `vocaloid_status.temp_cleanup` 返回回执；不带范围的整库文档请求明确报错 |
 | `docs/song-workflow.md` | Agent 作曲流程、歌词写法、AI 演唱与仅保存的控制项 | 由 `vocaloid_workflow` 原样返回；内容与操作目录的一致性有定向检查 |
 | `vocaloid_bridge/compose.py` | AI 编曲/替换缺省音素共用原生 G2PA、临时会话和独占发布 | asa 日英中单音节、替换源身份及保存重开定向通过；其他声库、扩展源及发音质量待验 |
 | `vocaloid_bridge/operations.json` | 原生 dispatch 对照的随包操作索引 | 127 操作均有精确契约行；发现与实测分开 |
@@ -29,6 +29,8 @@
 | `vocaloid_bridge/music.py` | MIDI、音符与路径校验 | 定向检查通过 |
 | `vocaloid_bridge/templates/ai-starter.vpr` | 原生编辑器生成的 AI 片段模板 | 本机样本 |
 | `vocaloid_bridge/desktop.py` | 旧 UI 模块退役标记 | 不包含可调用后端 |
+| `vocaloid_bridge/cleanup.py` | 临时输出与自有临时目录的有界清理 | 默认 1 小时；覆盖 `output/`、`.runtime/mcp-temp`、宿主临时目录和 stderr 日志；活动文件、reparse point 与其他 `.runtime` 数据保留；假工作区自测和真实首次清理通过 |
+| `tools/clean_temp_output.py` | 临时文件清理手动入口 | 默认 dry-run，`--apply` 删除，`--keep` 保留匹配项；回执写入 `.runtime/temp-cleanup/` |
 | `tools/smoke_mcp.py` | 真实 stdio 原生生命周期及 MCP 版本验收 | 0.17.0 独立连接通过 |
 | `tools/render_demo.py` | MCP stdio 编曲、保存、重开、合成和 WAV 样本验收 | 通过：374849 帧，非零峰值与 RMS，关闭后 0 会话 |
 | `tools/verify_features.py`、`tools/verify_all.py` | 按功能分类的真实 MCP 验收 | 历史整合 76/5/2；新增多片段和 `--mixdown-fixture` 实际工程回归，12 段逐段非零样本及会话清理通过；证据见 STATUS |
@@ -154,3 +156,4 @@
 | 2026-11-11 | 会话 39：`points_file`、逐音符批量补丁与 `batch.run`，AI 声库 Expression/Dynamics/PitchBend 实测；真实整曲调用证据保留，未新增自动化回归。 |
 | 2026-11-11 | 会话 40：公开仓库 `Asakitan/vocaloid_bridge`，加入 MIT 许可证与包元数据；发布范围排除运行缓存、证据、音频和 `curves/` 中间数据。远端回读 PUBLIC、`master`、MIT，315 文件且无 `curves/`。 |
 | 2026-11-11 | 会话 41：README 改为猫娘语气；本机部署与验收记录移到本地忽略的 `.vscode/handoff/local-environment.md`；新增 `CHANGELOG.md` 记录 0.1.0–0.27.0，README 不再重复版本历史。 |
+| 2026-11-11 | 0.28.0：新增临时文件自动清理（默认 1 小时，启动后每 10 分钟）、手动 dry-run/apply 入口和 `vocaloid_status.temp_cleanup`；真实工作区首次清理删除 4573 个文件 / 5.5 GB，失败 0。 |

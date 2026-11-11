@@ -4,7 +4,21 @@
 
 ## [未发布]
 
-- 暂无。
+### 文档
+
+- 补记实测行为（[会话 42](docs/session-log/session-42.md)）：零间隙大跳进的警笛式滑音与 `PitchTransition` / `PitchDrift` 的压低设置、句末 Dynamics 回升造成的爆音、`note.batch_update` 只带 `lyrics` 不重新生成音素、take 配置会覆盖 PitchBend、`project_render_part` 的 0.5 秒前导。没有代码或接口变更。
+
+## [0.28.0] - 2026-11-11
+
+### 新增
+
+- 临时文件自动清理：MCP 启动时及之后每 10 分钟删除 `output/` 中超过 1 小时的生成文件、`.runtime/mcp-temp` 的旧临时文件、已退出宿主的 `.runtime/tmp/VocaloidBridge-*` 目录及同名 stderr 日志。仍在使用的文件、reparse point 和 `.runtime` 的其他数据保留。
+- `tools/clean_temp_output.py`：手动清理入口，默认 dry-run，`--apply` 才删除，`--keep` 保留匹配项；回执写入 `.runtime/temp-cleanup/`。
+- `vocaloid_status.temp_cleanup` 返回最近一次清理结果；`VOCALOID_TEMP_CLEANUP`、`VOCALOID_TEMP_MAX_AGE_SECONDS`、`VOCALOID_TEMP_CLEANUP_INTERVAL_SECONDS` 可配置。
+
+### 验证
+
+- 独立假工作区自测覆盖新旧文件、嵌套目录、keep、活动宿主命名空间和 dry-run 非破坏性；真实工作区首次清理删除 4573 个文件 / 5 个目录 / 5,503,881,176 字节，失败 0。
 
 ## [0.27.0] - 2026-11-10
 

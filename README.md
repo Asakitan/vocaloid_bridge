@@ -83,6 +83,7 @@ powershell -NoProfile -File .\tools\setup.ps1
 - MIDI 设备录制要显式设备 ID 和名称喵；独立虚拟 WinMM 输入的真实回调验过，事件流和虚拟输入都不等于物理硬件录制已经验过喵，同步模式只用本会话的播放时钟喵。
 - `track.freeze` 用会话自有缓存，保存和克隆输出的是没冻结的作者状态，关闭时会清缓存喵。
 - 工程输入可以显式指定 VPR；输出限定在工作区 `output`，默认不覆盖现有文件喵。
+- 服务启动时和之后每 10 分钟清理一次临时文件：`output/` 里超过一小时的生成文件、`.runtime/mcp-temp` 的旧临时文件和已退出宿主的临时目录会被删掉；正在使用的东西、重解析点和 `.runtime` 的其他数据不动喵。手动清理用 `tools/clean_temp_output.py`，默认只预览，加 `--apply` 才删除喵。
 - 未保存工程要显式 `discard_changes=true` 才能关，原始输入工程也不能被覆盖喵。
 - 授权和声库还是由本机 VOCALOID 组件检查，不复制也不改授权数据喵。
 
@@ -108,6 +109,13 @@ powershell -NoProfile -File .\tools\setup.ps1
 ```
 
 样本参数按本机实际路径替换喵，没给样本的用例会被标成阻塞，不会假装通过喵。操作目录改过之后跑 `tools/generate_operation_catalog.py`，再用 `--check` 看它和原生 dispatch、文档对不对得上喵；双后台宿主的音频缓存隔离回归用 `tools/check_host_isolation.py` 喵。宿主从私有构建副本跑，用独立 VSM 缓存命名空间和零合成结果缓存，不加载前台编辑器的缓存目录喵。
+
+临时文件也可以手动看一眼或立即清理，默认只列候选喵：
+
+```powershell
+.\.venv\Scripts\python.exe .\tools\clean_temp_output.py
+.\.venv\Scripts\python.exe .\tools\clean_temp_output.py --apply
+```
 
 混缩可以输出整个工程或所选整轨，各分轨保留自己的时长，分轨不套主效果和主音量自动化喵。`start_seconds`、`end_seconds` 和 `tail_seconds` 这个原生入口不支持，传了会明确报错喵。素材属性写在独立的 `property.json`，新建自有素材可以在 `.vsclip` 里附带桥接元数据喵。
 

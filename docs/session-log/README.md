@@ -43,3 +43,5 @@
 | [session-39](session-39.md) | 2026-11-11 | 整曲制作中的桥接扩展：points_file、逐音符批量补丁、batch.run；Expression 实测为“唱法强弱”；连音/尾辅音/音素时值经验 |
 | [session-40](session-40.md) | 2026-11-11 | 发布公开仓库 Asakitan/vocaloid_bridge：MIT 许可证、包元数据、发布范围核对与远端回读 |
 | [session-41](session-41.md) | 2026-11-11 | README 改为猫娘助手语气，本机部署/验收记录移出；新增 CHANGELOG 汇总 0.1.0–0.27.0 |
+| [session-42](session-42.md) | 2026-11-11 | 跳进音符的滑音破音（PitchTransition / PitchDrift 实测）、句末爆音、take 与 `batch.run` 使用经验、渲染前导 0.5 秒；无代码改动 |
+| [session-43](session-43.md) | 2026-11-11 | 0.28.0：临时文件自动清理（默认 1 小时，启动后每 10 分钟）、手动 dry-run/apply 入口、`vocaloid_status.temp_cleanup`；真实工作区首次清理删除 4573 个文件 / 5.5 GB |

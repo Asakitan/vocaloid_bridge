@@ -31,6 +31,10 @@ VSM 管理器使用每宿主唯一的 `VocaloidBridge-<GUID>` 缓存命名空间
 
 管理器的 `CacheCapacity` 设为零并读回确认，状态返回 `render_cache_bytes=0`。这一独立设置修复已渲染片段切换 Robot 后复用旧声音的问题；没有清空其他会话缓存，也没有改回共享命名空间。同宿主双会话的音频保留有定向验证。
 
+## 临时文件清理（0.28.0）
+
+MCP 进程启动时创建一次进程内清理线程，之后每 10 分钟重复。清理范围限定为 `output/`、`.runtime/mcp-temp`、`.runtime/tmp/VocaloidBridge-<guid>` 和同名 `.stderr.log`，以修改时间超过 1 小时为界。宿主临时命名空间只有在对应 stderr 日志可删除（说明宿主已退出）时才整树清理；仍在使用的文件由 Windows 共享冲突保护并记为保留。reparse point、`output` 之外的工程原件和 `.runtime` 的其他数据不参与。删除不回滚，回执写入 `.runtime/temp-cleanup/last-report.json`，并由 `vocaloid_status.temp_cleanup` 返回。`tools/clean_temp_output.py` 提供同一实现的手动 dry-run/apply 入口。
+
 ## 原生状态
 
 每个会话持有真实 `WIVSMSequence`。对象引用限定于所属会话；删除性操作使子引用失效，关闭会话清理所有引用。所有原生方法在宿主同一 STA 线程顺序执行。

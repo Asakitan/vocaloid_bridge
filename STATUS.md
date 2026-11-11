@@ -1,6 +1,16 @@
 # 当前状态
 
-日期：2026-11-11。版本：0.27.0。39 个工具、127 个结构化操作。
+日期：2026-11-11。版本：0.28.0。39 个工具、127 个结构化操作。
+
+## 临时文件自动清理（0.28.0）
+
+`vocaloid_bridge/cleanup.py` 在 MCP 服务启动时后台扫描，之后每 10 分钟重复一次。清理范围是 `output/` 下修改时间超过 1 小时的文件、`.runtime/mcp-temp` 的旧临时文件、已退出宿主的 `.runtime/tmp/VocaloidBridge-*` 目录及同名 `.stderr.log`。仍在使用的文件、reparse point 和 `.runtime` 的其他内容（手册、素材库、宿主副本、探针、日志以外的记录）保持不动。删除清单写入 `.runtime/temp-cleanup/last-report.json`，`vocaloid_status.temp_cleanup` 返回最近一次结果。`VOCALOID_TEMP_CLEANUP=0` 关闭自动清理；`VOCALOID_TEMP_MAX_AGE_SECONDS` 和 `VOCALOID_TEMP_CLEANUP_INTERVAL_SECONDS` 调整年龄与周期，默认 3600 秒和 600 秒。
+
+`tools/clean_temp_output.py` 是手动入口：默认 dry-run，只打印候选；`--apply` 才删除；`--keep GLOB` 按相对路径或文件名保留匹配项。首次实际清理删除 4573 个文件、5 个空目录、5,503,881,176 字节，保留 14 个一小时内的渲染/临时项，失败 0；清理后 `output/` 只剩最近一小时内生成的 13 个文件。独立假工作区自测覆盖新旧文件、嵌套目录、keep、活动宿主日志和 dry-run 不落盘；服务导入后的 `vocaloid_status.temp_cleanup` 返回同一回执。本次没有重跑全量功能套件。
+
+## 整曲制作中的补充实测（会话 42）
+
+只补文档，没有改代码、重建宿主或重跑验收：零间隙大跳进会被引擎滑成警笛式扫频，把到达音符的 `PitchTransitionStart`/`PitchDriftStart` 和离开音符的 `PitchTransitionEnd`/`PitchDriftEnd` 压低（0.0–0.1 / 0）可以消除；句末 Dynamics 在音符结束处回升会让元音收音冒出爆音；`note.batch_update` 只带 `lyrics` 不重新生成音素；take 批处理会覆盖手改的 PitchBend。细节与未验证项见 [session-42](docs/session-log/session-42.md)。
 
 ## README 猫娘化与更新日志拆分（会话 41）
 

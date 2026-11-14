@@ -68,7 +68,7 @@ async def vocaloid_status() -> dict[str, Any]:
     if version7:
         limitations.extend([
             "Voice, style and performance settings require scope='track' and affect all parts on the track.",
-            "Media library operations, native reverse and VOCALO CHANGER are unavailable in VOCALOID7.",
+            "Media library operations, native WOR reverse and VOCALO CHANGER are unavailable in VOCALOID7; PCM/float WAV reverse uses bridge processing.",
             "Part-level audio effects are unavailable; select track or master scope.",
             "Use take_number and vibrato curve_model, not legacy take_lane or AI vibrato booleans.",
         ])
@@ -103,13 +103,16 @@ async def project_create(title: str = "Untitled", bpm: float = 120, sample_rate:
 
 @mcp.tool()
 async def project_open(path: str) -> dict[str, Any]:
-    """Open an existing VPR as an independent native session. The source remains unchanged."""
+    """Open a VPR (or VPRX with VOCALOID7) as an independent native session. The source remains unchanged.
+    Reject AI notes combining a nonempty Attack/Release object with Singing Skill before native loading.
+    Use score_inspect and an explicit score_patch copy to resolve all such conflicts first.
+    """
     return await _rpc("open", path=str(_source(WORKSPACE, path)))
 
 
 @mcp.tool()
 async def project_import(path: str, code_page: int = 65001, prefer_ai: bool = True) -> dict[str, Any]:
-    """Import MIDI, VSQX, PPSF or VPR through the native loader as an owned session.
+    """Import MIDI, VSQX, PPSF, VPR or VPRX (VOCALOID7) through the native loader as an owned session.
     Legacy input is staged privately. Save the imported session as a new VPR before closing.
     prefer_ai is passed to the native MIDI/SMF/VSQ loader only; it does not convert
     VPR, VSQX or PPSF tracks or assign a voicebank.
@@ -127,7 +130,7 @@ async def project_export_midi(session_id: str, output_name: str, encoding: str =
 
 @mcp.tool()
 async def project_save(session_id: str, output_name: str, overwrite: bool = False) -> dict[str, Any]:
-    """Save the native session to workspace/output. Overwriting requires explicit permission."""
+    """Save to workspace/output as .vpr, or .vprx with VOCALOID7. Overwriting requires explicit permission."""
     return await _rpc("save", session_id=session_id, output_name=output_name, overwrite=overwrite)
 
 
@@ -139,7 +142,7 @@ async def project_clone(session_id: str, title: str | None = None) -> dict[str, 
 
 @mcp.tool()
 async def project_revert(session_id: str, discard_changes: bool = False) -> dict[str, Any]:
-    """Reopen the last saved VPR and close the old session, returning a new session_id."""
+    """Reopen the last saved VPR/VPRX and close the old session, returning a new session_id."""
     return await _rpc("revert_project", session_id=session_id, discard=discard_changes)
 
 
@@ -262,8 +265,24 @@ def _feature_catalog(product: str) -> dict[str, dict[str, Any]]:
             {"value": {"type": "integer", "source": "automation.list.minimum/maximum/default_value", "unit": "native raw value, not normalized"},
              "tick": {"type": "integer", "unit": "sequence ticks; zero sets the baseline without deleting later automation"}})
     for name in ("mute", "solo"):
+        parameter = {"type": "boolean", "enum": [False, True]}
+        if version7:
+            parameter["semantics"] = ("mute is the stored mute flag; channel_mute is the effective "
+                                      "channel state and may differ when tracks are soloed.")
+        parameters = {name: parameter}
+        writes = [call("track.update", {**track, name: True})]
+        if version7 and name == "solo":
+            parameters["solo_state"] = {"type": "string", "enum": ["Off", "On", "Defeat"],
+                                        "semantics": "Specify solo or solo_state, not both."}
+            writes.append(call("track.update", {**track, "solo_state": "VALUE"}))
         add(name, name.title(), "track", [call("track.list", {})],
-            [call("track.update", {**track, name: True})], {name: {"type": "boolean", "enum": [False, True]}})
+            writes, parameters)
+    add("freeze", "Track Freeze", "track", [call("track.freeze_state", track)],
+        [call("track.freeze", track), call("track.unfreeze", track)],
+        {"frozen": {"type": "boolean", "source": "track.freeze_state.frozen"},
+         "owned": {"type": "boolean", "source": "track.freeze_state.owned",
+                   "semantics": "Only session-owned frozen audio can be released."},
+         "scope": "Runtime cache only; saving and cloning preserve the authoring state."})
     for name, effect in (("robot_bypass", "RobotVoice"), ("breath_bypass", "Breath"),
                          ("voice_color_bypass", "VoiceColor")):
         add(name, effect + " Switch", scope, [performance],
@@ -284,13 +303,29 @@ def _feature_catalog(product: str) -> dict[str, dict[str, Any]]:
          "denominator": {"type": "integer", "constraint": "positive power of two within native MinTimeSigValue/MaxTimeSigValue"}})
     add("notes", "Notes", "part", [call("note.list", part), call("note.expression_bounds", part)],
         [call("note.add", {**part, "start_tick": "TICK", "duration_tick": "DURATION", "number": "PITCH", "lyric": "LYRIC"}),
-         call("note.update", {**note, "number": "PITCH"})],
+         call("note.update", {**note, "number": "PITCH"}),
+         call("note.remove", note), call("note.clear", part),
+         call("note.duplicate", {**note, "start_tick": "TICK"}),
+         call("note.split", {**note, "split_tick": "TICK"}),
+         call("note.join", {**part, "note_indices": ["NOTE_INDEX_1", "NOTE_INDEX_2"]}),
+         call("note.batch_update", {**part, "updates": [{"note_index": "NOTE_INDEX", "number": "PITCH"}]})],
         {"number": {"type": "integer", "unit": "MIDI note number"}, "start_tick": {"type": "integer", "unit": "part-relative ticks"},
-         "expression": {"type": "object", "source": "note.expression_bounds"}})
+         "expression": {"type": "object", "source": "note.expression_bounds"},
+         "note_index": {"type": "integer", "source": "note.list.notes[].note_index", "rule": "Refresh note indices after structural edits."},
+         "note.clear": "Removes every note in the selected part."})
     add("lyrics", "Lyrics", "note", [call("note.list", part)],
         [call("note.update", {**note, "lyric": "LYRIC"})],
         {"lyric": {"type": "string", "rule": "one syllable per note; AI changes without explicit phonemes run native G2PA unless protected"},
          "phrase_tool": "project_library lyrics_apply; discover options with vocaloid_operations"})
+    metadata_note = {**note, "is_attack": True, "storage": "bridge_metadata"}
+    add("ai_dvqm_metadata", "AI Attack/Release Metadata", "note",
+        [call("dvqm_get", metadata_note, "project_library"),
+         call("dvqm_catalog", {"is_attack": True}, "project_library")],
+        [call("dvqm_set", {**metadata_note, "db_id": "DB_ID", "name_id": "NAME_ID"}, "project_library"),
+         call("dvqm_clear", metadata_note, "project_library")],
+        {"storage": "bridge_metadata", "ids": "Use dvqm_catalog db_id and name_id.",
+         "semantics": "Bridge-owned note metadata only; native=false and it does not affect AI synthesis."})
+    catalog["ai_dvqm_metadata"]["support"] = "bridge_contract"
     add("pitch", "Direct Pitch", "note", [call("pitch.list", note)],
         [call("pitch.set", {**note, "points": [{"tick": "TICK", "value": "VALUE"}], "replace": False})],
         {"points": {"type": "array", "source": "pitch.list", "rule": "value is an absolute fractional MIDI note number; tick is note-relative, not sequence-relative"}})
@@ -340,6 +375,11 @@ def _feature_catalog(product: str) -> dict[str, dict[str, Any]]:
                          "support": "unsupported" if version7 else "operation_catalog",
                          "reason": reason if version7 else "Discover the existing library/audio operation with vocaloid_operations.",
                          "read_calls": [], "write_calls": []}
+    if version7:
+        catalog["reverse"].update({"support": "operation_catalog",
+            "reason": "PCM/IEEE-float WAV frame reversal is bridge processing, not native WOR rendering."})
+    catalog["reverse"]["write_calls"] = [{"tool": "project_audio", "arguments": {"session_id": "SESSION_ID",
+        "operation": "process_audio", "options": {"action": "reverse", "path": "SOURCE_WAV", "output_name": "OUTPUT_NAME"}}}]
     catalog["editor_view"] = {"label": "Grid, Zoom, Panels and Character Image", "product": product,
                               "support": "unsupported", "reason": "Interactive editor layout is not operated by the private native host.",
                               "read_calls": [], "write_calls": []}
@@ -473,10 +513,39 @@ def vocaloid_operations(domain: str | None = None, operation: str | None = None,
             entry["features"] = [name for name, feature in catalog.items() if any(
                 invocation["tool"] == value["tool"] and invocation["arguments"].get("operation") == entry["operation"]
                 for invocation in feature["read_calls"] + feature["write_calls"])]
-            unsupported = (product == "VOCALOID6" and entry["operation"] in {"ai.status", "ai.generate"}) or (product == "VOCALOID7" and (
-                (value["tool"] == "project_library" and entry["operation"].startswith("media_")) or
-                (value["tool"] == "project_audio" and entry["operation"] in {"reverse", "voice_change"})))
+            unsupported = ((product == "VOCALOID6" and entry["operation"] in {"ai.status", "ai.generate"}) or
+                (product == "VOCALOID7" and value["tool"] == "project_library" and entry["operation"].startswith("media_")))
             entry["product_support"] = "unsupported" if unsupported else "see_contract_and_live_inspect"
+            if product == "VOCALOID7" and value["tool"] == "project_edit" and entry["operation"] == "track.update":
+                entry["mute_semantics"] = ("mute is the stored mute flag; channel_mute is the effective "
+                                           "channel state and may differ when tracks are soloed.")
+            if value["tool"] == "project_audio" and entry["operation"] == "process_audio":
+                entry["action_support"] = {
+                    action: "unsupported" if product == "VOCALOID7" and action == "voice_change"
+                    else "see_contract_and_live_inspect"
+                    for action in ("reverse", "normalize", "time_stretch", "pitch_shift", "voice_change")
+                }
+                if product == "VOCALOID7":
+                    entry["action_limitations"] = {"reverse": "PCM/IEEE-float RIFF WAV with complete frame-aligned data chunks; bridge processing (native=false). Valid standard integer smpl loops and unambiguous cue points, including labl/note labels and ltxt regions, are remapped; playlist-linked or ambiguous cue points, fractional loops, sampler-specific chunks and other time references remain unchanged."}
+            if value["tool"] == "project_audio" and entry["operation"] in {"effects", "set_effect"}:
+                entry["scope_support"] = {
+                    scope: "unsupported" if product == "VOCALOID7" and scope == "part"
+                    else "see_contract_and_live_inspect"
+                    for scope in ("master", "track", "part")
+                }
+            if value["tool"] == "project_library":
+                if entry["operation"] in {"dvqm_get", "dvqm_set", "dvqm_clear"}:
+                    entry["storage_support"] = {
+                        "native": "Native DVQM; AI writes remain restricted.",
+                        "bridge_metadata": "Explicit AI note metadata only; native=false and no AI synthesis effect."}
+                if entry["operation"] in {"dvqm_set", "dvqm_clear"}:
+                    entry["track_support"] = {"Midi": "see_contract_and_live_inspect",
+                        "MidiAi": "unsupported" if entry["operation"] == "dvqm_set" else "empty_noop_only"}
+                    entry["limitation"] = ("AI DVQM writes cannot preserve Singing Skill and native undo; "
+                        "empty clear is a read-only no-op, including on frozen tracks.")
+                elif entry["operation"] in {"note_skill_set", "note_skill_reset"}:
+                    entry["limitation"] = ("AI notes with existing Attack or Release cannot persist Singing Skill; "
+                        "unknown fields in the target subtree are protected.")
     return {**index, "product": product, "settings_scope": "track" if product == "VOCALOID7" else "part",
             "verification": "Discovery only. Historical VOCALOID6 evidence is not VOCALOID7 acceptance.",
             "feature_discovery_tool": "vocaloid_features", "live_inspection_tool": "project_inspect",
@@ -496,6 +565,8 @@ async def project_edit(session_id: str, operation: str,
     Operations cover tracks, parts, notes, voices, tempo, meter, curves, automation and history.
     Discover editable UI controls through vocaloid_features and their actual state/bounds through
     project_inspect. VOCALOID7 voice/performance need scope='track'; AI generation uses ai.generate.
+    On V7, track mute is the stored flag; channel_mute is the effective state during solo.
+    track.update accepts solo_state='Off'/'On'/'Defeat' as an alternative to solo.
     Ticks are 480 per quarter note. Lyrics are one syllable per note: Japanese kana, a
     one-syllable English word, or unmarked pinyin for Chinese; other text needs explicit phonemes.
     controller.types and performance.get mark which lanes the current part actually sings.
@@ -516,11 +587,13 @@ async def project_midi(operation: str, options: dict[str, Any] | None = None,
 @mcp.tool()
 async def project_audio(session_id: str, operation: str,
                         options: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Execute a documented native audio operation without activating the editor.
+    """Execute a documented audio operation without activating the editor.
     mixdown is the deliverable render, with effects, at sample_rate 44100, 48000, 96000 or 192000;
     it stops at the end of the last part. Unsupported operations return explicit errors; no
     alternate audio backend is used.
-    VOCALOID7 effects use track/master scope; part scope, reverse and voice_change are unsupported.
+    VOCALOID7 effects use track/master scope; part scope and voice_change are unsupported.
+    V7 reverse processes PCM/IEEE-float RIFF WAV frames in the bridge and reports native=false;
+    other processing uses the installed native renderer.
     """
     parameters = {"session_id": session_id, "operation": operation, "options": options or {}}
     return await asyncio.to_thread(NATIVE.request, "audio_op", parameters, 180)
@@ -533,6 +606,8 @@ async def project_library(operation: str, options: dict[str, Any] | None = None,
     style_apply with the singer's "<name> Default" style gives a new part the editor's default
     sound. lyrics_apply spreads a word or phrase over following notes. Attack/Release (dvqm_*)
     and Singing Skill act on standard VOCALOID parts; this is not the VOCALOID7 AI Attack macro.
+    For AI notes, dvqm_get/set/clear with storage='bridge_metadata' manage bridge-owned metadata
+    only, return native=false, and do not change native DVQM or synthesized AI audio.
     The V7 AI Attack macro uses project_edit performance.set voice_colors.S5Attack after
     performance.get confirms bank compatibility and bounds.
     phoneme_table returns a versioned manual reference, not native enumeration.
@@ -734,6 +809,8 @@ def score_patch(path: str, output_name: str, operations: list[dict[str, Any]]) -
     Tracked invalid-phoneme notes carry sidecar identity through moves and copies;
     deleted or replaced notes lose their old sidecar entry. Lyric, phoneme and language
     changes to tracked notes require native project_edit. Existing extension guards apply.
+    AI notes cannot combine nonempty Attack/Release with Singing Skill: native loading loses the latter.
+    For a conflicting AI note, explicitly removing either complete subtree is permitted in a separate copy.
     """
     return STORE.patch(path, operations, output_name)
 
@@ -744,6 +821,7 @@ async def score_replace_notes(path: str, output_name: str, notes: list[dict[str,
     """Create a revised score with explicit beat-based notes and unchanged non-note project data.
     For AI notes, source={index, expected} preserves one inspected source note; omit source for a new note.
     Source snapshots must match exactly and be selected only once; guarded extension projects remain guarded.
+    AI notes cannot combine nonempty Attack/Release with Singing Skill: native loading loses the latter.
     Omitted AI-note phonemes use native G2PA for one complete syllable per note; no session is retained.
     """
     task = asyncio.create_task(asyncio.to_thread(

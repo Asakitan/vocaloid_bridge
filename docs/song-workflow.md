@@ -33,7 +33,10 @@ Call `vocaloid_features` for feature IDs, then `project_inspect` with the sessio
 and explicit target indices. V7 voice, type, style, Robot, Breath and Voice Color
 settings apply to the whole track. `voice.get.voice_types` contains real IDs;
 `performance.get` supplies bounds and bank applicability. `S5Attack` requires a
-V7 AI bank. MIDI-effect bypass `false` means enabled.
+V7 AI bank. A GekiyakuV 7.0.0 test changed `S5Attack` from 0 to 100 and measured
+a nonzero native PCM difference; note HMM weights, undo/redo and save/reopen
+were preserved. This is one bank and phrase, not a listening assessment.
+MIDI-effect bypass `false` means enabled.
 
 After writing notes and lyrics, call the actual MCP tool:
 
@@ -213,28 +216,37 @@ standard voicebank.
 
 - Note `velocity` and the `expression` fields `Accent`, `Decay`, `BendDepth`,
   `BendLength`, `Opening`, `RisePort`, `FallPort`.
-- Attack and Release effects: `dvqm_set`, `dvqm_clear`.
-- Note skill weights: `note_skill_set`. `singing_skill_set` is rejected on an AI
-  part.
+- Note skill weights: `note_skill_set` on AI notes without existing
+  Attack/Release. `singing_skill_set` is rejected on an AI part.
 - Controller lanes `Brightness`, `Clearness`, `Breathiness`, `Growl`, `Exciter`,
   `Air`, `Character`, `XSynth`, `Portamento`, `DynamicsHmm`, `PitchBendHmm`,
   `WeightHmm`.
 - Voice colours `Exciter`, `Growl`, `Breathiness`, `Air`, `Mouth`, `Character`.
+
+Classic Attack/Release `dvqm_set` and nonempty `dvqm_clear` are rejected on AI
+notes because tested native setter orders lost note HMM state on save or undo.
+The note's `singingSkill` weights are distinct from the track/part Singing Skill
+effect. Separate V7 GekiyakuV and V6 asa probes saved ordinary weights intact;
+only the constructed AI note combining native DVQM and weights lost them.
+An already
+empty `dvqm_clear` is read-only. Explicit `storage="bridge_metadata"` stores an
+annotation without changing native synthesis. VOCALOID7 `S5Attack` is a distinct
+supported macro for compatible V7 AI voices.
 
 ## Mixing and delivery
 
 - `project_render_part` writes the dry voice of one part: 44.1 kHz, mono,
   16-bit, with lead-in and tail padding and without audio effects. It is a
   check, not the deliverable.
-- `project_audio` `mixdown` renders the selected tracks with part, track and
-  master effects. `sample_rate` is 44100, 48000, 96000 or 192000,
+- `project_audio` `mixdown` renders selected tracks with track and master effects;
+  VOCALOID6 also supports part effects. `sample_rate` is 44100, 48000, 96000 or 192000,
   `bits_per_sample` 16 or 24, `channels` 1 or 2. `mixdown_stems` writes one file
   per track.
 - Vocal synthesis runs at 44100 Hz inside the engine. A project created at
   another rate cannot render vocals until `sequence.update` `{sample_rate:
   44100}`; choose the delivery rate in the mixdown instead.
 - Effects: `project_audio` `effects` `{scope: "catalog"}` lists the bundled
-  effects, `set_effect` adds or edits one on the master, a track or a part.
+  effects; `set_effect` edits the master or a track, or a part on VOCALOID6.
 - Level and pan over time: `project_edit` `automation.set` with `scope`
   `track_volume`, `track_pan` or `master_volume`.
 - Backing audio: `project_audio` `import_audio` `{path}` adds a WAV on a new

@@ -217,11 +217,11 @@ class Acceptance:
                 "Unexpected score operation envelope", result)
         return result["result"]
 
-    async def audio(self, identifier: str, operation: str, **options):
+    async def audio(self, identifier: str, operation: str, *, expected_native: bool = True, **options):
         result = await self.call("project_audio", session_id=identifier, operation=operation, options=options)
         metadata = operation == "inspect_audio" or (operation == "effects" and options.get("effect_id") is not None)
-        require(result.get("native") is True or metadata,
-                "Audio operation did not use native engine", result)
+        require(result.get("native") is expected_native or metadata,
+                "Audio operation backend attribution does not match the expected path", result)
         return result
 
     async def render_fixture(self) -> Path:
@@ -269,12 +269,27 @@ class Acceptance:
         return await self.call("project_call", session_id=identifier, ref=reference,
                                member_id=matches[0]["member_id"], args=arguments)
 
-    async def library(self, operation: str, identifier: str | None = None, **options):
+    async def library(self, operation: str, identifier: str | None = None, *, expected_native: bool = True, **options):
         response = await self.call("project_library", operation=operation, options=options, session_id=identifier)
-        require(response.get("native") is True and response.get("operation") == operation
+        require(response.get("native") is expected_native and response.get("operation") == operation
             and response.get("session_id") == identifier,
             "Library operation envelope mismatch", response)
         return response["result"]
+
+    async def initialize_plain_ai(self, identifier: str) -> None:
+        product = (await self.call("vocaloid_features"))["product"]
+        voices = (await self.call("voicebanks"))["voices"]
+        voice = next((item for item in voices if item["name"] == "asa" and item["kind"] == "Dnn"
+                      and item["available_in_sequence"]), None)
+        if voice is None:
+            raise Blocked("An installed available asa AI voicebank is required")
+        await self.edit(identifier, "track.create", type="MidiAi", name="Plain AI")
+        await self.edit(identifier, "part.create", track_index=0, start_tick=0, duration_tick=1920)
+        scope = {"scope": "track"} if product == "VOCALOID7" else {}
+        await self.edit(identifier, "voice.set", track_index=0, part_index=0,
+                        ai_voice_bank_id=voice["comp_id"], **scope)
+        await self.edit(identifier, "note.add", track_index=0, part_index=0, start_tick=0,
+                        duration_tick=480, number=60, lyric="あ", phonemes="a", lang_id=0)
 
     async def watch_foreground(self) -> None:
         import win32gui
@@ -315,12 +330,16 @@ class Acceptance:
         except Blocked as error:
             self.active.update(status="blocked", reason=str(error))
         except ToolFailure as error:
+            unsupported = re.search(
+                r"NotSupportedException: VOCALOID7 (?:removed (?:MediaManager|the managed MediaManager API|the native VOCALO CHANGER renderer)|does not support part audio effects)",
+                str(error),
+            )
             unavailable = re.search(
                 r"Unknown RPC method|Unknown audio operation|Unsupported score operation|Unknown library operation|"
-                r"DllNotFoundException|DirectoryNotFoundException|FileNotFoundException|license.*unavailable|not available for native VOCALO CHANGER",
+                r"DllNotFoundException|DirectoryNotFoundException|FileNotFoundException|missing_classic_bank:|license.*unavailable|not available for native VOCALO CHANGER",
                 str(error), re.IGNORECASE,
             )
-            self.active.update(status="blocked" if unavailable else "failed", reason=str(error))
+            self.active.update(status="unsupported" if unsupported else "blocked" if unavailable else "failed", reason=str(error))
         except Exception as error:
             self.active.update(status="failed", reason=f"{type(error).__name__}: {error}")
         finally:
@@ -388,7 +407,7 @@ async def transport_metadata(check: Acceptance) -> None:
     require("write_song" in {item.name for item in prompts.prompts}, "Song prompt not advertised")
     prompt = await check.client.get_prompt("write_song", arguments={"brief": "Acceptance marker", "language": "Japanese", "bpm": "120", "key": "C major"})
     require(any("Acceptance marker" in getattr(message.content, "text", "") for message in prompt.messages), "Prompt arguments were not applied")
-    features = await check.call("vocaloid_features")
+    features = await check.call("vocaloid_features", include_matrix=True)
     require(features["matrix"] == (ROOT / "docs" / "feature-matrix.md").read_text(encoding="utf-8"), "Feature matrix response is stale")
     check.evidence("tool_names", sorted(check.tools))
 
@@ -498,50 +517,69 @@ async def reflection_values(check: Acceptance) -> None:
                              member_id=out_method["member_id"], args=[True, 0])
         async with check.project() as foreign:
             await check.rejected("project_get", "reference|session|expired", session_id=foreign, ref=reference, member="Value")
-        await check.rejected("project_set", "string|convert|type", session_id=identifier, member="Title", value=17)
+            await check.rejected("project_set", "string|convert|type", session_id=foreign, member="Title", value=17)
+        await check.rejected("project_set", "string|convert|type|identity transaction", session_id=identifier, member="Title", value=17)
         await check.edit(identifier, "sequence.update", title="Reference invalidation")
         await check.rejected("project_get", "reference|expired", session_id=identifier, ref=track["$ref"], member="Name")
 
 
-@feature("score.performance_catalog", "score", "project_edit", "score_compose", "project_save", "project_open")
+@feature("score.performance_catalog", "score", "project_edit", "score_compose", "project_save", "project_open", "vocaloid_features")
 async def score_performance_catalog(check: Acceptance) -> None:
     seed = await check.call("score_compose", output_name=check.output("performance-seed"), title="Performance acceptance",
                             bpm=120, notes=[{"start": 0, "duration": 1, "pitch": 60,
                                              "lyric": "\u3042", "phoneme": "a", "lang_id": 0}])
     identifier = seed["native_session"]["session_id"]
-    result = await check.edit(identifier, "performance.get", track_index=0, part_index=0)
-    require({item["effect"] for item in result["bypass"]} == {"SingingSkill", "VoiceColor", "RobotVoice", "Breath", "Take"},
+    is_v7 = (await check.call("vocaloid_features"))["product"] == "VOCALOID7"
+    scope = {"track_index": 0, "part_index": 0, **({"scope": "track"} if is_v7 else {})}
+    result = await check.edit(identifier, "performance.get", **scope)
+    expected_effects = {"SingingSkill", "VoiceColor", "RobotVoice", "Breath"} | (set() if is_v7 else {"Take"})
+    require({item["effect"] for item in result["bypass"]} == expected_effects,
             "Native MIDI effect availability is incomplete", result)
     require(all(entry["setting"]["LowerBoundValue"] <= entry["value"] <= entry["setting"]["UpperBoundValue"]
                 for entry in result["voice_colors"] or []), "Native voice-color value exceeds its bounds", result)
     if any(result[name] is None for name in ("robot", "breath", "take", "voice_colors")):
         raise Blocked("The installed AI part lacks one of the required native performance effects")
+    invalid_performance = ({"robot_mode": "0"}, {"breath_mode": "0"}, {"breath_type": "0"},
+                           {"voice_colors": {"6" if is_v7 else "0": 0}}, {"bypass": {"2": False}})
+    for invalid in invalid_performance:
+        await check.rejected("project_edit", "one of|Unknown|invalid", session_id=identifier,
+                             operation="performance.set", options={**scope, **invalid})
+    await check.rejected("project_edit", "controller type", session_id=identifier,
+                         operation="controller.list", options={**scope, "type": "1"})
+    await check.rejected("project_edit", "controller type", session_id=identifier,
+                         operation="controller.list", options={**scope, "type": "dynamics"})
+    require((await check.edit(identifier, "controller.list", **scope, type="Dynamics"))["type"] == "Dynamics",
+            "Native controller name no longer resolves")
+    require(await check.edit(identifier, "performance.get", **scope) == result,
+            "Rejected numeric enum names changed the part")
     robot = next(mode for mode in result["robot"]["modes"] if mode != result["robot"]["mode"])
     breath = next(mode for mode in result["breath"]["modes"] if mode != result["breath"]["mode"])
     breath_type = next(value for value in result["breath"]["types"] if value != result["breath"]["type"])
     exhalation = result["breath"]["setting"]["UpperBoundValue"]
-    lane = result["take"]["setting"]["LowerBoundValue"]
-    color = next(entry for entry in result["voice_colors"] if entry["name"] == "Exciter")
+    take_key = "take_number" if is_v7 else "take_lane"
+    take_value = result["take"]["default_take_number"] if is_v7 else result["take"]["setting"]["LowerBoundValue"]
+    color_name = "S5Expression" if is_v7 else "Exciter"
+    color = next(entry for entry in result["voice_colors"] if entry["name"] == color_name)
     color_value = color["setting"]["UpperBoundValue"]
     bypass = {entry["effect"]: not entry["bypassed"] for entry in result["bypass"] if entry["available"]}
-    requested = {"robot_mode": robot, "breath_mode": breath, "breath_type": breath_type,
-                 "breath_exhalation": exhalation, "take_lane": lane,
-                 "voice_colors": {"Exciter": color_value}, "bypass": bypass}
-    changed = await check.edit(identifier, "performance.set", track_index=0, part_index=0, **requested)
+    requested = {"robot_mode": robot.swapcase(), "breath_mode": breath, "breath_type": breath_type,
+                 "breath_exhalation": exhalation, take_key: take_value,
+                 "voice_colors": {color_name: color_value}, "bypass": bypass}
+    changed = await check.edit(identifier, "performance.set", **scope, **requested)
     require(changed["robot"]["mode"] == robot and changed["breath"]["mode"] == breath
             and changed["breath"]["type"] == breath_type and changed["breath"]["exhalation"] == exhalation
-            and changed["take"]["lane"] == lane, "Native performance settings were not applied", changed)
-    require(next(entry for entry in changed["voice_colors"] if entry["name"] == "Exciter")["value"] == color_value
+            and changed["take"]["take_number" if is_v7 else "lane"] == take_value, "Native performance settings were not applied", changed)
+    require(next(entry for entry in changed["voice_colors"] if entry["name"] == color_name)["value"] == color_value
             and all(entry["bypassed"] == bypass[entry["effect"]] for entry in changed["bypass"] if entry["effect"] in bypass),
             "Native voice color or bypass settings were not applied", changed)
     await check.rejected("project_edit", "exhalation|range", session_id=identifier, operation="performance.set",
-                         options={"track_index": 0, "part_index": 0, "robot_mode": result["robot"]["mode"],
+                         options={**scope, "robot_mode": result["robot"]["mode"],
                                   "breath_exhalation": exhalation + 1})
-    require(await check.edit(identifier, "performance.get", track_index=0, part_index=0) == changed,
+    require(await check.edit(identifier, "performance.get", **scope) == changed,
             "Rejected performance update changed the part")
     _, path = await check.save(identifier, "performance")
     reopened = (await check.call("project_open", path=str(path)))["session_id"]
-    require(await check.edit(reopened, "performance.get", track_index=0, part_index=0) == changed,
+    require(await check.edit(reopened, "performance.get", **scope) == changed,
             "Native performance settings did not survive save/reopen")
     await check.close(reopened)
     check.evidence("installed_performance", result)
@@ -633,10 +671,11 @@ async def score_parts(check: Acceptance) -> None:
                 and persisted[0]["pos"] == 1920 and persisted[0]["duration"] == 5760, "Saved part mismatch", persisted)
 
 
-@feature("score.notes_voice", "score", "project_edit", "score_compose", "voicebanks", "project_save")
+@feature("score.notes_voice", "score", "project_edit", "score_compose", "voicebanks", "project_save", "vocaloid_features", "project_inspect", "vocaloid_operations")
 async def score_notes(check: Acceptance) -> None:
     async with check.project(score=True) as identifier:
         selected = {"track_index": 0, "part_index": 0}
+        is_v7 = (await check.call("vocaloid_features"))["product"] == "VOCALOID7"
         listed = (await check.edit(identifier, "note.list", **selected))["notes"]
         require([note["number"] for note in listed] == [60, 64, 67], "Seed notes mismatch")
         await check.edit(identifier, "note.clear", **selected)
@@ -645,18 +684,30 @@ async def score_notes(check: Acceptance) -> None:
         await check.edit(identifier, "note.update", **selected, note_index=added["note_index"], number=65,
                          velocity=85, duration_tick=360, lyric="\u3044", phonemes="i", is_valid_phonemes=True,
                          expression=added["expression"], ai_expression=added["ai_expression"],
-                         is_protected=True, ai_vibrato_enabled=False)
+                         is_protected=True, **({} if is_v7 else {"ai_vibrato_enabled": False}))
         await check.edit(identifier, "note.duplicate", **selected, note_index=0, start_tick=480)
         notes = (await check.edit(identifier, "note.list", **selected))["notes"]
         require(len(notes) == 2 and [note["start_tick"] for note in notes] == [0, 480], "Note duplicate mismatch", notes)
         require(all(note["number"] == 65 and note["velocity"] == 85 and note["phonemes"] == "i" for note in notes), "Note fields did not copy")
-        await check.edit(identifier, "note.remove", **selected, note_index=1)
+        inspected = await check.call("project_inspect", session_id=identifier, feature="notes", **selected, note_index=1)
+        templates = {item["arguments"]["operation"]: item for item in inspected["contract"]["write_calls"]}
+        require({"note.add", "note.update", "note.remove", "note.clear", "note.duplicate", "note.split", "note.join", "note.batch_update"}
+            <= templates.keys(), "Note discovery omitted supported operations", templates)
+        removal = templates["note.remove"]
+        require(removal["tool"] == "project_edit" and removal["arguments"]["session_id"] == identifier
+            and removal["arguments"]["options"] == {**selected, "note_index": 1},
+            "Inspected removal template did not bind the selected note", removal)
+        operation = await check.call("vocaloid_operations", domain="score", operation="note.remove")
+        require("notes" in operation["domains"]["score"]["operations"][0]["features"],
+            "Note removal operation is not linked to its feature", operation)
+        await check.edit(identifier, "note.remove", **removal["arguments"]["options"])
         voices = await check.call("voicebanks")
         require(isinstance(voices["voices"], list) and voices["voices"], "No native voicebanks returned")
-        voice = await check.edit(identifier, "voice.get", **selected)
+        voice_scope = {**selected, **({"scope": "track"} if is_v7 else {})}
+        voice = await check.edit(identifier, "voice.get", **voice_scope)
         key = "ai_voice_bank_id" if voice["ai"] else "voice_bank_id"
         require(voice[key], "Seed has no native voice identity")
-        changed = await check.edit(identifier, "voice.set", **selected, **{key: voice[key]})
+        changed = await check.edit(identifier, "voice.set", **voice_scope, **{key: voice[key]})
         require(changed[key] == voice[key], "Voice ID readback mismatch")
         sequence, _ = await check.save(identifier, "notes")
         saved = sequence["tracks"][0]["parts"][0]["notes"]
@@ -755,7 +806,7 @@ async def score_validation(check: Acceptance) -> None:
                              options={"track_index": 0, "part_index": 0, "start_tick": 0, "duration_tick": -1, "number": 60})
         await check.rejected("project_edit", "track_index|range", session_id=identifier,
                              operation="track.remove", options={"track_index": 99999})
-        await check.rejected("project_edit", "unsupported|unknown", session_id=identifier,
+        await check.rejected("project_edit", "unsupported|unknown|no verified identity transaction", session_id=identifier,
                              operation="Acceptance.Nonexistent", options={})
         require(await check.edit(identifier, "note.list", track_index=0, part_index=0) == before, "Rejected score edit changed notes")
 
@@ -803,8 +854,16 @@ async def score_selection_time(check: Acceptance) -> None:
         require((await check.edit(identifier, "part.list", track_index=0))["parts"][0]["start_tick"] == 2880, "Time insertion did not shift the part")
         await check.edit(identifier, "time.delete", start_tick=0, duration_tick=480, include_tempo=False)
         require((await check.edit(identifier, "part.list", track_index=0))["parts"][0]["start_tick"] == 2400, "Time deletion did not restore the part")
-        await check.rejected("project_edit", "crossing|phoneme|split", session_id=identifier, operation="time.insert",
-                     options={"start_tick": 2500, "duration_tick": 120})
+        before_parts = (await check.edit(identifier, "part.list", track_index=0))["parts"]
+        before_notes = await check.edit(identifier, "note.list", **scope)
+        await check.edit(identifier, "time.insert", start_tick=2500, duration_tick=120)
+        parts = (await check.edit(identifier, "part.list", track_index=0))["parts"]
+        require([(part["start_tick"], part["duration_tick"]) for part in parts] == [(2400, 100), (2620, 7580)],
+            "Crossing time insertion did not split and shift the part", parts)
+        await check.edit(identifier, "undo")
+        require((await check.edit(identifier, "part.list", track_index=0))["parts"] == before_parts
+            and await check.edit(identifier, "note.list", **scope) == before_notes,
+            "Undo did not restore the crossing part and notes")
 
 
 def midi_snapshot(path: str | Path) -> dict[str, Any]:
@@ -868,15 +927,39 @@ async def verify_vsqx(check: Acceptance, fixture: Path | None, version: int) -> 
                  note.findtext("vsq:" + fields[4], namespaces=namespace))
                 for note in root.findall(".//vsq:" + part_name + "/vsq:note", namespace)]
     require(expected, f"VSQX {version} fixture contains no vocal notes")
-    imported = await check.call("project_import", path=str(source), prefer_ai=False)
+    try:
+        imported = await check.call("project_import", path=str(source), prefer_ai=False)
+    except ToolFailure as error:
+        if "missing_classic_bank:" not in str(error):
+            raise
+        require(source.read_bytes() == original, "Rejected native VSQX import modified its source file")
+        installed = (await check.call("voicebanks"))["voices"]
+        check.evidence("rejected_classic_import", {"fixture": str(source), "source_unchanged": True,
+                                                  "voices": installed, "error": str(error)})
+        raise Blocked(str(error)) from error
     identifier = imported["session_id"]
     tracks, actual = await vsqx_native_notes(check, identifier)
     require(actual == expected, "Native VSQX import changed note timing, lyrics, or phonemes", {"expected": expected, "actual": actual})
+    is_v7 = (await check.call("vocaloid_features"))["product"] == "VOCALOID7"
+    scope = {"scope": "track" if is_v7 else "part"}
+    voices = [await check.edit(identifier, "voice.get", **scope, track_index=track["track_index"], part_index=part)
+              for track in tracks if track["type"] in ("Midi", "MidiAi") for part in range(track["part_count"])]
+    require(source.read_bytes() == original, "Native VSQX import modified its source file")
+    if any(track["type"] == "Midi" for track in tracks):
+        installed = (await check.call("voicebanks"))["voices"]
+        available = [voice for voice in installed if voice["kind"] == "Dse" and voice["available_in_sequence"]]
+        check.evidence("classic_requirements", {"tracks": tracks, "identities": voices, "available_dse": available,
+                                                "imported_notes_verified": len(actual)})
+        if not available:
+            raise Blocked("missing_classic_bank: VSQX notes imported unchanged, but classic save/reopen requires an installed available Dse voicebank; no replacement was selected")
     sequence, path = await check.save(identifier, f"vsqx{version}-import")
     reopened = (await check.call("project_open", path=str(path)))["session_id"]
     saved = [note for track in sequence.get("tracks", []) for part in track.get("parts", []) for note in part.get("notes", [])]
     require(len(saved) == len(expected), "Saved VSQX import lost notes", len(saved))
     reopened_tracks, reopened_notes = await vsqx_native_notes(check, reopened)
+    reopened_voices = [await check.edit(reopened, "voice.get", **scope, track_index=track["track_index"], part_index=part)
+                       for track in reopened_tracks if track["type"] in ("Midi", "MidiAi") for part in range(track["part_count"])]
+    require(reopened_voices == voices, "VSQX imported voice identities did not survive save/reopen")
     require(reopened_tracks == tracks and reopened_notes == expected,
             "VSQX imported tracks or notes did not survive save/reopen")
     await check.close(reopened)
@@ -906,15 +989,24 @@ async def interchange_ppsf2(check: Acceptance) -> None:
     identifier = imported["session_id"]
     tracks, notes = await vsqx_native_notes(check, identifier)
     require(notes, "Native PPSF import contains no vocal notes")
-    voices = [(await check.edit(identifier, "voice.get", track_index=track["track_index"], part_index=0))
-              for track in tracks if track["type"] in ("Midi", "MidiAi") and track["part_count"]]
+    is_v7 = (await check.call("vocaloid_features"))["product"] == "VOCALOID7"
+    scope = {"scope": "track" if is_v7 else "part"}
+    voices = [(await check.edit(identifier, "voice.get", **scope, track_index=track["track_index"], part_index=part))
+              for track in tracks if track["type"] in ("Midi", "MidiAi") for part in range(track["part_count"])]
+    require(source.read_bytes() == original, "Native PPSF import modified its source file")
+    if any(track["type"] == "Midi" for track in tracks):
+        installed = (await check.call("voicebanks"))["voices"]
+        available = [voice for voice in installed if voice["kind"] == "Dse" and voice["available_in_sequence"]]
+        check.evidence("classic_requirements", {"tracks": tracks, "identities": voices, "available_dse": available})
+        if not available:
+            raise Blocked("missing_classic_bank: PPSF classic save/reopen requires an installed available Dse voicebank; no replacement was selected")
     sequence, path = await check.save(identifier, "ppsf2-import")
     saved = [note for track in sequence.get("tracks", []) for part in track.get("parts", []) for note in part.get("notes", [])]
     require(len(saved) == len(notes), "Saved PPSF import lost notes")
     reopened = (await check.call("project_open", path=str(path)))["session_id"]
     reopened_tracks, reopened_notes = await vsqx_native_notes(check, reopened)
-    reopened_voices = [(await check.edit(reopened, "voice.get", track_index=track["track_index"], part_index=0))
-                       for track in reopened_tracks if track["type"] in ("Midi", "MidiAi") and track["part_count"]]
+    reopened_voices = [(await check.edit(reopened, "voice.get", **scope, track_index=track["track_index"], part_index=part))
+                       for track in reopened_tracks if track["type"] in ("Midi", "MidiAi") for part in range(track["part_count"])]
     require(reopened_notes == notes, "PPSF imported note timing, pitch, lyrics or phonemes did not survive save/reopen")
     require(reopened_tracks == tracks and reopened_voices == voices,
             "PPSF traditional track type or voice did not survive save/reopen",
@@ -982,10 +1074,17 @@ async def interchange_ppsf3(check: Acceptance) -> None:
         "PPSF V3 source/native tempo differs", {"source": source_tempos, "native": native_tempos})
     require(native_meters == sorted(source_meters), "PPSF V3 source/native meter differs",
             {"source": source_meters, "native": native_meters})
+    is_v7 = (await check.call("vocaloid_features"))["product"] == "VOCALOID7"
+    scope = {"scope": "track" if is_v7 else "part"}
+    async def identities(session, entries):
+        return [await check.edit(session, "voice.get", **scope, track_index=track["track_index"], part_index=part)
+                for track in entries if track["type"] in ("Midi", "MidiAi") for part in range(track["part_count"])]
+    voices = await identities(identifier, tracks)
     _, path = await check.save(identifier, "ppsf3-import")
     reopened = (await check.call("project_open", path=str(path)))["session_id"]
     reopened_tracks, reopened_notes = await vsqx_native_notes(check, reopened)
     require(reopened_tracks == tracks and reopened_notes == notes, "PPSF V3 import did not survive save/reopen")
+    require(await identities(reopened, reopened_tracks) == voices, "PPSF V3 native voice state changed on reopen")
     require(await timing(reopened) == (native_tempos, native_meters), "PPSF V3 tempo/meter did not survive reopen")
     await check.close(reopened)
     require(source.read_bytes() == original, "Native PPSF V3 import modified its source file")
@@ -1171,7 +1270,7 @@ def compare_audio_reports(native: dict[str, Any], actual: dict[str, Any]) -> Non
     require(abs(native["duration_seconds"] - actual["duration_seconds"]) < 1 / actual["sample_rate"], "WAV duration report mismatch")
 
 
-@feature("synthesis.robot_voice", "synthesis", "project_render_part", "project_audio", "project_edit", "score_compose", "project_save", "project_open")
+@feature("synthesis.robot_voice", "synthesis", "project_render_part", "project_audio", "project_edit", "score_compose", "project_save", "project_open", "vocaloid_features")
 async def synthesis_robot_voice(check: Acceptance) -> None:
     import numpy as np
     seed = await check.call("score_compose", output_name=check.output("robot-seed"), title="Robot voice acceptance", bpm=120,
@@ -1179,15 +1278,17 @@ async def synthesis_robot_voice(check: Acceptance) -> None:
                    for index, pitch in enumerate((60, 64, 67))])
     identifier = seed["native_session"]["session_id"]
     selected = {"track_index": 0, "part_index": 0}
+    is_v7 = (await check.call("vocaloid_features"))["product"] == "VOCALOID7"
+    settings_scope = {**selected, **({"scope": "track"} if is_v7 else {})}
     baseline = await check.call("project_render_part", session_id=identifier, output_name=check.output("robot-baseline", ".wav"), **selected)
     baseline_metadata, baseline_pcm = read_audio(baseline["path"])
-    changed = await check.edit(identifier, "performance.set", **selected, robot_mode="Hard", bypass={"RobotVoice": False})
+    changed = await check.edit(identifier, "performance.set", **settings_scope, robot_mode="Hard", bypass={"RobotVoice": False})
     require(changed["robot"]["mode"] == "Hard" and not next(item for item in changed["bypass"]
         if item["effect"] == "RobotVoice")["bypassed"], "Robot Voice was not enabled", changed)
     _, path = await check.save(identifier, "robot-voice")
     await check.close(identifier, discard=False)
     reopened = (await check.call("project_open", path=str(path)))["session_id"]
-    restored = await check.edit(reopened, "performance.get", **selected)
+    restored = await check.edit(reopened, "performance.get", **settings_scope)
     require(restored["robot"]["mode"] == "Hard" and not next(item for item in restored["bypass"]
         if item["effect"] == "RobotVoice")["bypassed"], "Robot Voice settings did not survive reopen", restored)
     rendered = await check.call("project_render_part", session_id=reopened, output_name=check.output("robot-enabled", ".wav"), **selected)
@@ -1233,9 +1334,10 @@ async def synthesis_guards(check: Acceptance) -> None:
 
 
 @feature("synthesis.blank_authoring", "synthesis", "project_create", "project_edit", "voicebanks",
-         "project_save", "project_open", "project_render_part")
+         "project_save", "project_open", "project_render_part", "vocaloid_features")
 async def synthesis_blank_authoring(check: Acceptance) -> None:
     async with check.project() as identifier:
+        is_v7 = (await check.call("vocaloid_features"))["product"] == "VOCALOID7"
         require((await check.edit(identifier, "track.list"))["tracks"] == [], "Native new project was not blank")
         voices = (await check.call("voicebanks"))["voices"]
         voice = next((entry for entry in voices if entry["name"] == "asa" and entry["kind"] == "Dnn"
@@ -1249,7 +1351,8 @@ async def synthesis_blank_authoring(check: Acceptance) -> None:
                        duration_tick=1920, name="New native notes")
         require(created["note_count"] == 0, "New native part already contains prototype notes", created)
         selected = {"track_index": track, "part_index": created["part_index"]}
-        assigned = await check.edit(identifier, "voice.set", **selected, ai_voice_bank_id=voice["comp_id"])
+        settings_scope = {**selected, **({"scope": "track"} if is_v7 else {})}
+        assigned = await check.edit(identifier, "voice.set", **settings_scope, ai_voice_bank_id=voice["comp_id"])
         require(assigned["ai_voice_bank_id"] == voice["comp_id"], "New part did not retain the explicit voice", assigned)
         first = await check.edit(identifier, "note.add", **selected, start_tick=0, duration_tick=480,
                      number=60, lyric="\u3042", phonemes="a", lang_id=0)
@@ -1262,7 +1365,8 @@ async def synthesis_blank_authoring(check: Acceptance) -> None:
         fresh = await check.edit(identifier, "part.create", track_index=track, start_tick=3840,
                      duration_tick=1920, name="Empty-part language inference")
         fresh_selected = {"track_index": track, "part_index": fresh["part_index"]}
-        await check.edit(identifier, "voice.set", **fresh_selected, ai_voice_bank_id=voice["comp_id"])
+        await check.edit(identifier, "voice.set", **fresh_selected, **({"scope": "track"} if is_v7 else {}),
+                 ai_voice_bank_id=voice["comp_id"])
         fresh_note = await check.edit(identifier, "note.add", **fresh_selected, start_tick=0, duration_tick=480,
                           number=67, lyric="\u3042", phonemes="a")
         require(fresh["note_count"] == 0 and fresh_note["lang_id"] == 0 and fresh_note["is_valid_phonemes"],
@@ -1272,7 +1376,8 @@ async def synthesis_blank_authoring(check: Acceptance) -> None:
         require(any(entry["compID"] == voice["comp_id"] for entry in sequence.get("voices", [])),
             "Blank-authored VPR did not register its assigned native voice", sequence.get("voices"))
         saved_parts = sequence["tracks"][track]["parts"]
-        require(saved_parts[selected["part_index"]]["aiVoice"]["compID"] == voice["comp_id"]
+        saved_voice = sequence["tracks"][track]["voice"] if is_v7 else saved_parts[selected["part_index"]]["aiVoice"]
+        require(saved_voice["compID"] == voice["comp_id"]
             and [note["phoneme"] for note in saved_parts[selected["part_index"]]["notes"]] == ["a", "i"],
             "Blank-authored VPR lost native voice or generated phonemes", saved_parts)
         await check.close(identifier, discard=False)
@@ -1341,7 +1446,7 @@ async def audio_assets(check: Acceptance) -> None:
 
 
 def register_offline(action: str) -> None:
-    @feature("audio." + action, "audio", "project_audio")
+    @feature("audio." + action, "audio", "project_audio", "vocaloid_operations", "vocaloid_features")
     async def offline(check: Acceptance) -> None:
         import numpy as np
         source = await check.audio_input()
@@ -1353,9 +1458,44 @@ def register_offline(action: str) -> None:
         elif action == "pitch_shift":
             options["pitch_cents"] = 300
         async with check.project() as identifier:
+            catalog = await check.call("vocaloid_operations", domain="audio", operation="process_audio")
+            is_v7 = catalog["product"] == "VOCALOID7"
+            if action == "reverse":
+                discovery = await check.call("vocaloid_features", feature="reverse")
+                feature = discovery["features"]["reverse"]
+                require(feature["support"] == "operation_catalog" and any(
+                    item["arguments"].get("operation") == "process_audio"
+                    and item["arguments"].get("options", {}).get("action") == "reverse"
+                    for item in feature["write_calls"]), "Reverse capability is not discoverable", feature)
+                require("reverse" in catalog["domains"]["audio"]["operations"][0]["features"],
+                        "Reverse operation is not linked to its feature", catalog)
+                if is_v7:
+                    limitation = catalog["domains"]["audio"]["operations"][0]["action_limitations"]["reverse"]
+                    require("smpl loops" in limitation and "cue points" in limitation and "ltxt regions" in limitation
+                        and "fractional loops" in limitation,
+                        "Reverse discovery does not describe sampler metadata handling", limitation)
+            if action == "normalize":
+                support = catalog["domains"]["audio"]["operations"][0]["action_support"]
+                require(support["voice_change"] == ("unsupported" if is_v7 else "see_contract_and_live_inspect")
+                        and all(support[name] == "see_contract_and_live_inspect"
+                                for name in ("reverse", "normalize", "time_stretch", "pitch_shift")),
+                        "Audio action support does not match the selected product", support)
+                effects = await check.call("vocaloid_operations", domain="audio", operation="set_effect")
+                require(effects["domains"]["audio"]["operations"][0]["scope_support"]["part"]
+                        == ("unsupported" if is_v7 else "see_contract_and_live_inspect"),
+                        "Audio effect scope support does not match the selected product", effects)
+                if is_v7:
+                    for unsupported in ("voice_change",):
+                        await check.rejected("project_audio", "VOCALOID7.*(removed|unavailable)", session_id=identifier,
+                                             operation="process_audio", options={"action": unsupported, "path": str(source),
+                                             "output_name": check.output("unsupported-" + unsupported, ".wav")})
             result = await check.audio(identifier, "process_audio", action=action, path=str(source),
-                                       output_name=check.output(action, ".wav"), **options)
-            require(result["backend"] == "WOR." + action, "Offline renderer used an unexpected backend", result)
+                                       output_name=check.output(action, ".wav"), expected_native=not (is_v7 and action == "reverse"), **options)
+            expected_backend = "bridge.pcm_frame_reverse" if is_v7 and action == "reverse" else "WOR." + action
+            require(result["backend"] == expected_backend, "Offline renderer used an unexpected backend", result)
+            if is_v7 and action == "reverse":
+                require("time references are not reversed" in result["metadata_warning"],
+                        "Reverse receipt did not disclose unchanged time metadata", result)
             actual, samples = read_audio(result["path"])
             compare_audio_reports(result, actual)
             require(actual["sample_rate"] == before["sample_rate"] and actual["channels"] == before["channels"],
@@ -1372,6 +1512,268 @@ def register_offline(action: str) -> None:
                 if action == "reverse":
                     require(samples.shape == before_pcm.shape and np.allclose(samples, before_pcm[::-1], atol=2 / 32768, rtol=0),
                             "Reverse WAV is not frame-reversed source PCM")
+                    if is_v7:
+                        import soundfile as sf
+                        import struct
+                        stereo = np.array([[32767, -32768], [-12345, 23456], [0, 1], [23, -45]], dtype=np.int16)
+                        long_stereo = ((np.arange(80006, dtype=np.int32) % 65536) - 32768).astype(np.int16).reshape(-1, 2)
+                        samples_to_check = [
+                            ("stereo", stereo, 44100, "WAV", "PCM_16"),
+                            ("long", long_stereo, 48000, "WAV", "PCM_16"),
+                            ("pcm24", np.array([[0.5, -0.25, 0.125], [-0.75, 0.0, 0.25]]), 48000, "WAVEX", "PCM_24"),
+                            ("float", np.array([[0.125, -0.5], [0.75, 0.25], [-0.1, 0.1]]), 96000, "WAV", "FLOAT"),
+                            ("float-ext", np.array([[0.125, -0.5], [0.75, 0.25], [-0.1, 0.1]]), 48000, "WAVEX", "FLOAT"),
+                            ("pcm8", np.array([[-0.5], [0.0], [0.5]]), 22050, "WAV", "PCM_U8"),
+                        ]
+                        for label, input_samples, sample_rate, format_name, subtype in samples_to_check:
+                            sample_path = ROOT / "output" / check.output("reverse-" + label, ".wav")
+                            sf.write(sample_path, input_samples, sample_rate, format=format_name, subtype=subtype)
+                            original_bytes = sample_path.read_bytes()
+                            expected_samples, _ = sf.read(sample_path, dtype="float64", always_2d=True)
+                            sample_result = await check.audio(identifier, "process_audio", action="reverse", path=str(sample_path),
+                                                              output_name=check.output("reversed-" + label, ".wav"), expected_native=False)
+                            reversed_samples, rate = sf.read(sample_result["path"], dtype="float64", always_2d=True)
+                            output_info = sf.info(sample_result["path"])
+                            require(rate == sample_rate and output_info.subtype == subtype
+                                    and np.array_equal(reversed_samples, expected_samples[::-1])
+                                    and sample_path.read_bytes() == original_bytes,
+                                    "WAV frame reversal changed samples, format, or source", label)
+                        payload = stereo.astype("<i2", copy=False).tobytes()
+                        reversed_payload = stereo[::-1].astype("<i2", copy=False).tobytes()
+                        fmt = struct.pack("<HHIIHH", 1, 2, 44100, 176400, 4, 16)
+                        def chunk(identifier, data):
+                            return identifier + struct.pack("<I", len(data)) + data + (b"\x00" if len(data) % 2 else b"")
+                        chunks = chunk(b"fmt ", fmt) + chunk(b"data", payload[:8]) + chunk(b"JUNK", b"tag") + chunk(b"data", payload[8:])
+                        multi_path = ROOT / "output" / check.output("reverse-multiple-data", ".wav")
+                        multi_path.write_bytes(b"RIFF" + struct.pack("<I", len(chunks) + 4) + b"WAVE" + chunks)
+                        multi_original = multi_path.read_bytes()
+                        multi_result = await check.audio(identifier, "process_audio", action="reverse", path=str(multi_path),
+                                                         output_name=check.output("multiple-data-reverse", ".wav"), expected_native=False)
+                        expected_chunks = chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload) + chunk(b"JUNK", b"tag")
+                        expected_file = b"RIFF" + struct.pack("<I", len(expected_chunks) + 4) + b"WAVE" + expected_chunks
+                        decoded, rate = sf.read(multi_result["path"], dtype="int16", always_2d=True)
+                        require(Path(multi_result["path"]).read_bytes() == expected_file and multi_path.read_bytes() == multi_original
+                            and rate == 44100 and np.array_equal(decoded, stereo[::-1]),
+                            "Multichunk reversal produced an unreadable WAV or changed metadata or frame order")
+                        sampler_header = struct.pack("<9I", 0, 0, 22675, 60, 0, 0, 0, 3, 0)
+                        sampler_loops = [
+                            (11, 0, 0, 1, 0, 0),
+                            (12, 2, 1, 1, 0, 2),
+                            (13, 0, 1, 2, 1, 0),
+                        ]
+                        sampler_data = sampler_header + b"".join(struct.pack("<6I", *loop) for loop in sampler_loops)
+                        sampler_chunks = chunk(b"fmt ", fmt) + chunk(b"data", payload) + chunk(b"smpl", sampler_data)
+                        sampler_path = ROOT / "output" / check.output("reverse-sampler", ".wav")
+                        sampler_path.write_bytes(b"RIFF" + struct.pack("<I", len(sampler_chunks) + 4) + b"WAVE" + sampler_chunks)
+                        sampler_original = sampler_path.read_bytes()
+                        sampler_result = await check.audio(identifier, "process_audio", action="reverse", path=str(sampler_path),
+                                                           output_name=check.output("reversed-sampler", ".wav"), expected_native=False)
+                        expected_loops = [(11, 0, 2, 3, 0, 0), (12, 2, 2, 2, 0, 2), sampler_loops[2]]
+                        expected_sampler_data = sampler_header + b"".join(struct.pack("<6I", *loop) for loop in expected_loops)
+                        expected_sampler_chunks = chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload) + chunk(b"smpl", expected_sampler_data)
+                        expected_sampler_file = b"RIFF" + struct.pack("<I", len(expected_sampler_chunks) + 4) + b"WAVE" + expected_sampler_chunks
+                        decoded_sampler, sampler_rate = sf.read(sampler_result["path"], dtype="int16", always_2d=True)
+                        require(Path(sampler_result["path"]).read_bytes() == expected_sampler_file
+                            and sampler_path.read_bytes() == sampler_original and sampler_rate == 44100
+                            and np.array_equal(decoded_sampler, stereo[::-1])
+                            and sampler_result.get("sampler_loops_reversed") == 2
+                            and sampler_result.get("sampler_loops_unchanged") == 1
+                            and sampler_result.get("sampler_chunks_unchanged") == 0,
+                            "Sampler loop positions or unchanged-loop receipt are incorrect", sampler_result)
+                        extra_sampler_data = struct.pack("<9I", 0, 0, 22675, 60, 0, 0, 0, 1, 3)
+                        extra_sampler_data += struct.pack("<6I", *sampler_loops[0]) + b"ext"
+                        extra_chunks = chunk(b"fmt ", fmt) + chunk(b"data", payload) + chunk(b"smpl", extra_sampler_data)
+                        extra_path = ROOT / "output" / check.output("reverse-sampler-extra", ".wav")
+                        extra_path.write_bytes(b"RIFF" + struct.pack("<I", len(extra_chunks) + 4) + b"WAVE" + extra_chunks)
+                        extra_result = await check.audio(identifier, "process_audio", action="reverse", path=str(extra_path),
+                                                         output_name=check.output("reversed-sampler-extra", ".wav"), expected_native=False)
+                        expected_extra_chunks = chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload) + chunk(b"smpl", extra_sampler_data)
+                        expected_extra_file = b"RIFF" + struct.pack("<I", len(expected_extra_chunks) + 4) + b"WAVE" + expected_extra_chunks
+                        require(Path(extra_result["path"]).read_bytes() == expected_extra_file
+                            and extra_result.get("sampler_loops_reversed") == 0
+                            and extra_result.get("sampler_loops_unchanged") == 1
+                            and extra_result.get("sampler_chunks_unchanged") == 1,
+                            "Sampler-specific metadata or its unchanged-loop receipt changed", extra_result)
+                        cue_points = [(101, 0, b"data", 0, 0, 0), (102, 1, b"data", 0, 0, 1),
+                                      (103, 1, b"data", 0, 0, 2)]
+                        cue_data = struct.pack("<I", len(cue_points)) + b"".join(
+                            struct.pack("<II4sIII", *point) for point in cue_points)
+                        cue_chunks = chunk(b"fmt ", fmt) + chunk(b"data", payload) + chunk(b"cue ", cue_data)
+                        cue_path = ROOT / "output" / check.output("reverse-cue", ".wav")
+                        cue_path.write_bytes(b"RIFF" + struct.pack("<I", len(cue_chunks) + 4) + b"WAVE" + cue_chunks)
+                        cue_original = cue_path.read_bytes()
+                        cue_result = await check.audio(identifier, "process_audio", action="reverse", path=str(cue_path),
+                                                       output_name=check.output("reversed-cue", ".wav"), expected_native=False)
+                        expected_points = [(101, 3, b"data", 0, 0, 3), (102, 2, b"data", 0, 0, 2), cue_points[2]]
+                        expected_cue_data = struct.pack("<I", len(expected_points)) + b"".join(
+                            struct.pack("<II4sIII", *point) for point in expected_points)
+                        expected_cue_chunks = chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload) + chunk(b"cue ", expected_cue_data)
+                        expected_cue_file = b"RIFF" + struct.pack("<I", len(expected_cue_chunks) + 4) + b"WAVE" + expected_cue_chunks
+                        require(Path(cue_result["path"]).read_bytes() == expected_cue_file and cue_path.read_bytes() == cue_original
+                            and cue_result.get("cue_points_reversed") == 2 and cue_result.get("cue_points_unchanged") == 1
+                            and cue_result.get("cue_chunks_unchanged") == 0,
+                            "Simple cue positions or unchanged-point receipt are incorrect", cue_result)
+                        playlist_data = struct.pack("<IIII", 1, cue_points[0][0], 2, 0)
+                        playlist_chunks = cue_chunks + chunk(b"plst", playlist_data)
+                        playlist_path = ROOT / "output" / check.output("reverse-cue-playlist", ".wav")
+                        playlist_path.write_bytes(b"RIFF" + struct.pack("<I", len(playlist_chunks) + 4) + b"WAVE" + playlist_chunks)
+                        playlist_result = await check.audio(identifier, "process_audio", action="reverse", path=str(playlist_path),
+                                                            output_name=check.output("reversed-cue-playlist", ".wav"), expected_native=False)
+                        expected_playlist_chunks = (chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload)
+                                                    + chunk(b"cue ", cue_data) + chunk(b"plst", playlist_data))
+                        expected_playlist_file = b"RIFF" + struct.pack("<I", len(expected_playlist_chunks) + 4) + b"WAVE" + expected_playlist_chunks
+                        require(Path(playlist_result["path"]).read_bytes() == expected_playlist_file
+                            and playlist_result.get("cue_points_reversed") == 0
+                            and playlist_result.get("cue_points_unchanged") == len(cue_points)
+                            and playlist_result.get("cue_chunks_unchanged") == 1,
+                            "Playlist-linked cue metadata or its unchanged-point receipt changed", playlist_result)
+                        associated_data = (b"adtl" + chunk(b"labl", struct.pack("<I", cue_points[0][0]) + b"cue\x00")
+                                           + chunk(b"note", struct.pack("<I", cue_points[1][0]) + b"memo\x00"))
+                        labelled_chunks = cue_chunks + chunk(b"LIST", associated_data)
+                        labelled_path = ROOT / "output" / check.output("reverse-cue-labelled", ".wav")
+                        labelled_path.write_bytes(b"RIFF" + struct.pack("<I", len(labelled_chunks) + 4) + b"WAVE" + labelled_chunks)
+                        labelled_result = await check.audio(identifier, "process_audio", action="reverse", path=str(labelled_path),
+                                                            output_name=check.output("reversed-cue-labelled", ".wav"), expected_native=False)
+                        expected_labelled_chunks = (chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload)
+                                                    + chunk(b"cue ", expected_cue_data) + chunk(b"LIST", associated_data))
+                        expected_labelled_file = b"RIFF" + struct.pack("<I", len(expected_labelled_chunks) + 4) + b"WAVE" + expected_labelled_chunks
+                        require(Path(labelled_result["path"]).read_bytes() == expected_labelled_file
+                            and labelled_result.get("cue_points_reversed") == 2
+                            and labelled_result.get("cue_points_unchanged") == 1
+                            and labelled_result.get("cue_chunks_unchanged") == 0,
+                            "Labelled cue positions or unchanged-point receipt are incorrect", labelled_result)
+                        region_data = b"adtl" + chunk(b"ltxt", struct.pack("<II4sHHHH", cue_points[0][0], 2, b"rgn ", 0, 0, 0, 0) + b"region\x00")
+                        region_chunks = cue_chunks + chunk(b"LIST", region_data)
+                        region_path = ROOT / "output" / check.output("reverse-cue-region", ".wav")
+                        region_path.write_bytes(b"RIFF" + struct.pack("<I", len(region_chunks) + 4) + b"WAVE" + region_chunks)
+                        region_result = await check.audio(identifier, "process_audio", action="reverse", path=str(region_path),
+                                                          output_name=check.output("reversed-cue-region", ".wav"), expected_native=False)
+                        expected_region_points = [(101, 2, b"data", 0, 0, 2), expected_points[1], cue_points[2]]
+                        expected_region_cues = struct.pack("<I", len(expected_region_points)) + b"".join(
+                            struct.pack("<II4sIII", *point) for point in expected_region_points)
+                        expected_region_chunks = (chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload)
+                                                  + chunk(b"cue ", expected_region_cues) + chunk(b"LIST", region_data))
+                        expected_region_file = b"RIFF" + struct.pack("<I", len(expected_region_chunks) + 4) + b"WAVE" + expected_region_chunks
+                        require(Path(region_result["path"]).read_bytes() == expected_region_file
+                            and region_result.get("cue_points_reversed") == 2
+                            and region_result.get("cue_points_unchanged") == 1
+                            and region_result.get("cue_chunks_unchanged") == 0,
+                            "Region cue start was not mapped using its sample length", region_result)
+                        for label, lengths in (("conflict", [2, 3]), ("out-of-bounds", [5]), ("zero", [0])):
+                            ambiguous_regions = b"adtl" + b"".join(
+                                chunk(b"ltxt", struct.pack("<II4sHHHH", cue_points[0][0], length,
+                                                           b"rgn ", 0, 0, 0, 0) + b"region\x00") for length in lengths)
+                            ambiguous_chunks = cue_chunks + chunk(b"LIST", ambiguous_regions)
+                            ambiguous_path = ROOT / "output" / check.output("reverse-cue-" + label, ".wav")
+                            ambiguous_path.write_bytes(b"RIFF" + struct.pack("<I", len(ambiguous_chunks) + 4) + b"WAVE" + ambiguous_chunks)
+                            ambiguous_result = await check.audio(identifier, "process_audio", action="reverse", path=str(ambiguous_path),
+                                                                 output_name=check.output("reversed-cue-" + label, ".wav"), expected_native=False)
+                            ambiguous_points = [cue_points[0], expected_points[1], cue_points[2]]
+                            ambiguous_cues = struct.pack("<I", len(ambiguous_points)) + b"".join(
+                                struct.pack("<II4sIII", *point) for point in ambiguous_points)
+                            expected_ambiguous_chunks = (chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload)
+                                                         + chunk(b"cue ", ambiguous_cues) + chunk(b"LIST", ambiguous_regions))
+                            expected_ambiguous_file = b"RIFF" + struct.pack("<I", len(expected_ambiguous_chunks) + 4) + b"WAVE" + expected_ambiguous_chunks
+                            require(Path(ambiguous_result["path"]).read_bytes() == expected_ambiguous_file
+                                and ambiguous_result.get("cue_points_reversed") == 1
+                                and ambiguous_result.get("cue_points_unchanged") == 2,
+                                "Ambiguous region cue was modified", {"context": label, "result": ambiguous_result})
+                        duplicate_points = [cue_points[0], (101, 1, b"data", 0, 0, 1), cue_points[1], cue_points[2]]
+                        duplicate_cues = struct.pack("<I", len(duplicate_points)) + b"".join(
+                            struct.pack("<II4sIII", *point) for point in duplicate_points)
+                        duplicate_chunks = chunk(b"fmt ", fmt) + chunk(b"data", payload) + chunk(b"cue ", duplicate_cues) + chunk(b"LIST", region_data)
+                        duplicate_path = ROOT / "output" / check.output("reverse-cue-duplicate-id", ".wav")
+                        duplicate_path.write_bytes(b"RIFF" + struct.pack("<I", len(duplicate_chunks) + 4) + b"WAVE" + duplicate_chunks)
+                        duplicate_result = await check.audio(identifier, "process_audio", action="reverse", path=str(duplicate_path),
+                                                             output_name=check.output("reversed-cue-duplicate-id", ".wav"), expected_native=False)
+                        expected_duplicate_points = [duplicate_points[0], duplicate_points[1], expected_points[1], cue_points[2]]
+                        expected_duplicate_cues = struct.pack("<I", len(expected_duplicate_points)) + b"".join(
+                            struct.pack("<II4sIII", *point) for point in expected_duplicate_points)
+                        expected_duplicate_chunks = (chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload)
+                                                     + chunk(b"cue ", expected_duplicate_cues) + chunk(b"LIST", region_data))
+                        expected_duplicate_file = b"RIFF" + struct.pack("<I", len(expected_duplicate_chunks) + 4) + b"WAVE" + expected_duplicate_chunks
+                        require(Path(duplicate_result["path"]).read_bytes() == expected_duplicate_file
+                            and duplicate_result.get("cue_points_reversed") == 1
+                            and duplicate_result.get("cue_points_unchanged") == 3,
+                            "Duplicate region cue identity was modified", duplicate_result)
+                        for label, associated in (("plain", b""), ("labelled", chunk(b"LIST", associated_data))):
+                            duplicate_chunks = chunk(b"fmt ", fmt) + chunk(b"data", payload) + chunk(b"cue ", duplicate_cues) + associated
+                            duplicate_path = ROOT / "output" / check.output("reverse-cue-duplicate-" + label, ".wav")
+                            duplicate_path.write_bytes(b"RIFF" + struct.pack("<I", len(duplicate_chunks) + 4) + b"WAVE" + duplicate_chunks)
+                            duplicate_result = await check.audio(identifier, "process_audio", action="reverse", path=str(duplicate_path),
+                                                                 output_name=check.output("reversed-cue-duplicate-" + label, ".wav"), expected_native=False)
+                            expected_chunks = chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload) + chunk(b"cue ", expected_duplicate_cues) + associated
+                            expected_file = b"RIFF" + struct.pack("<I", len(expected_chunks) + 4) + b"WAVE" + expected_chunks
+                            require(Path(duplicate_result["path"]).read_bytes() == expected_file
+                                and duplicate_result.get("cue_points_reversed") == 1
+                                and duplicate_result.get("cue_points_unchanged") == 3,
+                                "Duplicate cue identity was modified", {"context": label, "result": duplicate_result})
+                        first_cues = struct.pack("<I", 1) + struct.pack("<II4sIII", *duplicate_points[0])
+                        second_cues = struct.pack("<I", 3) + b"".join(struct.pack("<II4sIII", *point) for point in duplicate_points[1:])
+                        expected_second_cues = struct.pack("<I", 3) + b"".join(struct.pack("<II4sIII", *point) for point in expected_duplicate_points[1:])
+                        split_chunks = chunk(b"fmt ", fmt) + chunk(b"data", payload) + chunk(b"cue ", first_cues) + chunk(b"cue ", second_cues)
+                        split_path = ROOT / "output" / check.output("reverse-cue-duplicate-across-chunks", ".wav")
+                        split_path.write_bytes(b"RIFF" + struct.pack("<I", len(split_chunks) + 4) + b"WAVE" + split_chunks)
+                        split_result = await check.audio(identifier, "process_audio", action="reverse", path=str(split_path),
+                                                         output_name=check.output("reversed-cue-duplicate-across-chunks", ".wav"), expected_native=False)
+                        expected_split = (chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload)
+                                          + chunk(b"cue ", first_cues) + chunk(b"cue ", expected_second_cues))
+                        require(Path(split_result["path"]).read_bytes() == b"RIFF" + struct.pack("<I", len(expected_split) + 4) + b"WAVE" + expected_split
+                            and split_result.get("cue_points_reversed") == 1 and split_result.get("cue_points_unchanged") == 3,
+                            "Duplicate cue identity across chunks was modified", split_result)
+                        large_cues = struct.pack("<I", 65537) + b"".join(
+                            struct.pack("<II4sIII", point_id, 0, b"data", 0, 0, 0) for point_id in range(65537))
+                        large_chunks = chunk(b"fmt ", fmt) + chunk(b"data", payload) + chunk(b"cue ", large_cues)
+                        large_path = ROOT / "output" / check.output("reverse-cue-identity-limit", ".wav")
+                        large_path.write_bytes(b"RIFF" + struct.pack("<I", len(large_chunks) + 4) + b"WAVE" + large_chunks)
+                        large_result = await check.audio(identifier, "process_audio", action="reverse", path=str(large_path),
+                                                         output_name=check.output("reversed-cue-identity-limit", ".wav"), expected_native=False)
+                        expected_large = chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload) + chunk(b"cue ", large_cues)
+                        require(Path(large_result["path"]).read_bytes() == b"RIFF" + struct.pack("<I", len(expected_large) + 4) + b"WAVE" + expected_large
+                            and large_result.get("cue_points_reversed") == 0 and large_result.get("cue_points_unchanged") == 65537
+                            and large_result.get("cue_chunks_unchanged") == 1,
+                            "Cue identity limit did not preserve the metadata", large_result)
+                        invalid_label_data = b"adtl" + chunk(b"labl", struct.pack("<I", cue_points[0][0]) + b"unterminated")
+                        invalid_region_data = b"adtl" + chunk(b"ltxt", struct.pack("<II", cue_points[0][0], 2))
+                        cue_contexts = [
+                            ("invalid-label", cue_chunks + chunk(b"LIST", invalid_label_data),
+                             chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload) + chunk(b"cue ", cue_data)
+                             + chunk(b"LIST", invalid_label_data)),
+                            ("invalid-region", cue_chunks + chunk(b"LIST", invalid_region_data),
+                             chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload) + chunk(b"cue ", cue_data)
+                             + chunk(b"LIST", invalid_region_data)),
+                            ("sampler", cue_chunks + chunk(b"smpl", sampler_data),
+                             chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload) + chunk(b"cue ", cue_data)
+                             + chunk(b"smpl", expected_sampler_data)),
+                            ("multiple-data", chunk(b"fmt ", fmt) + chunk(b"data", payload[:8])
+                             + chunk(b"cue ", cue_data) + chunk(b"data", payload[8:]),
+                             chunk(b"fmt ", fmt) + chunk(b"data", reversed_payload) + chunk(b"cue ", cue_data)),
+                        ]
+                        for label, input_chunks, expected_chunks in cue_contexts:
+                            context_path = ROOT / "output" / check.output("reverse-cue-" + label, ".wav")
+                            context_path.write_bytes(b"RIFF" + struct.pack("<I", len(input_chunks) + 4) + b"WAVE" + input_chunks)
+                            context_result = await check.audio(identifier, "process_audio", action="reverse", path=str(context_path),
+                                                               output_name=check.output("reversed-cue-" + label, ".wav"), expected_native=False)
+                            expected_context_file = b"RIFF" + struct.pack("<I", len(expected_chunks) + 4) + b"WAVE" + expected_chunks
+                            require(Path(context_result["path"]).read_bytes() == expected_context_file
+                                and context_result.get("cue_points_reversed") == 0
+                                and context_result.get("cue_points_unchanged") == len(cue_points)
+                                and context_result.get("cue_chunks_unchanged") == 1,
+                                "Linked cue metadata or its unchanged-point receipt changed", {"context": label, "result": context_result})
+                        partial_chunks = chunk(b"fmt ", fmt) + chunk(b"data", payload[:2]) + chunk(b"data", payload[2:])
+                        partial_path = ROOT / "output" / check.output("reverse-partial-frame", ".wav")
+                        partial_path.write_bytes(b"RIFF" + struct.pack("<I", len(partial_chunks) + 4) + b"WAVE" + partial_chunks)
+                        await check.rejected("project_audio", "complete audio frames", session_id=identifier,
+                                     operation="process_audio", options={"action": "reverse", "path": str(partial_path),
+                                     "output_name": check.output("partial-frame-reverse", ".wav")})
+                        compressed_fmt = struct.pack("<HHIIHHHHI", 0xfffe, 2, 44100, 176400, 4, 16, 22, 16, 3)
+                        compressed_fmt += uuid.UUID("00000011-0000-0010-8000-00aa00389b71").bytes_le
+                        compressed_chunks = chunk(b"fmt ", compressed_fmt) + chunk(b"data", payload)
+                        compressed_path = ROOT / "output" / check.output("reverse-compressed", ".wav")
+                        compressed_path.write_bytes(b"RIFF" + struct.pack("<I", len(compressed_chunks) + 4) + b"WAVE" + compressed_chunks)
+                        await check.rejected("project_audio", "requires PCM or IEEE float", session_id=identifier,
+                                             operation="process_audio", options={"action": "reverse", "path": str(compressed_path),
+                                             "output_name": check.output("compressed-reverse", ".wav")})
                 elif action == "normalize":
                     require(samples.shape == before_pcm.shape, "Normalize changed sample count")
                     gain = float(np.sum(before_pcm * samples) / np.sum(before_pcm * before_pcm))
@@ -1639,6 +2041,32 @@ async def mixdown_master(check: Acceptance) -> None:
         overlap = min(len(decoded[0]), len(decoded[1]))
         require(not np.allclose(decoded[0][:overlap], decoded[1][:overlap], atol=2 / 32768, rtol=0),
             "Offset tracks unexpectedly produced identical stems")
+        if (await check.call("vocaloid_features"))["product"] == "VOCALOID7":
+            await check.edit(identifier, "track.update", track_index=first["track_index"], mute=True, solo=True)
+            await check.edit(identifier, "track.update", track_index=second["track_index"], mute=False)
+            await check.edit(identifier, "track.update", track_index=second["track_index"], solo_state="Defeat")
+            defeat_mix = await check.audio(identifier, "mixdown", output_name=check.output("solo-defeat", ".wav"), **options)
+            _, defeat_pcm = read_audio(defeat_mix["path"])
+            require(defeat_pcm.shape == master_pcm.shape
+                    and float(np.sqrt(np.mean((defeat_pcm - master_pcm) ** 2))) < 0.01,
+                    "Solo Defeat did not include the other native track")
+            await check.edit(identifier, "track.update", track_index=second["track_index"], solo_state="Off")
+            await check.edit(identifier, "track.update", track_index=second["track_index"], mute=True)
+            solo_mix = await check.audio(identifier, "mixdown", output_name=check.output("stored-mute-solo", ".wav"), **options)
+            _, solo_pcm = read_audio(solo_mix["path"])
+            expected_solo = np.zeros_like(solo_pcm)
+            overlap = min(len(expected_solo), len(decoded[0]))
+            expected_solo[:overlap] = decoded[0][:overlap]
+            require(float(np.sqrt(np.mean((solo_pcm - expected_solo) ** 2))) < 0.01,
+                "Soloed track with stored mute did not match its native stem")
+            await check.edit(identifier, "track.update", track_index=first["track_index"], mute=False, solo=False)
+            muted_mix = await check.audio(identifier, "mixdown", output_name=check.output("stored-mute-other", ".wav"), **options)
+            _, muted_pcm = read_audio(muted_mix["path"])
+            expected_muted = np.zeros_like(muted_pcm)
+            overlap = min(len(expected_muted), len(decoded[0]))
+            expected_muted[:overlap] = decoded[0][:overlap]
+            require(float(np.sqrt(np.mean((muted_pcm - expected_muted) ** 2))) < 0.01,
+                "Stored mute was not applied after the other solo ended")
         await check.rejected("project_audio", "exist|overwrite", session_id=identifier, operation="mixdown_stems",
                              options={**options, "output_prefix": prefix, "track_indices": selected})
         check.evidence("master_stems", {"master": actual, "sum_rms_error": error, "input_frames": len(source_pcm)})
@@ -1798,7 +2226,7 @@ async def library_resets(check: Acceptance) -> None:
         require(reset["affected_length"] > 0 and first["phonemes"] == reset["notes"][0]["phonemes"], "Phoneme reset readback disagrees")
 
 
-@feature("library.guards", "library", "project_library", "score_compose")
+@feature("library.guards", "library", "project_library", "score_compose", "vocaloid_features", "project_edit", "project_status")
 async def library_guards(check: Acceptance) -> None:
     await check.rejected("project_library", "session_id|required", operation="lyrics_apply", options={"lyrics": "a"})
     await check.rejected("project_library", "language_id|language|JPN", operation="lyrics_can_convert",
@@ -1807,29 +2235,273 @@ async def library_guards(check: Acceptance) -> None:
         before = await check.edit(identifier, "note.list", track_index=0, part_index=0)
         await check.rejected("project_library", "note_index|found", session_id=identifier, operation="lyrics_apply",
                              options={"track_index": 0, "part_index": 0, "note_index": 99999, "lyrics": "a"})
+        if (await check.call("vocaloid_features"))["product"] == "VOCALOID7":
+            history = await check.edit(identifier, "history.status")
+            status = await check.call("project_status", session_id=identifier)
+            operations = ("media_list", "media_get", "media_capture", "media_import", "media_update", "media_delete", "media_recovery_list", "media_recovery_resolve")
+            for operation in operations:
+                await check.rejected("project_library", "VOCALOID7 removed MediaManager", session_id=identifier, operation=operation, options={"track_index": 0, "part_index": 0})
+            require(await check.edit(identifier, "history.status") == history
+                and (await check.call("project_status", session_id=identifier))["dirty"] == status["dirty"],
+                "Unsupported V7 media operation changed history or dirty state")
         require(await check.edit(identifier, "note.list", track_index=0, part_index=0) == before, "Rejected library edit mutated notes")
 
 
-@feature("library.dvqm_ai_persistence", "library", "project_library", "score_compose", "project_save", "project_open")
-async def library_dvqm_ai_persistence(check: Acceptance) -> None:
+@feature("library.dvqm_plain_probe", "library", "project_create", "project_edit", "project_library", "project_save", "project_open", "voicebanks", "vocaloid_features", "vocaloid_operations", "project_members", "project_call")
+async def library_dvqm_plain_probe(check: Acceptance) -> None:
     catalog = await check.library("dvqm_catalog", is_attack=True, limit=1)
     if not catalog["entries"]:
         raise Blocked("An installed native Attack preset is required")
     entry = catalog["entries"][0]
-    seed = await check.call("score_compose", output_name=check.output("dvqm-ai-seed"), title="AI DVQM acceptance",
-                            bpm=120, notes=[{"start": 0, "duration": 1, "pitch": 60,
-                                             "lyric": "\u3042", "phoneme": "a", "lang_id": 0}])
-    identifier = seed["native_session"]["session_id"]
-    selected = {"track_index": 0, "part_index": 0, "note_index": 0, "is_attack": True}
-    assigned = await check.library("dvqm_set", identifier, **selected, db_id=entry["db_id"], name_id=entry["name_id"])
-    _, path = await check.save(identifier, "dvqm-ai")
-    reopened = (await check.call("project_open", path=str(path)))["session_id"]
-    require(await check.library("dvqm_get", reopened, **selected) == assigned, "AI DVQM did not survive native VPR save/reopen")
-    await check.close(reopened)
+    product = (await check.call("vocaloid_features"))["product"]
+    voices = (await check.call("voicebanks"))["voices"]
+    voice = next(item for item in voices if item["name"] == "asa" and item["available_in_sequence"])
+    async with check.project() as identifier:
+        await check.edit(identifier, "track.create", type="MidiAi", name="DVQM probe")
+        await check.edit(identifier, "part.create", track_index=0, start_tick=0, duration_tick=1920)
+        scope = {"track_index": 0, "part_index": 0}
+        voice_scope = {**scope, **({"scope": "track"} if product == "VOCALOID7" else {})}
+        await check.edit(identifier, "voice.set", **voice_scope, ai_voice_bank_id=voice["comp_id"])
+        await check.edit(identifier, "note.add", **scope, start_tick=0, duration_tick=480,
+                         number=60, lyric="\u3042", phonemes="a", lang_id=0)
+        target = {**scope, "note_index": 0, "is_attack": True}
+        catalog = await check.call("vocaloid_operations", domain="library", operation="dvqm_set")
+        require(catalog["domains"]["library"]["operations"][0]["track_support"]["MidiAi"] == "unsupported",
+            "AI DVQM limitation is absent from operation discovery", catalog)
+        skill = await check.library("note_skill_get", identifier, **scope, note_index=0)
+        history = await check.edit(identifier, "history.status")
+        await check.rejected("project_library", "cannot preserve.*undo", session_id=identifier,
+                     operation="dvqm_set", options={**target, "db_id": entry["db_id"], "name_id": entry["name_id"]})
+        require(await check.library("note_skill_get", identifier, **scope, note_index=0) == skill
+            and await check.edit(identifier, "history.status") == history,
+            "Rejected Attack assignment changed note skill or history")
+        require((await check.library("dvqm_clear", identifier, **target))["is_empty"],
+            "Clearing an empty Attack should be a no-op")
+        track_ref = (await check.method(identifier, "GetTrack", [0]))["value"]["$ref"]
+        part_ref = (await check.method(identifier, "GetPart", [0], track_ref))["value"]["$ref"]
+        note_ref = (await check.method(identifier, "GetNote", [0], part_ref))["value"]["$ref"]
+        dvqm_ref = (await check.method(identifier, "GetDvqm", [True], note_ref))["value"]["$ref"]
+        members = await check.call("project_members", session_id=identifier, ref=dvqm_ref)
+        arguments = {"Set": [entry["db_id"], entry["name_id"], False], "Reset": [],
+                     "SetDBID": [entry["db_id"]], "SetDBIDByCompID": [entry["component_id"]],
+                     "SetNameID": [entry["name_id"]], "SetSpeed": [50], "SetTopFactor": [1.0],
+                     "SetProtect": [True], "SetNameIDByLevelNames": [entry["component_id"], entry["level_names"]]}
+        exposed = [item for item in members["methods"] if item["member_id"].split("(", 1)[0] in arguments]
+        require({item["member_id"].split("(", 1)[0] for item in exposed} == set(arguments),
+                "DVQM writable method inventory changed", exposed)
+        for item in exposed:
+            name = item["member_id"].split("(", 1)[0]
+            await check.rejected("project_call", "AI Attack/Release.*cannot preserve", session_id=identifier,
+                                 ref=dvqm_ref, member_id=item["member_id"], args=arguments[name])
+        require(await check.library("note_skill_get", identifier, **scope, note_index=0) == skill
+            and await check.edit(identifier, "history.status") == history,
+            "Rejected raw DVQM mutations changed note skill or history")
 
 
-@feature("library.dvqm_guard", "library", "project_library", "score_compose")
+@feature("library.dvqm_ai_persistence", "library", "project_library", "project_edit", "project_clone", "project_status", "project_inspect", "project_render_part", "score_compose", "score_patch", "project_save", "project_open", "vocaloid_features", "vocaloid_operations")
+async def library_dvqm_ai_persistence(check: Acceptance) -> None:
+    import numpy as np
+    catalogs = {is_attack: await check.library("dvqm_catalog", is_attack=is_attack, limit=1)
+                for is_attack in (True, False)}
+    if any(not catalog["entries"] for catalog in catalogs.values()):
+        raise Blocked("Installed Attack and Release presets are required")
+    async with check.project(score=True) as identifier:
+        target = {"track_index": 0, "part_index": 0, "note_index": 0}
+        feature = (await check.call("vocaloid_features", feature="ai_dvqm_metadata"))["features"]["ai_dvqm_metadata"]
+        operation = (await check.call("vocaloid_operations", domain="library", operation="dvqm_set"))["domains"]["library"]["operations"][0]
+        inspected = await check.call("project_inspect", session_id=identifier, feature="ai_dvqm_metadata", **target)
+        require(feature["support"] == "bridge_contract" and "ai_dvqm_metadata" in operation["features"]
+            and "metadata only" in operation["storage_support"]["bridge_metadata"]
+            and inspected["readbacks"][0]["result"]["native"] is False,
+            "AI bridge metadata feature discovery or binding is incorrect", inspected)
+        skill = await check.library("note_skill_get", identifier, **target)
+        before_audio = await check.call("project_render_part", session_id=identifier, track_index=0, part_index=0,
+                        output_name=check.output("ai-dvqm-before", ".wav"))
+        before_info, before_samples = read_audio(before_audio["path"])
+        selected = {}
+        for is_attack in (True, False):
+            entry = catalogs[is_attack]["entries"][0]
+            options = {**target, "is_attack": is_attack, "storage": "bridge_metadata"}
+            before = await check.library("dvqm_get", identifier, expected_native=False, **options)
+            require(before["is_empty"] and before["storage"] == "bridge_metadata",
+                    "AI metadata fixture is not empty", before)
+            selected[is_attack] = await check.library("dvqm_set", identifier, expected_native=False, **options,
+                db_id=entry["db_id"], name_id=entry["name_id"], speed=77 if is_attack else 57,
+                top_factor=0.75, is_protected=is_attack)
+            value = selected[is_attack]
+            require(not value["is_empty"] and value["storage"] == "bridge_metadata"
+                    and not value["applicable_to_current_part"] and value["component_id"] == entry["component_id"]
+                    and value["level_names"] == entry["level_names"] and value["speed"] == (77 if is_attack else 57)
+                    and value["top_factor"] == 0.75 and value["is_protected"] is is_attack,
+                    "AI bridge metadata selection differs from requested values", value)
+            require((await check.library("dvqm_get", identifier, **target, is_attack=is_attack))["is_empty"]
+                    and await check.library("note_skill_get", identifier, **target) == skill,
+                    "AI bridge metadata changed native DVQM or Singing Skill")
+        await check.edit(identifier, "undo")
+        require((await check.library("dvqm_get", identifier, expected_native=False, **target,
+                                     is_attack=False, storage="bridge_metadata"))["is_empty"]
+                and await check.library("dvqm_get", identifier, expected_native=False, **target,
+                                        is_attack=True, storage="bridge_metadata") == selected[True]
+                and await check.library("note_skill_get", identifier, **target) == skill,
+                "Undo did not restore AI bridge metadata and Singing Skill")
+        await check.edit(identifier, "redo")
+        require(await check.library("dvqm_get", identifier, expected_native=False, **target,
+                                    is_attack=False, storage="bridge_metadata") == selected[False],
+                "Redo did not restore AI Release metadata")
+        updated_skill = await check.library("note_skill_set", identifier, **target,
+                            pre_weight=0 if skill["pre_weight"] else 1)
+        require(updated_skill != skill and await check.library("dvqm_get", identifier, expected_native=False,
+            **target, is_attack=True, storage="bridge_metadata") == selected[True],
+            "Native Singing Skill edit changed AI bridge metadata")
+        await check.edit(identifier, "undo")
+        require(await check.library("note_skill_get", identifier, **target) == skill
+            and await check.library("dvqm_get", identifier, expected_native=False, **target,
+                        is_attack=False, storage="bridge_metadata") == selected[False],
+            "Undo of native Singing Skill changed AI bridge metadata")
+        saved, path = await check.save(identifier, "ai-dvqm-metadata")
+        saved_note = saved["tracks"][0]["parts"][0]["notes"][0]
+        require("singingSkill" in saved_note and "vocaloid_bridge_ai_dvqm_v1" in saved_note,
+                "VPR did not preserve both native skill and bridge metadata", saved_note)
+        after_audio = await check.call("project_render_part", session_id=identifier, track_index=0, part_index=0,
+                           output_name=check.output("ai-dvqm-after", ".wav"))
+        after_info, after_samples = read_audio(after_audio["path"])
+        require(before_audio["native"] and after_audio["native"] and before_info["sample_rate"] == after_info["sample_rate"]
+            and np.array_equal(before_samples, after_samples),
+            "AI bridge metadata changed native synthesized audio")
+        before_repeat = await check.edit(identifier, "history.status")
+        attack_entry = catalogs[True]["entries"][0]
+        repeated = await check.library("dvqm_set", identifier, expected_native=False, **target,
+            is_attack=True, storage="bridge_metadata", db_id=attack_entry["db_id"], name_id=attack_entry["name_id"],
+            speed=77, top_factor=0.75, is_protected=True)
+        require(repeated == selected[True] and await check.edit(identifier, "history.status") == before_repeat
+            and not (await check.call("project_status", session_id=identifier))["dirty"],
+            "Repeated AI bridge metadata assignment changed history or dirty state")
+        clone = (await check.call("project_clone", session_id=identifier))["session_id"]
+        reopened = (await check.call("project_open", path=str(path)))["session_id"]
+        try:
+            for session in (clone, reopened):
+                require(await check.library("note_skill_get", session, **target) == skill,
+                        "AI metadata reload changed native Singing Skill")
+                for is_attack in (True, False):
+                    require(await check.library("dvqm_get", session, expected_native=False, **target,
+                                                is_attack=is_attack, storage="bridge_metadata") == selected[is_attack],
+                            "AI bridge metadata did not survive clone or reopen")
+                if session != clone:
+                    continue
+                frozen = await check.edit(clone, "track.freeze", track_index=0)
+                frozen_status = await check.call("project_status", session_id=clone)
+                frozen_history = await check.edit(clone, "history.status")
+                await check.rejected("project_library", "Unfreeze", session_id=clone, operation="dvqm_clear",
+                         options={**target, "is_attack": True, "storage": "bridge_metadata"})
+                empty_target = {**target, "note_index": 1, "is_attack": True, "storage": "bridge_metadata"}
+                empty_before = await check.library("dvqm_get", clone, expected_native=False, **empty_target)
+                empty_after = await check.library("dvqm_clear", clone, expected_native=False, **empty_target)
+                require(frozen["frozen"] and empty_before == empty_after and empty_after["is_empty"]
+                    and (await check.call("project_status", session_id=clone))["dirty"] == frozen_status["dirty"]
+                    and await check.edit(clone, "history.status") == frozen_history
+                    and await check.library("dvqm_get", clone, expected_native=False, **target,
+                                is_attack=True, storage="bridge_metadata") == selected[True],
+                    "Frozen AI bridge metadata changed or rejected an empty clear")
+                await check.edit(clone, "track.unfreeze", track_index=0)
+                duplicated = await check.edit(clone, "note.duplicate", **target, start_tick=1440)
+                duplicate_target = {**target, "note_index": duplicated["note_index"]}
+                require(await check.library("dvqm_get", clone, expected_native=False, **duplicate_target,
+                                            is_attack=True, storage="bridge_metadata") == selected[True],
+                        "Duplicated note lost AI bridge metadata")
+                split = await check.edit(clone, "note.split", **target, split_tick=144)
+                split_indices = [note["note_index"] for note in split["notes"]]
+                for note_index in split_indices:
+                    require(await check.library("dvqm_get", clone, expected_native=False, **{**target, "note_index": note_index},
+                                                is_attack=True, storage="bridge_metadata") == selected[True],
+                            "Split note lost AI bridge metadata")
+                await check.edit(clone, "note.join", track_index=0, part_index=0, note_indices=split_indices)
+                await check.edit(clone, "undo")
+                for note_index in split_indices:
+                    require(await check.library("dvqm_get", clone, expected_native=False, **{**target, "note_index": note_index},
+                                                is_attack=True, storage="bridge_metadata") == selected[True],
+                            "Undo of note join lost AI bridge metadata")
+                await check.edit(clone, "redo")
+                _, structured_path = await check.save(clone, "ai-dvqm-structured")
+                structured = (await check.call("project_open", path=str(structured_path)))["session_id"]
+                try:
+                    notes = (await check.edit(structured, "note.list", track_index=0, part_index=0))["notes"]
+                    copied_index = next(note["note_index"] for note in notes if note["start_tick"] == 1440)
+                    for note_index in (0, copied_index):
+                        require(await check.library("dvqm_get", structured, expected_native=False, **{**target, "note_index": note_index},
+                                                    is_attack=True, storage="bridge_metadata") == selected[True],
+                                "Structured note edits lost AI bridge metadata after reopen")
+                finally:
+                    await check.close(structured)
+            await check.edit(reopened, "note.remove", **target)
+            await check.edit(reopened, "undo")
+            require(await check.library("dvqm_get", reopened, expected_native=False, **target,
+                                        is_attack=True, storage="bridge_metadata") == selected[True],
+                    "Undo of note removal did not restore bridge metadata")
+            cleared = await check.library("dvqm_clear", reopened, expected_native=False, **target,
+                                          is_attack=True, storage="bridge_metadata")
+            require(cleared["is_empty"] and await check.library("note_skill_get", reopened, **target) == skill,
+                    "Clearing AI bridge metadata changed native Singing Skill")
+            await check.edit(reopened, "undo")
+            require(await check.library("dvqm_get", reopened, expected_native=False, **target,
+                                        is_attack=True, storage="bridge_metadata") == selected[True],
+                    "Undo did not restore cleared AI bridge metadata")
+        finally:
+            await check.close(clone)
+            await check.close(reopened)
+        original = path.read_bytes()
+        metadata_path = "/tracks/0/parts/0/notes/0/vocaloid_bridge_ai_dvqm_v1"
+        extended = await check.call("score_patch", path=str(path), output_name=check.output("ai-dvqm-unknown"),
+                                    operations=[{"op": "add", "path": metadata_path + "/attack/future",
+                                                 "value": {"opaque": 17}}])
+        extended_session = (await check.call("project_open", path=extended["path"]))["session_id"]
+        try:
+            extended_history = await check.edit(extended_session, "history.status")
+            for operation in ("dvqm_set", "dvqm_clear"):
+                await check.rejected("project_library", "unknown fields", session_id=extended_session,
+                    operation=operation, options={**target, "is_attack": True, "storage": "bridge_metadata",
+                    "db_id": attack_entry["db_id"], "name_id": attack_entry["name_id"]})
+            retained, _ = await check.save(extended_session, "ai-dvqm-unknown-retained")
+            require(retained["tracks"][0]["parts"][0]["notes"][0]["vocaloid_bridge_ai_dvqm_v1"]["attack"]["future"]
+                    == {"opaque": 17} and await check.edit(extended_session, "history.status") == extended_history,
+                    "Rejected AI metadata edit lost unknown fields or changed history")
+        finally:
+            await check.close(extended_session)
+        invalid = await check.call("score_patch", path=str(path), output_name=check.output("ai-dvqm-invalid-version"),
+                                   operations=[{"op": "replace", "path": metadata_path + "/version", "value": 2}])
+        invalid_session = (await check.call("project_open", path=invalid["path"]))["session_id"]
+        try:
+            await check.rejected("project_library", "invalid version or structure", session_id=invalid_session,
+                                 operation="dvqm_get", options={**target, "storage": "bridge_metadata"})
+            require(await check.library("note_skill_get", invalid_session, **target) == skill
+                    and path.read_bytes() == original,
+                    "Invalid AI metadata changed native skill or the source file")
+        finally:
+            await check.close(invalid_session)
+
+
+@feature("library.note_skill_persistence", "library", "project_library", "project_edit", "score_compose", "project_save", "project_open")
+async def library_note_skill_persistence(check: Acceptance) -> None:
+    async with check.project(score=True) as identifier:
+        target = {"track_index": 0, "part_index": 0, "note_index": 0}
+        initial = await check.library("note_skill_get", identifier, **target)
+        value = 0 if initial["pre_weight"] != 0 else 1
+        changed = await check.library("note_skill_set", identifier, **target, pre_weight=value)
+        require(changed["pre_weight"] == value, "Native note skill update did not persist", changed)
+        await check.edit(identifier, "undo")
+        require(await check.library("note_skill_get", identifier, **target) == initial,
+                "Note skill undo did not restore the original state")
+        await check.edit(identifier, "redo")
+        _, path = await check.save(identifier, "note-skill")
+        reopened = (await check.call("project_open", path=str(path)))["session_id"]
+        require(await check.library("note_skill_get", reopened, **target) == changed,
+                "Native note skill did not survive save/reopen")
+        await check.close(reopened)
+        await check.library("note_skill_reset", identifier, **target)
+
+
+@feature("library.dvqm_guard", "library", "project_library", "score_compose", "vocaloid_features")
 async def library_dvqm_guard(check: Acceptance) -> None:
+    is_v7 = (await check.call("vocaloid_features"))["product"] == "VOCALOID7"
     seed = await check.call("score_compose", output_name=check.output("dvqm-seed"), title="DVQM acceptance",
                             bpm=120, notes=[{"start": 0, "duration": 1, "pitch": 60,
                                              "lyric": "\u3042", "phoneme": "a", "lang_id": 0}])
@@ -1838,7 +2510,7 @@ async def library_dvqm_guard(check: Acceptance) -> None:
         options = {"track_index": 0, "part_index": 0, "note_index": 0, "is_attack": is_attack}
         before = await check.library("dvqm_get", identifier, **options)
         require(before["is_empty"] is True, "DVQM test note is not initially empty", before)
-        await check.rejected("project_library", "database|not installed", session_id=identifier,
+        await check.rejected("project_library", "identity transaction|cannot preserve.*undo", session_id=identifier,
                              operation="dvqm_set", options={**options, "db_id": 2147483647, "name_id": 0})
         require(await check.library("dvqm_get", identifier, **options) == before,
                 "Rejected DVQM assignment changed the native note")
@@ -1857,10 +2529,18 @@ async def library_dvqm_roundtrip(check: Acceptance) -> None:
     voice_id = root.findtext(".//vsq:vVoice/vsq:id", namespaces=namespace)
     note = root.find(".//vsq:vsPart/vsq:note", namespace)
     require(voice_id and note is not None, "VSQX fixture lacks a voice or note")
+    is_v7 = (await check.call("vocaloid_features"))["product"] == "VOCALOID7"
+    installed = (await check.call("voicebanks"))["voices"]
+    available = [voice for voice in installed if voice["kind"] == "Dse" and voice["available_in_sequence"]]
+    check.evidence("classic_requirements", {"fixture_voice_id": voice_id, "available_dse": available,
+                                            "media_roundtrip": "unsupported on VOCALOID7; not exercised" if is_v7 else "required"})
+    if not any(voice["comp_id"] == voice_id for voice in available):
+        raise Blocked("missing_classic_bank: DVQM requires the fixture's installed available Dse voicebank " + voice_id + "; no replacement was selected")
     identifier = (await check.call("project_create", title="DVQM roundtrip", bpm=120))["session_id"]
     await check.edit(identifier, "track.create", type="Midi", name="DVQM source")
     await check.edit(identifier, "part.create", track_index=0, start_tick=0, duration_tick=1920)
-    await check.edit(identifier, "voice.set", track_index=0, part_index=0, voice_bank_id=voice_id)
+    await check.edit(identifier, "voice.set", track_index=0, part_index=0,
+                     scope="track" if is_v7 else "part", voice_bank_id=voice_id)
     await check.edit(identifier, "note.add", track_index=0, part_index=0, start_tick=0, duration_tick=480,
                      number=int(note.findtext("vsq:n", namespaces=namespace)),
                      lyric=note.findtext("vsq:y", namespaces=namespace), phonemes=note.findtext("vsq:p", namespaces=namespace), lang_id=1)
@@ -1880,14 +2560,17 @@ async def library_dvqm_roundtrip(check: Acceptance) -> None:
                 and assigned[is_attack]["top_factor"] == (0.75 if is_attack else 0.875)
                 and assigned[is_attack]["is_protected"] is is_attack,
                 "Native DVQM assignment did not preserve its database and parameters", assigned[is_attack])
-    captured = await check.library("media_capture", identifier, track_index=0, part_index=0, name="DVQM " + check.run_id)
-    clip = captured["clip"]
-    track = (await check.edit(identifier, "track.create", type="Midi", name="DVQM target"))["track_index"]
-    await check.library("media_import", identifier, clip_id=clip["clip_id"], track_index=track, position_tick=0)
-    destination = {"track_index": track, "part_index": 0, "note_index": 0}
+    clip = None
+    destination = {"track_index": 0, "part_index": 0, "note_index": 0}
+    if not is_v7:
+        captured = await check.library("media_capture", identifier, track_index=0, part_index=0, name="DVQM " + check.run_id)
+        clip = captured["clip"]
+        track = (await check.edit(identifier, "track.create", type="Midi", name="DVQM target"))["track_index"]
+        await check.library("media_import", identifier, clip_id=clip["clip_id"], track_index=track, position_tick=0)
+        destination["track_index"] = track
     for is_attack in (True, False):
         require(await check.library("dvqm_get", identifier, **destination, is_attack=is_attack) == assigned[is_attack],
-                "DVQM data changed during media roundtrip")
+                "DVQM data changed before save")
     _, path = await check.save(identifier, "dvqm-media")
     reopened = (await check.call("project_open", path=str(path)))["session_id"]
     for is_attack in (True, False):
@@ -1896,8 +2579,10 @@ async def library_dvqm_roundtrip(check: Acceptance) -> None:
     cleared = await check.library("dvqm_clear", reopened, **destination, is_attack=True)
     require(cleared["is_empty"] is True, "Nonempty native Attack selection was not cleared", cleared)
     await check.close(reopened)
-    await check.library("media_delete", identifier, clip_id=clip["clip_id"])
-    check.evidence("dvqm_media", {"clip_id": clip["clip_id"], "vpr": str(path), "selections": assigned})
+    if clip is not None:
+        await check.library("media_delete", identifier, clip_id=clip["clip_id"])
+    check.evidence("dvqm_media", {"clip_id": clip["clip_id"] if clip else None, "vpr": str(path), "selections": assigned,
+                                  "media_roundtrip": "unsupported on VOCALOID7; not exercised" if is_v7 else "verified"})
 
 
 @feature("library.dvqm_catalog", "library", "project_library")
@@ -1961,13 +2646,14 @@ async def library_languages(check: Acceptance) -> None:
     require(all(isinstance(entry["default_lyric"], str) and entry["default_lyric"] for entry in languages), "Language default lyrics are missing")
 
 
-@feature("library.styles", "library", "project_library", "project_save", "project_open", "score_compose")
+@feature("library.styles", "library", "project_library", "project_save", "project_open", "score_compose", "vocaloid_features")
 async def library_styles(check: Acceptance) -> None:
-    catalog = await check.library("style_list", query="")
+    is_v7 = (await check.call("vocaloid_features"))["product"] == "VOCALOID7"
+    catalog = await check.library("style_list", query="asa" if is_v7 else "")
     require(catalog["total"] == len(catalog["styles"]), "Native style count mismatch")
     if not catalog["styles"]:
         raise Blocked("No installed native styles; style_get/style_apply cannot be verified")
-    chosen = catalog["styles"][0]
+    chosen = next((style for style in catalog["styles"] if "default" in style["name"].lower()), catalog["styles"][0]) if is_v7 else catalog["styles"][0]
     details = await check.library("style_get", style_id=chosen["style_id"])
     require(details["style_id"] == chosen["style_id"] and details["midi_effect_count"] == len(details["midi_effects"]), "Style detail mismatch")
     path = Path(details["path"])
@@ -1975,13 +2661,15 @@ async def library_styles(check: Acceptance) -> None:
     filtered = await check.library("style_list", query=chosen["name"])
     require(any(style["style_id"] == chosen["style_id"] for style in filtered["styles"]), "Style search lost the selected preset")
     async with check.project(score=True) as identifier:
-        applied = await check.library("style_apply", identifier, track_index=0, part_index=0,
+        applied = await check.library("style_apply", identifier, track_index=0, part_index=0, **({"scope": "track"} if is_v7 else {}),
                                       style_id=chosen["style_id"], include_audio=False)
-        require(applied["style_id"] == chosen["style_id"] and applied["scope"] == "midi_only", "Native style application mismatch")
+        require(applied["style_id"] == chosen["style_id"] and
+            applied["content_scope" if is_v7 else "scope"] == "midi_only", "Native style application mismatch")
         _, saved = await check.save(identifier, "style")
         reopened = (await check.call("project_open", path=str(saved)))["session_id"]
         sequence, _ = read_vpr(saved)
-        require(contains_atom(sequence["tracks"][0]["parts"][0], chosen["style_id"]), "Applied style identity did not persist in the native VPR")
+        owner = sequence["tracks"][0] if is_v7 else sequence["tracks"][0]["parts"][0]
+        require(contains_atom(owner, chosen["style_id"]), "Applied style identity did not persist in the native VPR")
         await check.close(reopened)
     if original is not None:
         require(path.read_bytes() == original, "Applying style modified the user's preset file")
@@ -2013,61 +2701,167 @@ async def library_media_catalog(check: Acceptance) -> None:
             require(source.read_bytes() == original, "Rejected external-media edit changed its file")
 
 
-@feature("library.style_audio", "library", "project_library", "project_audio", "project_save", "project_open", "score_compose")
+@feature("library.style_audio", "library", "project_library", "project_audio", "project_edit", "project_status", "project_save", "project_open", "score_compose", "vocaloid_features")
 async def library_style_audio(check: Acceptance) -> None:
-    catalog = await check.library("style_list", query="")
-    chosen = next((style for style in catalog["styles"] if style["audio_effect_count"] > 0), None)
+    is_v7 = (await check.call("vocaloid_features"))["product"] == "VOCALOID7"
+    catalog = await check.library("style_list", query="asa" if is_v7 else "")
+    candidates = [style for style in catalog["styles"] if style["audio_effect_count"] > 0]
+    chosen = next((style for style in candidates if style["name"] == "asa Warm Chorus"), candidates[0] if candidates else None)
     if chosen is None:
         raise Blocked("No installed style containing audio effects; full audio-style application cannot be verified")
     details = await check.library("style_get", style_id=chosen["style_id"])
     async with check.project(score=True) as identifier:
-        applied = await check.library("style_apply", identifier, track_index=0, part_index=0, style_id=chosen["style_id"], include_audio=True)
-        require(applied["scope"] == "complete" and applied["audio_effects_applied"] is True,
+        metadata = [await check.audio(identifier, "effects", scope="catalog", effect_id=effect["id"])
+                    for effect in details["audio_effects"]]
+        check.evidence("style_effect_metadata", metadata)
+        applied = await check.library("style_apply", identifier, track_index=0, part_index=0,
+                                      **({"scope": "track"} if is_v7 else {}), style_id=chosen["style_id"], include_audio=True)
+        require(applied["content_scope" if is_v7 else "scope"] == "complete" and applied["audio_effects_applied"] is True,
                 "Full style request returned only a partial application", applied)
-        chain = await check.audio(identifier, "effects", scope="part", track_index=0, part_index=0)
+        effect_scope = {"scope": "track" if is_v7 else "part", "track_index": 0, "part_index": 0}
+        before_inspection, _ = await check.save(identifier, "style-before-inspection")
+        before_status = await check.call("project_status", session_id=identifier)
+        before_history = await check.edit(identifier, "history.status")
+        chain = await check.audio(identifier, "effects", **effect_scope)
+        after_status = await check.call("project_status", session_id=identifier)
+        after_inspection, _ = await check.save(identifier, "style-after-inspection")
+        require(before_inspection == after_inspection and before_status["dirty"] == after_status["dirty"]
+            and before_history == await check.edit(identifier, "history.status"),
+            "Effect inspection changed project data, dirty state or history")
         require(len(chain["effects"]) == details["audio_effect_count"], "Full style omitted audio effects")
         require([entry["effect_id"] for entry in chain["effects"]] == [entry["id"] for entry in details["audio_effects"]],
                 "Full style audio effect identities/order differ from the preset")
+        if chosen["name"] == "asa Warm Chorus":
+            chorus = next(effect for effect in chain["effects"] if effect["metadata"]["name"] == "Chorus")
+            values = {item["name"]: item["value"] for item in chorus["parameters"]}
+            parameter_metadata = {item["name"]: item for item in chorus["metadata"]["parameters"]}
+            require(values["Type"] == 0.5 and values["Delay Offset"] == 0
+                    and all(abs(parameter_metadata[name]["normalized"] - value) < 1e-6
+                            for name, value in values.items() if name in parameter_metadata)
+                    and parameter_metadata["Delay Offset"]["plain_min"] == parameter_metadata["Delay Offset"]["plain_max"] == 0,
+                    "Chorus metadata differs from the saved mode or parameters", chorus)
+            await check.audio(identifier, "set_effect", **effect_scope, action="set", slot=chorus["slot"],
+                              parameters={"Dry/Wet": 0.25})
+            edited_chain = await check.audio(identifier, "effects", **effect_scope)
+            edited = {item["name"]: item["value"] for item in edited_chain["effects"][chorus["slot"]]["parameters"]}
+            require(abs(edited["Dry/Wet"] - 0.25) <= 0.01 and all(edited[name] == value for name, value in values.items() if name != "Dry/Wet"),
+                    "A single effect parameter update changed unrelated values", {"before": values, "after": edited})
+            await check.edit(identifier, "undo")
+            chain = await check.audio(identifier, "effects", **effect_scope)
+            restored_values = {item["name"]: item["value"] for item in chain["effects"][chorus["slot"]]["parameters"]}
+            require(restored_values == values, "Effect parameter undo did not restore the style", restored_values)
         _, saved = await check.save(identifier, "style-audio")
         reopened = (await check.call("project_open", path=str(saved)))["session_id"]
-        persisted = await check.audio(reopened, "effects", scope="part", track_index=0, part_index=0)
+        persisted = await check.audio(reopened, "effects", **effect_scope)
         require([(entry["effect_id"], entry["parameters"]) for entry in persisted["effects"]]
                 == [(entry["effect_id"], entry["parameters"]) for entry in chain["effects"]], "Style audio parameters did not survive save/reopen")
         await check.close(reopened)
 
 
-@feature("library.media_ai_dvqm", "library", "project_library", "project_edit", "score_compose", "project_save", "project_open")
+@feature("library.style_mode_presets", "library", "project_library", "project_audio", "project_edit", "score_compose", "project_save", "project_open", "voicebanks", "vocaloid_features")
+async def library_style_mode_presets(check: Acceptance) -> None:
+    if (await check.call("vocaloid_features"))["product"] != "VOCALOID7":
+        raise Skipped("The selected mode presets are VOCALOID7 voicebank styles")
+    voices = (await check.call("voicebanks"))["voices"]
+    voice = next((item for item in voices if item["name"] == "asa" and str(item["version"]).startswith("7.")
+                  and item["available_in_sequence"]), None)
+    if voice is None:
+        raise Blocked("An available VOCALOID7 asa voicebank is required")
+    styles = (await check.library("style_list", query="asa"))["styles"]
+    expected = {"asa Retro (V7)": "Phaser", "asa Lead Vocal (V7)": "Reverb"}
+    for style_name, effect_name in expected.items():
+        style = next((item for item in styles if item["name"] == style_name), None)
+        if style is None:
+            raise Blocked("The installed voicebank does not contain " + style_name)
+        details = await check.library("style_get", style_id=style["style_id"])
+        async with check.project(score=True) as identifier:
+            await check.edit(identifier, "voice.set", track_index=0, scope="track", ai_voice_bank_id=voice["comp_id"])
+            before = await check.audio(identifier, "effects", scope="track", track_index=0)
+            await check.library("style_apply", identifier, track_index=0, scope="track",
+                                style_id=style["style_id"], include_audio=True)
+            chain = await check.audio(identifier, "effects", scope="track", track_index=0)
+            effect = next(item for item in chain["effects"] if item["metadata"]["name"] == effect_name)
+            source = next(item for item in details["audio_effects"] if item["id"] == effect["effect_id"])
+            plain = next(item["value"] for item in source["parameters"] if item["name"] == "Type")
+            mode = next(item for item in effect["metadata"]["parameters"] if item["name"] == "Type")
+            expected_value = (plain - mode["plain_min"]) / (mode["plain_max"] - mode["plain_min"])
+            require(abs(mode["normalized"] - expected_value) < 1e-6, "Style effect mode was not applied", mode)
+            _, path = await check.save(identifier, "style-mode")
+            reopened = (await check.call("project_open", path=str(path)))["session_id"]
+            try:
+                restored = await check.audio(reopened, "effects", scope="track", track_index=0)
+                require([(item["effect_id"], item["parameters"]) for item in restored["effects"]]
+                        == [(item["effect_id"], item["parameters"]) for item in chain["effects"]],
+                        "Style mode effect chain did not survive reopening")
+            finally:
+                await check.close(reopened)
+            await check.edit(identifier, "undo")
+            undone = await check.audio(identifier, "effects", scope="track", track_index=0)
+            require([(item["effect_id"], item["parameters"]) for item in undone["effects"]]
+                    == [(item["effect_id"], item["parameters"]) for item in before["effects"]],
+                    "Style mode undo did not restore the previous effect chain")
+
+
+@feature("library.media_ai_dvqm", "library", "project_library", "project_edit", "score_compose", "project_save", "project_open", "vocaloid_features")
 async def library_media_ai_dvqm(check: Acceptance) -> None:
+    if (await check.call("vocaloid_features"))["product"] == "VOCALOID7":
+        raise Skipped("VOCALOID7 does not expose the native VMM media library")
     seed = await check.call("score_compose", output_name=check.output("ai-dvqm-seed"), title="AI DVQM media acceptance",
                             bpm=120, notes=[{"start": 0, "duration": 1, "pitch": 60,
                                              "lyric": "\u3042", "phoneme": "a", "lang_id": 0}])
     identifier = seed["native_session"]["session_id"]
-    assigned = {}
+    sequence, native = await check.save(identifier, "ai-dvqm-native")
+    await check.close(identifier)
+    _, members = read_vpr(native)
+    note = sequence["tracks"][0]["parts"][0]["notes"][0]
+    note.pop("singingSkill", None)
+    note["dvqm"] = {}
     for is_attack in (True, False):
         catalog = await check.library("dvqm_catalog", is_attack=is_attack, limit=1)
         if not catalog["entries"]:
             raise Blocked("Installed native Attack and Release presets are required")
         entry = catalog["entries"][0]
-        assigned[is_attack] = await check.library("dvqm_set", identifier, track_index=0, part_index=0, note_index=0,
-                                                  is_attack=is_attack, db_id=entry["db_id"], name_id=entry["name_id"],
-                                                  speed=45 if is_attack else 55, top_factor=0.75, is_protected=is_attack)
-    captured = await check.library("media_capture", identifier, track_index=0, part_index=0, name="AI DVQM " + check.run_id)
-    clip = captured["clip"]
-    require(clip["part"]["bridge_dvqm_metadata"] is True, "AI DVQM bridge metadata was not identified", clip)
-    track = (await check.edit(identifier, "track.create", type="MidiAi", name="AI DVQM target"))["track_index"]
-    await check.library("media_import", identifier, clip_id=clip["clip_id"], track_index=track, position_tick=0)
-    destination = {"track_index": track, "part_index": 0, "note_index": 0}
-    for is_attack in (True, False):
-        require(await check.library("dvqm_get", identifier, **destination, is_attack=is_attack) == assigned[is_attack],
-                "AI DVQM media data changed during import")
-    _, path = await check.save(identifier, "ai-dvqm-media")
-    reopened = (await check.call("project_open", path=str(path)))["session_id"]
-    for is_attack in (True, False):
-        require(await check.library("dvqm_get", reopened, **destination, is_attack=is_attack) == assigned[is_attack],
-                "AI DVQM media data did not survive save/reopen")
-    await check.close(reopened)
-    await check.library("media_delete", identifier, clip_id=clip["clip_id"])
-    check.evidence("ai_dvqm_media", {"clip_id": clip["clip_id"], "vpr": str(path), "selections": assigned})
+        note["dvqm"]["attack" if is_attack else "release"] = {
+            "compID": entry["component_id"], "levelNames": entry["level_names"],
+            "speed": 45 if is_attack else 55, "topFactor": 0.75, "isProtected": is_attack,
+        }
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    source = ROOT / "output" / check.output("ai-dvqm-input")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items():
+            archive.writestr(name, payload)
+    original = source.read_bytes()
+    identifier = (await check.call("project_open", path=str(source)))["session_id"]
+    clip_id = None
+    try:
+        selected = {"track_index": 0, "part_index": 0, "note_index": 0}
+        assigned = {is_attack: await check.library("dvqm_get", identifier, **selected, is_attack=is_attack)
+                    for is_attack in (True, False)}
+        require(all(not item["is_empty"] for item in assigned.values()), "Synthetic AI DVQM fixture did not load", assigned)
+        clip = (await check.library("media_capture", identifier, track_index=0, part_index=0,
+                                    name="AI DVQM " + check.run_id))["clip"]
+        clip_id = clip["clip_id"]
+        require(clip["part"]["bridge_dvqm_metadata"] is True, "AI DVQM bridge metadata was not identified", clip)
+        track = (await check.edit(identifier, "track.create", type="MidiAi", name="AI DVQM target"))["track_index"]
+        await check.library("media_import", identifier, clip_id=clip_id, track_index=track, position_tick=0)
+        destination = {"track_index": track, "part_index": 0, "note_index": 0}
+        for is_attack in (True, False):
+            require(await check.library("dvqm_get", identifier, **destination, is_attack=is_attack) == assigned[is_attack],
+                    "AI DVQM media data changed during import")
+        _, path = await check.save(identifier, "ai-dvqm-media")
+        reopened = (await check.call("project_open", path=str(path)))["session_id"]
+        try:
+            for is_attack in (True, False):
+                require(await check.library("dvqm_get", reopened, **destination, is_attack=is_attack) == assigned[is_attack],
+                        "AI DVQM media data did not survive save/reopen")
+        finally:
+            await check.close(reopened)
+        check.evidence("ai_dvqm_media", {"clip_id": clip_id, "vpr": str(path), "selections": assigned})
+    finally:
+        if clip_id is not None:
+            await check.library("media_delete", identifier, clip_id=clip_id)
+        await check.close(identifier)
+    require(source.read_bytes() == original, "AI DVQM media fixture was modified")
 
 
 @feature("library.media_invalid_phoneme", "library", "project_library", "project_edit", "score_compose", "project_save", "project_open")
@@ -2131,6 +2925,7 @@ async def library_media_invalid_phoneme(check: Acceptance) -> None:
 
 @feature("library.media_secondary_voice", "library", "project_library", "project_edit", "score_compose", "voicebanks", "project_save", "project_open")
 async def library_media_secondary_voice(check: Acceptance) -> None:
+    await check.library("media_list")
     seed = await check.call("score_compose", output_name=check.output("secondary-seed"), title="Secondary voice acceptance",
                             bpm=120, notes=[{"start": 0, "duration": 1, "pitch": 60,
                                              "lyric": "\u3042", "phoneme": "a", "lang_id": 0}])
@@ -2202,6 +2997,7 @@ async def library_media_audio_trim(check: Acceptance) -> None:
 
 @feature("library.media_update", "library", "project_library", "project_edit", "score_compose", "project_save", "project_open")
 async def library_media_update(check: Acceptance) -> None:
+    await check.library("media_list")
     async with check.project(score=True) as identifier:
         selected = {"track_index": 0, "part_index": 0}
         notes = (await check.edit(identifier, "note.list", **selected))["notes"]
@@ -2340,7 +3136,7 @@ async def run(arguments: argparse.Namespace) -> int:
     check.foreground_initial = win32gui.GetForegroundWindow()
     check.monitor = asyncio.create_task(check.watch_foreground())
     parameters = StdioServerParameters(command=sys.executable, args=["-m", "vocaloid_bridge"], cwd=str(ROOT),
-        env={**os.environ, "VOCALOID_WORKSPACE": str(ROOT), "PYTHONUTF8": "1"})
+        env={**os.environ, "VOCALOID_WORKSPACE": str(ROOT), "PYTHONUTF8": "1", "VOCALOID_TEMP_CLEANUP": "0"})
     try:
         async with stdio_client(parameters) as (reader, writer):
             async with ClientSession(reader, writer, read_timeout_seconds=timedelta(seconds=240)) as client:
@@ -2396,7 +3192,7 @@ async def run(arguments: argparse.Namespace) -> int:
     incomplete = report["coverage"]["selection_is_full_suite"] and (
         report["coverage"]["advertised_tools_not_positively_verified"]
         or any(report["coverage"]["operations_not_positively_verified"].values()))
-    return 2 if counts["blocked"] or counts["skipped"] or incomplete else 0
+    return 2 if counts["blocked"] or counts["skipped"] or counts["unsupported"] or incomplete else 0
 
 
 def main() -> int:

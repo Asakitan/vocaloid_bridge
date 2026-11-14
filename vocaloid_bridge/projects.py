@@ -21,6 +21,7 @@ from .music import PPQ, _exclusive_output, _integer, _notes, _number, _source, _
 
 
 SEQUENCE_MEMBER = "Project/sequence.json"
+PROJECT_EXTENSIONS = (".vpr", ".vprx")
 PHONEME_VALIDITY_MEMBER = "vocaloid_bridge/phoneme-validity-v1.json"
 _EDITOR_AI_NOTE = {
     "lyric": "\u3042", "phoneme": "a", "langID": 0,
@@ -127,6 +128,33 @@ def _ai_voice(track: dict, part: dict) -> dict | None:
         return None
     voice = track.get("voice", part.get("aiVoice"))
     return voice if isinstance(voice, dict) else None
+
+
+def _ai_dvqm_conflict(note: Any) -> bool:
+    if not isinstance(note, dict) or not isinstance(note.get("singingSkill"), dict):
+        return False
+    dvqm = note.get("dvqm")
+    return isinstance(dvqm, dict) and any(isinstance(dvqm.get(name), dict) and bool(dvqm[name])
+                                          for name in ("attack", "release"))
+
+
+def _guard_ai_dvqm_conflicts(data: dict) -> None:
+    tracks = data.get("tracks")
+    if not isinstance(tracks, list):
+        return
+    for track in tracks:
+        if not isinstance(track, dict) or track.get("type") != 2:
+            continue
+        parts = track.get("parts")
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            notes = part.get("notes") if isinstance(part, dict) else None
+            if not isinstance(notes, list):
+                continue
+            for note in notes:
+                if _ai_dvqm_conflict(note):
+                    raise ValueError("AI note cannot combine Attack/Release and Singing Skill; native reopening loses Singing Skill")
 
 
 def _guard_note_replacement(data: dict) -> None:
@@ -296,6 +324,22 @@ def _patch_touches_note_tree(path: str) -> bool:
     return parts[4] == "notes"
 
 
+def _removes_ai_dvqm_conflict(data: dict, operation: dict) -> bool:
+    if operation["op"] != "remove":
+        return False
+    parts = jsonpointer.JsonPointer(operation["path"]).get_parts()
+    if (len(parts) != 7 or parts[0] != "tracks" or parts[2] != "parts" or parts[4] != "notes"
+            or parts[6] not in {"dvqm", "singingSkill"}
+            or any(not parts[index].isascii() or not parts[index].isdigit() for index in (1, 3, 5))):
+        return False
+    try:
+        track = data["tracks"][int(parts[1])]
+        note = track["parts"][int(parts[3])]["notes"][int(parts[5])]
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+    return isinstance(track, dict) and track.get("type") == 2 and _ai_dvqm_conflict(note)
+
+
 def _tracked_subpaths(value: Any, records: list[tuple[dict, dict]]) -> list[tuple[tuple[Any, ...], dict, dict]]:
     by_identity = {id(note): (note, entry) for note, entry in records}
     result = []
@@ -339,7 +383,7 @@ def _patch_validity(data: dict, payload: bytes | None, operations: list[dict]) -
             touches = _patch_touches_note_tree(operation["path"])
             if kind == "move":
                 touches = touches or _patch_touches_note_tree(operation["from"])
-            if touches:
+            if touches and not _removes_ai_dvqm_conflict(working, operation):
                 _guard_note_replacement(working)
 
         matches = []
@@ -470,6 +514,7 @@ class ProjectStore:
                        validity_override: bytes | None = None) -> dict:
         if not isinstance(data, dict):
             raise ValueError("project data must be an object")
+        _guard_ai_dvqm_conflicts(data)
         serialized = json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
         if archive.namelist().count(SEQUENCE_MEMBER) != 1:
             raise ValueError("VPR must contain exactly one Project/sequence.json")
@@ -481,7 +526,7 @@ class ProjectStore:
         if validity_count:
             validity = validity_override if validity_override is not None else archive.read(PHONEME_VALIDITY_MEMBER)
             _validate_phoneme_validity(data, validity, note_origins)
-        with _exclusive_output(self.workspace, output_name, (".vpr",)) as (destination, handle):
+        with _exclusive_output(self.workspace, output_name, PROJECT_EXTENSIONS) as (destination, handle):
             with zipfile.ZipFile(handle, "w") as result:
                 result.comment = archive.comment
                 for member in archive.infolist():

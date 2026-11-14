@@ -3,9 +3,10 @@ import verify_features as v
 
 
 @v.feature("remaining.score_dispatch", "remaining", "project_edit", "project_get", "project_set", "project_items",
-           "project_render_part", "project_save", "project_open")
+           "project_render_part", "project_save", "project_open", "voicebanks", "vocaloid_features")
 async def score_dispatch(check):
-    async with check.project(score=True) as sid:
+    async with check.project() as sid:
+        await check.initialize_plain_ai(sid)
         note = {"track_index": 0, "part_index": 0, "note_index": 0}
         converted = await check.edit(sid, "time.convert", **{"from": "tick", "value": 480})
         v.require(converted["tick"] == 480 and abs(converted["seconds"] - 0.5) < 1e-6, "Time conversion mismatch", converted)

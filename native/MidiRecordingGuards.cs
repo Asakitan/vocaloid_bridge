@@ -4,8 +4,7 @@ internal sealed partial class EngineHost
     internal void CheckMidiStart(EngineSession session, string operation)
     {
         if (operation != "start") return;
-        if (HasArchiveEntityExtensions(session))
-            throw new InvalidOperationException("project_preservation: MIDI recording requires a verified entity-identity transaction.");
+        RequireArchiveMutationSupported(session, "note.add");
     }
 
     // Clipboard and library calls are routed before ordinary session RPCs.

@@ -16,22 +16,41 @@ def metrics(reference, changed, threshold):
             "active_delta_rms": float(np.sqrt(np.mean(delta[active] ** 2))) if np.any(active) else 0.0,
             "detection_threshold_rms": threshold}
 
-@v.feature("voicecolor.audio", "voicecolor", "project_edit", "project_render_part", "score_compose")
+@v.feature("voicecolor.audio", "voicecolor", "vocaloid_features", "voicebanks", "project_create", "project_edit",
+           "project_render_part", "score_compose")
 async def probe(check):
-    seed = await check.call("score_compose", output_name=check.output("color-seed"), title="VoiceColor audio probe", bpm=120,
-        notes=[{"start": i, "duration": 0.6, "pitch": pitch, "lyric": "あ", "phoneme": "a", "lang_id": 0}
-               for i, pitch in enumerate((60, 64, 67))])
-    sid = seed["native_session"]["session_id"]
+    is_v7 = (await check.call("vocaloid_features"))["product"] == "VOCALOID7"
     selected = {"track_index": 0, "part_index": 0}
+    settings_scope = {**selected, **({"scope": "track"} if is_v7 else {})}
+    if is_v7:
+        candidates = [item for item in (await check.call("voicebanks"))["voices"]
+                      if str(item["version"]).startswith("7.") and item["is_ai"]
+                      and item["available_in_sequence"]]
+        if not candidates:
+            raise v.Blocked("An installed available V7 AI voicebank is required")
+        voice = next((item for item in candidates if item["name"] == "GekiyakuV"), candidates[0])
+        sid = (await check.call("project_create", title="V7 VoiceColor audio probe", bpm=120))["session_id"]
+        await check.edit(sid, "track.create", type="MidiAi", name="V7 VoiceColor")
+        await check.edit(sid, "part.create", track_index=0, start_tick=0, duration_tick=1920)
+        await check.edit(sid, "voice.set", **settings_scope, ai_voice_bank_id=voice["comp_id"])
+        for index, pitch in enumerate((60, 64, 67)):
+            await check.edit(sid, "note.add", **selected, start_tick=index * 480, duration_tick=288,
+                             number=pitch, lyric="あ", phonemes="a", lang_id=0)
+    else:
+        seed = await check.call("score_compose", output_name=check.output("color-seed"), title="VoiceColor audio probe", bpm=120,
+            notes=[{"start": index, "duration": 0.6, "pitch": pitch, "lyric": "あ", "phoneme": "a", "lang_id": 0}
+                   for index, pitch in enumerate((60, 64, 67))])
+        sid = seed["native_session"]["session_id"]
     report = {"fields": {}, "errors": []}
     check.evidence("voicecolor_audio", report)
     try:
-        state = await check.edit(sid, "performance.get", **selected)
+        state = await check.edit(sid, "performance.get", **settings_scope)
         fields = state.get("voice_colors") or []
-        v.require({x["name"] for x in fields} == EXPECTED, "Unexpected native VoiceColor field inventory", fields)
+        expected = EXPECTED | ({"S5Attack"} if is_v7 else set())
+        v.require({field["name"] for field in fields} == expected, "Unexpected native VoiceColor field inventory", fields)
         v.require(next((x for x in state["bypass"] if x["effect"] == "VoiceColor" and x["available"]), None), "VoiceColor is not available")
         originals = {x["name"]: x["value"] for x in fields}
-        await check.edit(sid, "performance.set", **selected, bypass={"VoiceColor": False})
+        await check.edit(sid, "performance.set", **settings_scope, bypass={"VoiceColor": False})
 
         async def render(label):
             result = await check.call("project_render_part", session_id=sid, output_name=check.output(label, ".wav"), **selected)
@@ -49,13 +68,16 @@ async def probe(check):
             name, initial, settings = field["name"], field["value"], field["setting"]
             lo, hi = settings["LowerBoundValue"], settings["UpperBoundValue"]
             result = report["fields"][name] = {"initial": initial, "minimum": lo, "maximum": hi, "default": settings["DefaultValue"]}
+            if is_v7 and not field["applicable_to_current_track"]:
+                result["status"] = "not_applicable_to_ai_track"
+                continue
             if lo == hi:
                 result["status"] = "no_distinct_native_value"
                 continue
             target = hi if abs(hi - initial) >= abs(initial - lo) else lo
             result["target"] = target
             try:
-                state = await check.edit(sid, "performance.set", **selected, voice_colors={name: target}, bypass={"VoiceColor": False})
+                state = await check.edit(sid, "performance.set", **settings_scope, voice_colors={name: target}, bypass={"VoiceColor": False})
                 result["readback"] = next(x["value"] for x in state["voice_colors"] if x["name"] == name)
                 v.require(result["readback"] == target, "VoiceColor readback mismatch", name)
                 audio, meta, pcm = await render("color-" + name)
@@ -67,13 +89,13 @@ async def probe(check):
                 result.update(status="error", error=f"{type(error).__name__}: {error}")
                 report["errors"].append(name)
             finally:
-                await check.edit(sid, "performance.set", **selected, voice_colors={name: initial})
+                await check.edit(sid, "performance.set", **settings_scope, voice_colors={name: initial})
         if strongest and strongest[1] > threshold:
             name, _, target = strongest
             try:
-                await check.edit(sid, "performance.set", **selected, voice_colors={name: target}, bypass={"VoiceColor": False})
+                await check.edit(sid, "performance.set", **settings_scope, voice_colors={name: target}, bypass={"VoiceColor": False})
                 enabled, _, on_pcm = await render("color-bypass-enabled")
-                await check.edit(sid, "performance.set", **selected, bypass={"VoiceColor": True})
+                await check.edit(sid, "performance.set", **settings_scope, bypass={"VoiceColor": True})
                 disabled, _, off_pcm = await render("color-bypass-disabled")
                 comparison = metrics(on_pcm, off_pcm, threshold)
                 report["bypass"] = {"field": name, "target": target, "enabled": enabled["path"], "disabled": disabled["path"],

@@ -7,6 +7,7 @@ import verify_features as v
 async def note_add(check):
     voices = (await check.call("voicebanks"))["voices"]
     voice = next(item for item in voices if item["name"] == "asa" and item["kind"] == "Dnn")
+    is_v7 = (await check.call("vocaloid_features"))["product"] == "VOCALOID7"
     sid = (await check.call("project_create", title="Native note bootstrap", bpm=120))["session_id"]
     scope = {"track_index": 0, "part_index": 0}
     expected = [("い", "i", 0), ("cat", "kh { t", 1), ("ni", "n i", 4)]
@@ -14,7 +15,9 @@ async def note_add(check):
         await check.edit(sid, "track.create", name="AI")
         for index, (lyric, phoneme, language) in enumerate(expected):
             await check.edit(sid, "part.create", track_index=0, start_tick=index * 3840, duration_tick=1920, name=str(index))
-            await check.edit(sid, "voice.set", track_index=0, part_index=index, ai_voice_bank_id=voice["comp_id"])
+            if not is_v7 or index == 0:
+                await check.edit(sid, "voice.set", track_index=0, part_index=index, ai_voice_bank_id=voice["comp_id"],
+                                 **({"scope": "track"} if is_v7 else {}))
             options = {"track_index": 0, "part_index": index, "start_tick": 0, "duration_tick": 240,
                        "number": 60, "velocity": 72, "lyric": lyric, "expression": {"Accent": 37}}
             if index:

@@ -23,6 +23,326 @@ EXTRA_AUDIO = "Project/Audio/opaque-extra.bin"
 EXTRA_ROOT = "custom-probe/root.bin"
 
 
+@v.feature("preservation.ai_dvqm_version_probe_50", "preservation", "voicebanks", "vocaloid_features",
+           "project_create", "project_edit", "project_library", "project_save", "project_open")
+async def ai_dvqm_version_probe(check):
+    from vocaloid_bridge.install import discover, host_path, validate_target
+    from vocaloid_bridge.native_client import IsolatedProcess
+
+    product = (await check.call("vocaloid_features"))["product"]
+    major = "7." if product == "VOCALOID7" else "6."
+    voice_name = "GekiyakuV" if product == "VOCALOID7" else "asa"
+    candidates = [item for item in (await check.call("voicebanks"))["voices"]
+                  if str(item["version"]).startswith(major) and item["kind"] == "Dnn"
+                  and item["available_in_sequence"]]
+    if not candidates:
+        raise v.Blocked(f"An installed available {product} AI voicebank is required")
+    voice = next((item for item in candidates if item["name"] == voice_name), candidates[0])
+    catalog = await check.library("dvqm_catalog", is_attack=True, voice_id=voice["comp_id"], limit=1)
+    if not catalog["entries"]:
+        raise v.Blocked("An installed native Attack preset is required for the isolated conflict probe")
+    entry = catalog["entries"][0]
+    part = {"track_index": 0, "part_index": 0}
+    voice_scope = {**part, **({"scope": "track"} if product == "VOCALOID7" else {})}
+    async with check.project() as identifier:
+        await check.edit(identifier, "track.create", type="MidiAi", name="Version-specific AI DVQM probe")
+        await check.edit(identifier, "part.create", track_index=0, start_tick=0, duration_tick=1920)
+        await check.edit(identifier, "voice.set", **voice_scope, ai_voice_bank_id=voice["comp_id"])
+        await check.edit(identifier, "note.add", **part, start_tick=0, duration_tick=480,
+                         number=60, lyric="あ", phonemes="a", lang_id=0)
+        expected_skill = await check.library("note_skill_set", identifier, **part, note_index=0,
+                                             duration_tick=73, pre_weight=37, post_weight=91)
+        sequence, baseline_path = await check.save(identifier, "version-ai-dvqm-baseline")
+    saved_note = sequence["tracks"][0]["parts"][0]["notes"][0]
+    v.require(saved_note["singingSkill"]["weight"] == {"pre": 37, "post": 91},
+              "Native baseline did not save the intended HMM weights", saved_note)
+    root = check.directory / "ai-dvqm-version-probe"
+    root.mkdir()
+    baseline = root / "baseline.vpr"
+    baseline.write_bytes(baseline_path.read_bytes())
+    _, members = v.read_vpr(baseline_path)
+    saved_note["dvqm"] = {"attack": {"compID": entry["component_id"], "levelNames": entry["level_names"],
+                                      "isProtected": True, "speed": 77, "topFactor": 1.0}}
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    conflict = root / "conflict.vpr"
+    with zipfile.ZipFile(conflict, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items():
+            archive.writestr(name, payload)
+    await check.rejected("project_open", "AI note .* combines Attack/Release and Singing Skill", path=str(conflict))
+    installation = discover()
+    host = host_path(v.ROOT, installation)
+    validate_target(installation, host)
+    v.require(installation.product == product, "AI DVQM probe selected a different native product")
+    process = IsolatedProcess([r"C:\Program Files\PowerShell\7\pwsh.exe", "-NoProfile", "-File",
+                               str(v.ROOT / "tools/probe_ai_dvqm_native_50.ps1"), "-Root", str(root),
+                               "-Baseline", str(baseline), "-Conflict", str(conflict),
+                               "-Install", str(installation.path), "-Product", product, "-HostPath", str(host),
+                               "-DbId", str(entry["db_id"]), "-NameId", str(entry["name_id"])], v.ROOT)
+    try:
+        observed = json.loads(process.read_line(60))
+    finally:
+        process.close()
+    check.evidence("ai_dvqm_product_probe", {"voice": voice, "preset": entry, "expected_skill": expected_skill,
+                   "native": observed, "baseline": str(baseline), "conflict": str(conflict)})
+    baseline_state = observed["baseline"]["state"]
+    conflict_state = observed["conflict"]["state"]
+    v.require(observed["product"] == product and observed["core_assembly"] == product
+              and baseline_state["voice_id"] == voice["comp_id"] and conflict_state["voice_id"] == voice["comp_id"]
+              and baseline_state["note_is_ai"] and conflict_state["note_is_ai"]
+              and baseline_state["pre_weight"] == 37 and baseline_state["post_weight"] == 91
+              and baseline_state["duration_tick"] == 73 and baseline_state["attack_empty"]
+              and not conflict_state["attack_empty"] and conflict_state["pre_weight"] == 0
+              and conflict_state["post_weight"] == 0 and observed["conflict"]["saved_singing_skill"] is None,
+              "Native product probe did not reproduce the guarded conflict", observed)
+    dvqm_first = observed["dvqm_then_hmm"]
+    hmm_first = observed["hmm_then_dvqm"]
+    for order in (dvqm_first, hmm_first):
+        v.require(order["dvqm_result"] and order["weight_result"] and order["duration_result"] and order["commit"]
+                  and order["saved_singing_skill"] is None and order["saved_dvqm"] is not None
+                  and order["reopened"]["pre_weight"] == 0 and order["reopened"]["post_weight"] == 0,
+                  "Native setter-order probe did not reproduce the serialization loss", order)
+    v.require((dvqm_first["after"]["pre_weight"], dvqm_first["after"]["post_weight"]) == (37, 91)
+              and (dvqm_first["undo"]["pre_weight"], dvqm_first["undo"]["post_weight"]) == (64, 64)
+              and (hmm_first["after"]["pre_weight"], hmm_first["after"]["post_weight"]) == (0, 0)
+              and (hmm_first["undo"]["pre_weight"], hmm_first["undo"]["post_weight"]) == (37, 91),
+              "Native setter-order history differs from the observed conflict", observed)
+
+
+@v.feature("preservation.note_library_transactions", "preservation", "score_compose", "project_edit",
+           "project_library", "project_open", "project_save", "project_status", "project_get", "project_members", "project_call", "project_value_create", "native_api_catalog", "score_patch", "score_replace_notes")
+async def note_library_transactions(check):
+    catalog = await check.library("dvqm_catalog", is_attack=True, limit=1)
+    if not catalog["entries"]:
+        raise v.Blocked("An installed native Attack preset is required")
+    entry = catalog["entries"][0]
+    scope = {"track_index": 0, "part_index": 0}
+    target = {**scope, "note_index": 0}
+    attack = {**target, "is_attack": True}
+    async with check.project(score=True) as identifier:
+        await check.edit(identifier, "pitch.set", **target, points=[{"tick": 100, "value": 60}])
+        await check.edit(identifier, "controller.set", **scope, type="Dynamics", points=[{"tick": 100, "value": 42}])
+        lane = await check.edit(identifier, "automation.list", scope="track_volume", track_index=0)
+        await check.edit(identifier, "automation.set", scope="track_volume", track_index=0,
+                         points=[{"tick": 480, "value": lane["minimum"]}])
+        original_skill = await check.library("note_skill_get", identifier, **target)
+        sequence, native = await check.save(identifier, "note-library-native")
+    native_original = native.read_bytes()
+    attack_data = {"compID": entry["component_id"], "levelNames": entry["level_names"],
+                   "isProtected": True, "speed": 77, "topFactor": 1.0}
+    patch_output = check.output("note-library-dual")
+    await check.rejected("score_patch", "AI note cannot combine Attack/Release and Singing Skill",
+                         path=str(native), output_name=patch_output,
+                         operations=[{"op": "add", "path": "/tracks/0/parts/0/notes/0/dvqm",
+                                      "value": {"attack": attack_data}}])
+    replacement_output = check.output("note-library-dual-replacement")
+    await check.rejected("score_replace_notes", "AI note cannot combine Attack/Release and Singing Skill",
+                         path=str(native), output_name=replacement_output,
+                         notes=[{"start": 0, "duration": 1, "pitch": 60, "lyric": "あ", "phoneme": "a",
+                                 "raw": {"dvqm": {"attack": attack_data}}}])
+    v.require(native.read_bytes() == native_original and not (v.ROOT / "output" / patch_output).exists()
+              and not (v.ROOT / "output" / replacement_output).exists(),
+              "Rejected AI DVQM file edits changed their source or published an output")
+    _, members = v.read_vpr(native)
+    track = sequence["tracks"][0]
+    part = track["parts"][0]
+    note = part["notes"][0]
+    sequence[KEY] = "root"
+    track[KEY] = "track"
+    part[KEY] = "part"
+    note[KEY] = "note"
+    note["aiExp"][KEY] = "expression"
+    note["directPitches"][0][KEY] = "pitch"
+    next(item for item in part["controllers"] if item["name"].lower() == "dynamics")["events"][0][KEY] = "controller"
+    next(item for item in track["volume"]["events"] if item["pos"] == 480)[KEY] = "automation"
+    members[EXTRA] = EXTRA_BYTES
+
+    def write_fixture(data, label):
+        result = v.ROOT / "output" / check.output(label)
+        contents = dict(members)
+        contents["Project/sequence.json"] = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        with zipfile.ZipFile(result, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, payload in contents.items():
+                archive.writestr(name, payload)
+        return result
+
+    dual_data = json.loads(json.dumps(sequence))
+    dual_data["tracks"][0]["parts"][0]["notes"][0]["dvqm"] = {"attack": attack_data}
+    dual_source = write_fixture(dual_data, "note-library-external-dual")
+    dual_original = dual_source.read_bytes()
+    await check.rejected("project_open", "AI note .* combines Attack/Release and Singing Skill",
+                         path=str(dual_source))
+    repaired = await check.call("score_patch", path=str(dual_source), output_name=check.output("note-library-dual-repaired"),
+                                operations=[{"op": "remove", "path": "/tracks/0/parts/0/notes/0/dvqm"}])
+    expected_repaired = json.loads(json.dumps(dual_data))
+    del expected_repaired["tracks"][0]["parts"][0]["notes"][0]["dvqm"]
+    v.require(v.read_vpr(repaired["path"])[0] == expected_repaired,
+              "Explicit VPR repair changed data outside the requested subtree")
+    dual = (await check.call("project_open", path=repaired["path"]))["session_id"]
+    try:
+        dual_saved, _ = await check.save(dual, "note-library-external-dual-saved")
+        saved_note = dual_saved["tracks"][0]["parts"][0]["notes"][0]
+        v.require((await check.library("dvqm_get", dual, **attack))["is_empty"]
+                  and await check.library("note_skill_get", dual, **target) == original_skill
+                  and saved_note.get("singingSkill") == dual_data["tracks"][0]["parts"][0]["notes"][0].get("singingSkill")
+                  and v.read_vpr(repaired["path"])[1][EXTRA] == EXTRA_BYTES
+                  and dual_source.read_bytes() == dual_original,
+                  "Explicit VPR repair lost Singing Skill, resources or the original file")
+    finally:
+        await check.close(dual)
+
+    release_catalog = await check.library("dvqm_catalog", is_attack=False, limit=1)
+    if not release_catalog["entries"]:
+        raise v.Blocked("An installed native Release preset is required")
+    release_entry = release_catalog["entries"][0]
+    release_data = {"compID": release_entry["component_id"], "levelNames": release_entry["level_names"],
+                    "isProtected": True, "speed": 77, "topFactor": 1.0}
+    release_dual_data = json.loads(json.dumps(sequence))
+    release_dual_data["tracks"][0]["parts"][0]["notes"][0]["dvqm"] = {"release": release_data}
+    release_source = write_fixture(release_dual_data, "note-library-external-release-dual")
+    release_original = release_source.read_bytes()
+    await check.rejected("project_open", "AI note .* combines Attack/Release and Singing Skill",
+                         path=str(release_source))
+    release_repaired = await check.call("score_patch", path=str(release_source),
+                                        output_name=check.output("note-library-release-repaired"),
+                                        operations=[{"op": "remove", "path": "/tracks/0/parts/0/notes/0/singingSkill"}])
+    expected_release = json.loads(json.dumps(release_dual_data))
+    del expected_release["tracks"][0]["parts"][0]["notes"][0]["singingSkill"]
+    v.require(v.read_vpr(release_repaired["path"])[0] == expected_release,
+              "Explicit Release repair changed data outside the requested subtree")
+    release_session = (await check.call("project_open", path=release_repaired["path"]))["session_id"]
+    try:
+        selected_release = await check.library("dvqm_get", release_session, **target, is_attack=False)
+        release_saved, release_saved_path = await check.save(release_session, "note-library-release-saved")
+        saved_release = release_saved["tracks"][0]["parts"][0]["notes"][0]["dvqm"]["release"]
+        v.require(not selected_release["is_empty"] and selected_release["component_id"] == release_entry["component_id"]
+                  and saved_release["compID"] == release_entry["component_id"]
+                  and v.read_vpr(release_saved_path)[1][EXTRA] == EXTRA_BYTES
+                  and release_source.read_bytes() == release_original,
+                  "Explicit Release repair lost the selection, resource or original file")
+    finally:
+        await check.close(release_session)
+
+    def verify_markers(data):
+        track = data["tracks"][0]
+        part = track["parts"][0]
+        note = part["notes"][0]
+        v.require(data[KEY] == "root" and track[KEY] == "track" and part[KEY] == "part"
+                  and note[KEY] == "note" and note["aiExp"][KEY] == "expression"
+                  and note["directPitches"][0][KEY] == "pitch"
+                  and next(item for item in part["controllers"] if item["name"].lower() == "dynamics")["events"][0][KEY] == "controller"
+                  and next(item for item in track["volume"]["events"] if item["pos"] == 480)[KEY] == "automation",
+                  "A note library mutation lost unrelated metadata")
+
+    source = write_fixture(sequence, "note-library-extended")
+    original = source.read_bytes()
+    identifier = (await check.call("project_open", path=str(source)))["session_id"]
+    try:
+        before, _ = await check.save(identifier, "note-library-before")
+        before_status = await check.call("project_status", session_id=identifier)
+        before_history = await check.edit(identifier, "history.status")
+        track_ref = (await check.method(identifier, "GetTrack", [0]))["value"]["$ref"]
+        part_ref = (await check.method(identifier, "GetPart", [0], track_ref))["value"]["$ref"]
+        note_ref = (await check.method(identifier, "GetNote", [0], part_ref))["value"]["$ref"]
+        for is_attack in (True, False):
+            selected = {**target, "is_attack": is_attack}
+            before_selection = await check.library("dvqm_get", identifier, **selected)
+            v.require(before_selection["is_empty"], "No-op fixture unexpectedly contains DVQM")
+            v.require(await check.library("dvqm_clear", identifier, **selected) == before_selection,
+                      "Clearing an empty DVQM changed the selection")
+        v.require((await check.call("project_status", session_id=identifier))["dirty"] == before_status["dirty"]
+                  and await check.edit(identifier, "history.status") == before_history
+                  and (await check.call("project_get", session_id=identifier, ref=note_ref, member="NoteNumber"))["value"] == 60,
+                  "Empty DVQM clear changed dirty state, history or existing references")
+        after_noop, _ = await check.save(identifier, "note-library-noop")
+        v.require(after_noop == before, "Empty DVQM clear changed the saved project")
+        skill = await check.library("note_skill_get", identifier, **target)
+        weight = 0 if skill["pre_weight"] != 0 else 1
+        changed = await check.library("note_skill_set", identifier, **target, pre_weight=weight)
+        v.require(changed["pre_weight"] == weight, "Note skill update failed", changed)
+        changed_data, _ = await check.save(identifier, "note-library-changed")
+        verify_markers(changed_data)
+        await check.edit(identifier, "undo")
+        undone, _ = await check.save(identifier, "note-library-undo")
+        v.require(undone == before and await check.library("note_skill_get", identifier, **target) == skill,
+                  "Note skill undo did not restore the original project")
+        await check.edit(identifier, "redo")
+        redone, redone_path = await check.save(identifier, "note-library-redo")
+        v.require(redone == changed_data, "Note skill redo did not restore the modified project")
+        reopened = (await check.call("project_open", path=str(redone_path)))["session_id"]
+        try:
+            restored, restored_path = await check.save(reopened, "note-library-reopened")
+            verify_markers(restored)
+            v.require(await check.library("note_skill_get", reopened, **target) == changed,
+                      "Note skill update did not survive reopening")
+            v.require(v.read_vpr(restored_path)[1][EXTRA] == EXTRA_BYTES, "Project resource changed")
+        finally:
+            await check.close(reopened)
+        await check.library("note_skill_reset", identifier, **target)
+        reset, _ = await check.save(identifier, "note-library-reset")
+        verify_markers(reset)
+    finally:
+        await check.close(identifier)
+    v.require(source.read_bytes() == original, "Source project changed")
+
+    guarded = json.loads(json.dumps(before))
+    guarded_note = guarded["tracks"][0]["parts"][0]["notes"][0]
+    guarded_note["singingSkill"][KEY] = "skill-extension"
+    guarded_source = write_fixture(guarded, "note-library-guarded")
+    guarded_original = guarded_source.read_bytes()
+    identifier = (await check.call("project_open", path=str(guarded_source)))["session_id"]
+    try:
+        before, _ = await check.save(identifier, "note-library-guard-before")
+        history = await check.edit(identifier, "history.status")
+        for operation, options in (("note_skill_set", {**target, "pre_weight": 0}), ("note_skill_reset", target)):
+            await check.rejected("project_library", "unknown fields", session_id=identifier,
+                                 operation=operation, options=options)
+        after, _ = await check.save(identifier, "note-library-guard-after")
+        v.require(after == before and await check.edit(identifier, "history.status") == history,
+                  "Rejected note library mutation changed the project or history")
+    finally:
+        await check.close(identifier)
+    v.require(guarded_source.read_bytes() == guarded_original, "Guarded source project changed")
+    conflict = json.loads(json.dumps(before))
+    conflict_note = conflict["tracks"][0]["parts"][0]["notes"][0]
+    conflict_note.pop("singingSkill", None)
+    conflict_note["dvqm"] = {"attack": {"compID": entry["component_id"], "levelNames": entry["level_names"],
+                                         "isProtected": True, "speed": 77, "topFactor": 1.0}}
+    conflict_source = write_fixture(conflict, "note-library-dvqm-conflict")
+    conflict_original = conflict_source.read_bytes()
+    identifier = (await check.call("project_open", path=str(conflict_source)))["session_id"]
+    try:
+        before_conflict, _ = await check.save(identifier, "note-library-conflict-before")
+        history = await check.edit(identifier, "history.status")
+        v.require(not (await check.library("dvqm_get", identifier, **attack))["is_empty"],
+                  "DVQM conflict fixture did not load")
+        await check.rejected("project_library", "identity transaction|cannot preserve", session_id=identifier,
+                     operation="dvqm_clear", options=attack)
+        for operation, options in (("note_skill_set", {**target, "pre_weight": 0}), ("note_skill_reset", target)):
+            await check.rejected("project_library", "cannot persist", session_id=identifier,
+                                 operation=operation, options=options)
+        track_ref = (await check.method(identifier, "GetTrack", [0]))["value"]["$ref"]
+        part_ref = (await check.method(identifier, "GetPart", [0], track_ref))["value"]["$ref"]
+        note_ref = (await check.method(identifier, "GetNote", [0], part_ref))["value"]["$ref"]
+        members = await check.call("project_members", session_id=identifier, ref=note_ref)
+        catalog = await check.call("native_api_catalog", type="Yamaha.VOCALOID.VSM.VSMRelTick")
+        constructor = next(item for item in catalog["types"][0]["members"] if item["kind"] == "constructor"
+                           and item["supported"] and len(item["parameters"]) == 1
+                           and item["parameters"][0]["value_type"] in ("System.Int32", "System.Int64"))
+        tick = await check.call("project_value_create", session_id=identifier, type=catalog["types"][0]["type"],
+                                args=[240], member_id=constructor["member_id"])
+        arguments = {"SetHmmWeight": [0, 0], "SetHmmWeightDuration": [tick["value"]], "ResetHmmWeightDefault": []}
+        for name, args in arguments.items():
+            method = next(item for item in members["methods"] if item["member_id"].startswith(name + "("))
+            await check.rejected("project_call", "AI notes with Attack/Release cannot preserve Singing Skill",
+                                 session_id=identifier, ref=note_ref, member_id=method["member_id"], args=args)
+        after_conflict, _ = await check.save(identifier, "note-library-conflict-after")
+        v.require(after_conflict == before_conflict and await check.edit(identifier, "history.status") == history,
+                  "Rejected DVQM conflict changed the project or history")
+    finally:
+        await check.close(identifier)
+    v.require(conflict_source.read_bytes() == conflict_original, "DVQM conflict source changed")
+
+
 @v.feature("preservation.controller_split_native_probe", "preservation", "score_compose", "project_edit", "project_save")
 async def controller_split_native_probe(check):
     seed = await check.call("score_compose", output_name=check.output("controller-split-probe"), title="Controller split probe", bpm=120,
@@ -41,7 +361,7 @@ async def controller_split_native_probe(check):
 
 @v.feature("preservation.array_guard", "preservation", "score_compose", "project_open")
 async def array_guard(check):
-    """Unknown array-element fields must be rejected, never silently dropped."""
+    """Unknown array-element fields must survive edits and archive roundtrips."""
     seed = await check.call("score_compose", output_name=check.output("array-guard-seed"),
                             title="Array guard", bpm=120,
                             notes=[{"start": 0, "duration": 1, "pitch": 60,
@@ -55,15 +375,61 @@ async def array_guard(check):
         fixture = json.loads(json.dumps(sequence))
         select(fixture)[KEY] = label
         fixture_members = dict(members)
+        fixture_members[EXTRA] = EXTRA_BYTES
         fixture_members["Project/sequence.json"] = json.dumps(fixture, ensure_ascii=False).encode("utf-8")
         path = v.ROOT / "output" / check.output("array-guard-" + label)
         with zipfile.ZipFile(path, "x", compression=zipfile.ZIP_DEFLATED) as archive:
             for name, payload in fixture_members.items():
                 archive.writestr(name, payload)
         original = path.read_bytes()
-        await check.rejected("project_open", "unsupported nested unknown field|unsupported language metadata", path=str(path))
-        v.require(path.read_bytes() == original, "Rejected array fixture was modified")
-        check.evidence("array_guard_" + label, {"path": str(path), "rejected": True})
+        sid = (await check.call("project_open", path=str(path)))["session_id"]
+        before, _ = await check.save(sid, "array-before-" + label)
+        await check.edit(sid, "track.update", track_index=0, name="Array preserved")
+        edited, _ = await check.save(sid, "array-edited-" + label)
+        v.require(edited["tracks"][0]["name"] == "Array preserved", "Track rename did not persist")
+        await check.edit(sid, "undo")
+        undone, _ = await check.save(sid, "array-undo-" + label)
+        v.require(undone == before, "Array metadata undo differs")
+        await check.edit(sid, "redo")
+        saved, saved_path = await check.save(sid, "array-redo-" + label)
+        v.require(saved == edited, "Array metadata redo differs")
+        reopened = (await check.call("project_open", path=str(saved_path)))["session_id"]
+        restored, restored_path = await check.save(reopened, "array-reopen-" + label)
+        v.require(restored == saved and select(restored)[KEY] == label, "Unknown array field was lost")
+        v.require(v.read_vpr(restored_path)[1][EXTRA] == EXTRA_BYTES, "Array fixture resource was lost")
+        v.require(path.read_bytes() == original, "Array fixture was modified")
+        check.evidence("array_guard_" + label, {"path": str(restored_path), "preserved": True})
+        await check.close(reopened)
+        await check.close(sid)
+
+
+async def preserved_edit(check, sid, operation, **options):
+    before, before_path = await check.save(sid, "preserved-before")
+    history = await check.edit(sid, "history.status")
+    await check.edit(sid, operation, **options)
+    after, after_path = await check.save(sid, "preserved-after")
+    resources = lambda path: {name: data for name, data in v.read_vpr(path)[1].items()
+                              if name != "Project/sequence.json"}
+    v.require(resources(before_path) == resources(after_path), "Mutation changed archive resources")
+    if before != after:
+        await check.edit(sid, "undo")
+        undone, _ = await check.save(sid, "preserved-undo")
+        v.require(undone == before, "Mutation undo differs", operation)
+        await check.edit(sid, "redo")
+        redone, _ = await check.save(sid, "preserved-redo")
+        v.require(redone == after, "Mutation redo differs", operation)
+    else:
+        v.require(await check.edit(sid, "history.status") == history, "No-op added native history")
+    reopened = (await check.call("project_open", path=str(after_path)))["session_id"]
+    try:
+        restored, restored_path = await check.save(reopened, "preserved-reopen")
+        v.require(restored == after and resources(restored_path) == resources(after_path),
+                  "Mutation reopen lost sequence or resources", operation)
+    finally:
+        await check.close(reopened)
+    if before != after:
+        await check.edit(sid, "undo")
+    return before, after
 
 
 @v.feature("preservation.controller_array_roundtrip", "preservation", "score_compose", "project_open", "project_edit", "project_save")
@@ -92,20 +458,29 @@ async def controller_array_roundtrip(check):
     original = source.read_bytes()
     sid = (await check.call("project_open", path=str(source)))["session_id"]
     async with check.project() as plain_target:
-        before = await check.call("project_status", session_id=plain_target)
-        await check.rejected("project_merge", "controller extension", session_id=plain_target,
-                             path=str(source), include_tracks=True, include_tempo=False)
-        v.require(await check.call("project_status", session_id=plain_target) == before,
-                  "Guarded controller merge changed target")
-        v.require(source.read_bytes() == original, "Guarded controller merge changed source")
+        before, _ = await check.save(plain_target, "controller-merge-before")
+        await check.call("project_merge", session_id=plain_target,
+                         path=str(source), include_tracks=True, include_tempo=False)
+        merged, merged_path = await check.save(plain_target, "controller-merge-after")
+        v.require(merged["tracks"][-1]["parts"][0]["controllers"] == controllers,
+                  "Controller merge lost extended events")
+        await check.edit(plain_target, "undo")
+        undone, _ = await check.save(plain_target, "controller-merge-undo")
+        v.require(undone == before, "Controller merge undo differs")
+        await check.edit(plain_target, "redo")
+        redone, _ = await check.save(plain_target, "controller-merge-redo")
+        v.require(redone == merged, "Controller merge redo differs")
+        reopened = (await check.call("project_open", path=str(merged_path)))["session_id"]
+        restored, _ = await check.save(reopened, "controller-merge-reopen")
+        v.require(restored == merged, "Controller merge reopen differs")
+        await check.close(reopened)
+        v.require(source.read_bytes() == original, "Controller merge changed source")
     initial_guard, _ = await check.save(sid, "controller-timeline-guard-before")
-    guard_history = await check.edit(sid, "history.status")
     for operation in ("time.insert", "time.delete"):
-        await check.rejected("project_edit", "controller extension", session_id=sid, operation=operation,
-            options={"start_tick": 20000, "duration_tick": 480, "include_tempo": True})
-        current, _ = await check.save(sid, "controller-timeline-guard-after")
-        v.require(current == initial_guard and await check.edit(sid, "history.status") == guard_history and
-                  source.read_bytes() == original, "Controller timeline guard changed state or history")
+        _, current = await preserved_edit(check, sid, operation,
+            start_tick=20000, duration_tick=480, include_tempo=True)
+        v.require(current["tracks"] == initial_guard["tracks"] and source.read_bytes() == original,
+                  "Distant timeline edit changed controller metadata or source")
     lane = {"track_index": 0, "part_index": 0, "type": "Dynamics"}
     marker = {"marker": "first", "nested": [True, None]}
 
@@ -572,8 +947,17 @@ async def parameter_edits(check):
     await check.edit(sid, "loop.set", start_tick=0, end_tick=1920, enabled=True)
     await check.edit(sid, "tuning.set", value=442)
     await check.edit(sid, "note.batch_update", **scope, note_indices=[0], transpose=2)
-    await check.edit(sid, "performance.set", **scope, voice_colors={"S5Air": 25})
-    await check.edit(sid, "vibrato.set", **scope, note_index=0, ai_enabled=False)
+    product = (await check.call("vocaloid_features"))["product"]
+    performance_scope = {"scope": "track", "track_index": 0} if product == "VOCALOID7" else scope
+    check.evidence("performance_scope", {"product": product, **performance_scope})
+    await check.edit(sid, "performance.set", **performance_scope, voice_colors={"S5Air": 25})
+    if product == "VOCALOID7":
+        vibrato = await check.edit(sid, "vibrato.get", **scope, note_index=0)
+        model = next(value for value in vibrato["curve_models"] if value != vibrato["curve_model"])
+        await check.edit(sid, "vibrato.set", **scope, note_index=0, curve_model=model)
+        check.evidence("vibrato_curve_model", model)
+    else:
+        await check.edit(sid, "vibrato.set", **scope, note_index=0, ai_enabled=False)
     saved, path = await check.save(sid, "parameter-preserved")
     v.require(saved[KEY] == "root" and saved["masterTrack"]["loop"][KEY] == "loop", "Root/loop metadata changed")
     part = saved["tracks"][0]["parts"][0]
@@ -581,7 +965,9 @@ async def parameter_edits(check):
               "Parameter edits lost entity metadata")
     reopened = (await check.call("project_open", path=str(path)))["session_id"]
     note = (await check.edit(reopened, "note.list", **scope))["notes"][0]
-    v.require(note["number"] == 62 and not note["ai_vibrato_enabled"], "Parameter edits were replaced by old data", note)
+    v.require(note["number"] == 62 and
+              (note["curve_model"] == model if product == "VOCALOID7" else not note["ai_vibrato_enabled"]),
+              "Parameter edits were replaced by old data", note)
     v.require((await check.edit(reopened, "tuning.get"))["value"] == 442, "Native tuning changed")
     check.evidence("parameter_preservation", {"source": str(source), "saved": str(path), "note": note})
     await check.close(reopened)
@@ -856,12 +1242,11 @@ async def timeline_native_probe(check):
             sequence, _ = await check.save(sid, "timeline-%s-%s" % (include_tempo, label))
             return {"tracks": sequence["tracks"], "master": sequence["masterTrack"]}
         before = await snapshot("before")
-        history = await check.edit(sid, "history.status")
         for operation, start, duration in (("time.insert", 4000, 120), ("time.delete", 3700, 400)):
-            await check.rejected("project_edit", "crossing|phoneme|split", session_id=sid, operation=operation,
-                options={"start_tick": start, "duration_tick": duration, "include_tempo": include_tempo})
-            v.require(await snapshot(operation + "-rejected") == before, "Crossing rejection changed project")
-            v.require(await check.edit(sid, "history.status") == history, "Crossing rejection changed history")
+            original, changed = await preserved_edit(check, sid, operation,
+                start_tick=start, duration_tick=duration, include_tempo=include_tempo)
+            v.require(changed["tracks"] != original["tracks"], "Crossing timeline edit did not change parts")
+            v.require(await snapshot(operation + "-restored") == before, "Crossing undo changed project")
         await check.edit(sid, "time.insert", start_tick=1920, duration_tick=1920, include_tempo=include_tempo)
         inserted = await snapshot("inserted")
         await check.edit(sid, "undo")
@@ -879,7 +1264,7 @@ async def timeline_native_probe(check):
 
 @v.feature("preservation.timeline_extension_guard", "preservation", "score_compose", "project_open", "project_edit", "project_save")
 async def timeline_extension_guard(check):
-    """An occupied generated-meter boundary stops before native mutation."""
+    """Generated meter boundaries preserve surviving entity and event metadata."""
     seed = await check.call("score_compose", output_name=check.output("timeline-extension-seed"), title="Timeline extension guard", bpm=120,
         notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
     sid = seed["native_session"]["session_id"]
@@ -901,12 +1286,14 @@ async def timeline_extension_guard(check):
         for name, payload in members.items(): archive.writestr(name, payload)
     original = source.read_bytes()
     sid = (await check.call("project_open", path=str(source)))["session_id"]
-    history = await check.edit(sid, "history.status")
-    # The start already has a signature and the end crosses a different meter.
-    for operation in ("time.delete",):
-        await check.rejected("project_edit", "time signature|identity transaction", session_id=sid, operation=operation,
-            options={"start_tick": 3840, "duration_tick": 1700, "include_tempo": True})
-        v.require(await check.edit(sid, "history.status") == history, "Guard changed native history")
+    _, changed = await preserved_edit(check, sid, "time.delete",
+        start_tick=3840, duration_tick=1700, include_tempo=True)
+    part = changed["tracks"][0]["parts"][0]
+    v.require(part["pos"] == 5980 and part[KEY] == "part" and part["notes"][0][KEY] == "note"
+              and changed["tracks"][0][KEY] == "track", "Timeline deletion lost entity identity")
+    v.require(changed["masterTrack"]["tempo"] == seq["masterTrack"]["tempo"], "Earlier tempo metadata changed")
+    v.require(any(event.get(KEY) == "signature" for event in changed["masterTrack"]["timeSig"]["events"]),
+              "Surviving boundary meter lost metadata")
     saved, out = await check.save(sid, "timeline-extension-guarded")
     v.require(saved == seq, "Guard changed project content")
     v.require(source.read_bytes() == original, "Guard changed source file")
@@ -940,11 +1327,12 @@ async def timeline_entity_roundtrip(check):
     sid = (await check.call("project_open", path=str(source)))["session_id"]
     await check.edit(sid, "track.update", track_index=0, name="prior history")
     before, _ = await check.save(sid, "timeline-entity-before")
-    history = await check.edit(sid, "history.status")
-    await check.rejected("project_edit", "crossing|phoneme|split", session_id=sid, operation="time.insert",
-        options={"start_tick": 8000, "duration_tick": 500, "include_tempo": True})
-    rejected, _ = await check.save(sid, "timeline-entity-rejected")
-    v.require(rejected == before and await check.edit(sid, "history.status") == history, "Crossing rejection changed state")
+    _, split = await preserved_edit(check, sid, "time.insert",
+        start_tick=8000, duration_tick=500, include_tempo=True)
+    parts = split["tracks"][0]["parts"]
+    v.require(len(parts) == 2 and all(part.get(KEY) == "part" for part in parts)
+              and all(note.get(KEY) == "note" for part in parts for note in part.get("notes", [])),
+              "Crossing insertion lost split entity metadata", parts)
     await check.edit(sid, "time.insert", start_tick=1000, duration_tick=500, include_tempo=True)
     moved, _ = await check.save(sid, "timeline-entity-moved")
     part = moved["tracks"][0]["parts"][0]
@@ -979,7 +1367,7 @@ async def timeline_entity_roundtrip(check):
 
 @v.feature("preservation.timeline_audio_guard", "preservation", "score_compose", "project_audio", "project_open", "project_edit", "project_save")
 async def timeline_audio_guard(check):
-    """Existing audio assets remain untouched when an extended timeline edit is rejected."""
+    """Distant timeline edits preserve audio assets and extended entities."""
     seed = await check.call("score_compose", output_name=check.output("timeline-audio-seed"), title="Timeline audio guard", bpm=120,
         notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
     sid = seed["native_session"]["session_id"]
@@ -999,16 +1387,11 @@ async def timeline_audio_guard(check):
     original = source.read_bytes()
     sid = (await check.call("project_open", path=str(source)))["session_id"]
     before, _ = await check.save(sid, "timeline-audio-before")
-    history = await check.edit(sid, "history.status")
     for operation in ("time.insert", "time.delete"):
         for include_tempo in (False, True):
-            await check.rejected("project_edit", "exclude audio", session_id=sid, operation=operation,
-                options={"start_tick": 20000, "duration_tick": 480, "include_tempo": include_tempo})
-            after, saved = await check.save(sid, "timeline-audio-after")
-            _, saved_members = v.read_vpr(saved)
-            saved_audio = {name: data for name, data in saved_members.items() if name.startswith("Project/Audio/")}
-            v.require(after == before and saved_audio == audio_members and await check.edit(sid, "history.status") == history,
-                      "Audio timeline guard changed state, audio resources, or history")
+            _, after = await preserved_edit(check, sid, operation,
+                start_tick=20000, duration_tick=480, include_tempo=include_tempo)
+            v.require(after["tracks"] == before["tracks"], "Distant timeline edit changed audio or entity metadata")
             v.require(source.read_bytes() == original and audio.read_bytes() == audio_original, "Audio guard changed source")
     await check.close(sid)
 
@@ -1044,7 +1427,7 @@ async def timeline_boundary_probe(check):
 
 @v.feature("preservation.timeline_event_unchanged", "preservation", "score_compose", "project_open", "project_edit", "project_save")
 async def timeline_event_unchanged(check):
-    """Only an unchanged full event map may retain distinct event metadata."""
+    """Timeline edits preserve metadata on surviving tempo and meter events."""
     seed = await check.call("score_compose", output_name=check.output("event-map-seed"), title="Event map",
         bpm=120, notes=[{"start": 0, "duration": .5, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
     sid = seed["native_session"]["session_id"]
@@ -1069,13 +1452,13 @@ async def timeline_event_unchanged(check):
     sid = (await check.call("project_open", path=str(source)))["session_id"]
     try:
         before, _ = await check.save(sid, "event-map-before")
-        history = await check.edit(sid, "history.status")
-        for operation, include in (("time.delete", True),):
-            await check.rejected("project_edit", "timeline|time signature", session_id=sid, operation=operation,
-                options={"start_tick": 3840, "duration_tick": 1700, "include_tempo": include})
-            v.require(await check.edit(sid, "history.status") == history, "Rejected event map edit changed history")
-            rejected, _ = await check.save(sid, "event-map-rejected")
-            v.require(rejected == before, "Rejected event map edit changed content")
+        _, changed = await preserved_edit(check, sid, "time.delete",
+            start_tick=3840, duration_tick=1700, include_tempo=True)
+        v.require(changed["masterTrack"]["tempo"] == before["masterTrack"]["tempo"], "Earlier tempo metadata changed")
+        meter_events = changed["masterTrack"]["timeSig"]["events"]
+        v.require([(event["bar"], event["numer"], event["denom"], event.get(KEY)) for event in meter_events]
+              == [(0, 4, 4, "meter-0"), (2, 4, 4, "meter-1")],
+              "Boundary meter metadata changed", meter_events)
         await check.edit(sid, "time.delete", start_tick=1000, duration_tick=500, include_tempo=False)
         after, out = await check.save(sid, "event-map-after")
         v.require(after["masterTrack"] == before["masterTrack"], "Unchanged event map lost metadata")

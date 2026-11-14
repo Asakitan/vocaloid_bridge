@@ -95,6 +95,9 @@ async def note_pitch_transitions(check):
 @v.feature("preservation.note_pitch_extension_roundtrip", "preservation", "score_compose", "project_edit", "project_save", "project_open", "project_clone")
 async def note_pitch_extension_roundtrip(check):
     """Expected-success regression against the previous guarded host."""
+    from check_project_preservation import preserved_edit
+
+    product = (await check.call("vocaloid_features"))["product"]
     seed = await check.call("score_compose", output_name=check.output("pitch-ext-seed"), title="Pitch extension", bpm=120,
                             notes=[{"start": 0, "duration": 2, "pitch": 60, "lyric": "あ", "phoneme": "a", "lang_id": 0}])
     sid = seed["native_session"]["session_id"]
@@ -126,24 +129,81 @@ async def note_pitch_extension_roundtrip(check):
     initial = await snapshot("initial")
     v.require(initial == points, "Open/save changed extended points", initial)
     history = await check.edit(sid, "history.status")
-    await check.rejected("project_clipboard", "direct pitch extension", session_id=sid, operation="copy",
-                         options={"kind": "notes", "indices": [0], "track_index": 0, "part_index": 0})
-    await check.rejected("project_library", "direct pitch extension", session_id=sid, operation="media_capture",
-                         options={"track_index": 0, "part_index": 0, "name": "guarded pitch metadata"})
+    clipboard = await check.call("project_clipboard", session_id=sid, operation="copy",
+                                options={"kind": "notes", "indices": [0], "track_index": 0, "part_index": 0})
+    v.require(await check.edit(sid, "history.status") == history, "Copy changed source history")
+    before_paste, _ = await check.save(sid, "pitch-copy-before")
+    await check.call("project_clipboard", session_id=sid, operation="paste",
+                     options={"clipboard_id": clipboard["clipboard_id"], "track_index": 0,
+                              "part_index": 0, "offset_tick": 3000})
+    pasted, pasted_path = await check.save(sid, "pitch-copy-pasted")
+    copied_notes = pasted["tracks"][0]["parts"][0]["notes"]
+    v.require(len(copied_notes) == 2 and all(note["directPitches"] == initial for note in copied_notes),
+              "Clipboard paste lost pitch point identity")
+    await check.edit(sid, "undo")
+    undone, _ = await check.save(sid, "pitch-copy-undo")
+    v.require(undone == before_paste, "Pitch clipboard undo differs")
+    await check.edit(sid, "redo")
+    redone, _ = await check.save(sid, "pitch-copy-redo")
+    v.require(redone == pasted, "Pitch clipboard redo differs")
+    reopened = (await check.call("project_open", path=str(pasted_path)))["session_id"]
+    restored, _ = await check.save(reopened, "pitch-copy-reopen")
+    v.require(restored == pasted, "Pitch clipboard reopen differs")
+    await check.close(reopened)
+    await check.edit(sid, "undo")
+    if product == "VOCALOID7":
+        await check.rejected("project_library", "VOCALOID7.*media|VOCALOID7.*VMM|not supported",
+                             session_id=sid, operation="media_capture",
+                             options={"track_index": 0, "part_index": 0, "name": "pitch metadata"})
+        check.evidence("media_scope", {"product": product, "supported": False})
+    else:
+        clip = (await check.library("media_capture", sid, track_index=0, part_index=0,
+                                    name="Pitch metadata " + check.run_id))["clip"]
+        try:
+            async with check.project() as media_target:
+                await check.edit(media_target, "track.create", type="MidiAi", name="Pitch media")
+                await check.library("media_import", media_target, clip_id=clip["clip_id"], track_index=0, position_tick=0)
+                imported, _ = await check.save(media_target, "pitch-media-import")
+                v.require(imported["tracks"][0]["parts"][0]["notes"][0]["directPitches"] == initial,
+                          "Media transfer lost pitch metadata")
+        finally:
+            await check.library("media_delete", sid, clip_id=clip["clip_id"])
     async with check.project() as destination:
-        before = await check.call("project_status", session_id=destination)
-        await check.rejected("project_merge", "direct pitch extension", session_id=destination,
-                             path=str(fixture), include_tracks=True, include_tempo=False)
-        v.require(await check.call("project_status", session_id=destination) == before,
-                  "Rejected direct-pitch merge changed target")
-    v.require(await check.edit(sid, "history.status") == history, "Rejected transfer changed source history")
-    for operation, options in (
-        ("note.split", {**target, "split_tick": 480}),
-        ("note.join", {"track_index": 0, "part_index": 0, "note_indices": [0, 1]}),
-        ("time.insert", {"start_tick": 20000, "duration_tick": 480, "include_tempo": False}),
-    ):
-        await check.rejected("project_edit", "direct pitch extension", session_id=sid,
-                             operation=operation, options=options)
+        before, _ = await check.save(destination, "pitch-merge-before")
+        await check.call("project_merge", session_id=destination,
+                         path=str(fixture), include_tracks=True, include_tempo=False)
+        merged, merged_path = await check.save(destination, "pitch-merge-after")
+        v.require(merged["tracks"][-1]["parts"][0]["notes"][0]["directPitches"] == initial,
+                  "Merge lost direct pitch metadata")
+        await check.edit(destination, "undo")
+        undone, _ = await check.save(destination, "pitch-merge-undo")
+        v.require(undone == before, "Pitch merge undo differs")
+        await check.edit(destination, "redo")
+        redone, _ = await check.save(destination, "pitch-merge-redo")
+        v.require(redone == merged, "Pitch merge redo differs")
+        reopened = (await check.call("project_open", path=str(merged_path)))["session_id"]
+        restored, _ = await check.save(reopened, "pitch-merge-reopen")
+        v.require(restored == merged, "Pitch merge reopen differs")
+        await check.close(reopened)
+    _, split = await preserved_edit(check, sid, "note.split", **target, split_tick=480)
+    split_notes = split["tracks"][0]["parts"][0]["notes"]
+    v.require(len(split_notes) == 2, "Note split did not produce two notes")
+    for note in split_notes:
+        retained = [{**point, "pos": point["pos"] + note["pos"]}
+                    for point in note["directPitches"] if "x_identity" in point]
+        generated = [point for point in note["directPitches"] if "x_identity" not in point]
+        v.require(retained == initial and generated == [{"pos": 1440, "value": "ZeroPitch"}],
+                  "Note split lost point identity or marked a generated sentinel", note["directPitches"])
+    await check.edit(sid, "note.split", **target, split_tick=480)
+    _, joined = await preserved_edit(check, sid, "note.join", track_index=0, part_index=0, note_indices=[0, 1])
+    joined_points = joined["tracks"][0]["parts"][0]["notes"][0]["directPitches"]
+    v.require([point for point in joined_points if "x_identity" in point] == initial and
+              all(point["value"] == "ZeroPitch" for point in joined_points if "x_identity" not in point),
+              "Note join lost retained direct pitch metadata", joined_points)
+    await check.edit(sid, "undo")
+    _, distant = await preserved_edit(check, sid, "time.insert", start_tick=20000, duration_tick=480, include_tempo=False)
+    v.require(distant["tracks"][0]["parts"][0]["notes"][0]["directPitches"] == initial,
+              "Distant timeline insertion changed direct pitch metadata")
     await check.rejected("project_edit", "distinct ticks", session_id=sid, operation="pitch.set",
                          options={**target, "points": [{"tick": 100, "value": 60}, {"tick": 100, "value": 61}]})
     v.require(await snapshot("rejected_operations") == initial, "Rejected operation changed extension state")

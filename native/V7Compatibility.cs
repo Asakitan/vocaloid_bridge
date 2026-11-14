@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Runtime.InteropServices;
 using Yamaha.VOCALOID.G2PA;
 using Yamaha.VOCALOID.VSM;
 
@@ -29,18 +30,67 @@ internal static class V7Compat
     internal static bool SetAiVibratoEnabled(WIVSMNote note, bool enabled) =>
         throw new NotSupportedException("VOCALOID7 has VibratoAiCurveModel; the legacy AI vibrato boolean has no verified equivalent.");
 
-    internal static bool IsMute(WIVSMTrack track) => track.IsChannelMute;
+    [DllImport("vsm", CallingConvention = CallingConvention.Cdecl)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories)]
+    [return: MarshalAs(UnmanagedType.U1)]
+    private static extern bool VIS_VSM_WIVSMTrack_mute(nint track);
+    internal static bool IsMute(WIVSMTrack track) => VIS_VSM_WIVSMTrack_mute((nint)track);
     internal static void SetMute(WIVSMTrack track, bool mute)
     {
-        if (track.IsChannelMute != mute)
+        if (IsMute(track) == mute)
+            return;
+        WIVSMSequence sequence = track.Sequence
+            ?? throw new InvalidOperationException("Native track has no parent sequence.");
+        if (sequence.NumTrack > 65536)
+            throw new InvalidOperationException("Native score collection exceeds the 65536-item limit.");
+        List<WIVSMTrack> soloTracks = new();
+        for (ulong index = 0; index < sequence.NumTrack; index++)
+        {
+            WIVSMTrack candidate = sequence.GetTrack(index)
+                ?? throw new InvalidOperationException("Native track lookup failed: " + sequence.LastError);
+            if (IsSolo(candidate))
+                soloTracks.Add(candidate);
+        }
+        try
+        {
+            foreach (WIVSMTrack candidate in soloTracks)
+                SetSolo(candidate, false);
+            if (soloTracks.Any(IsSolo))
+                throw new InvalidOperationException("Native solo suspension failed.");
             track.ToggleMute();
+            if (IsMute(track) != mute)
+                throw new InvalidOperationException("Native stored mute update failed.");
+        }
+        finally
+        {
+            foreach (WIVSMTrack candidate in soloTracks)
+                if (!IsSolo(candidate))
+                    SetSolo(candidate, true);
+        }
+        if (soloTracks.Any(candidate => !IsSolo(candidate)))
+            throw new InvalidOperationException("Native solo restoration failed.");
     }
 
     internal static bool IsSolo(WIVSMTrack track) => track.SoloState == VSMTrackSoloState.On;
-    internal static void SetSolo(WIVSMTrack track, bool solo)
+    internal static void SetSolo(WIVSMTrack track, bool solo) =>
+        SetSoloState(track, solo ? VSMTrackSoloState.On : VSMTrackSoloState.Off);
+
+    internal static void SetSoloState(WIVSMTrack track, VSMTrackSoloState state)
     {
-        if (IsSolo(track) != solo)
+        if (track.SoloState == state)
+            return;
+        if (track.SoloState == VSMTrackSoloState.Defeat)
+            track.ToggleSoloDefeat();
+        else if (track.SoloState == VSMTrackSoloState.On)
             track.ToggleSolo();
+        if (track.SoloState != VSMTrackSoloState.Off)
+            throw new InvalidOperationException("Native solo state could not be cleared.");
+        if (state == VSMTrackSoloState.On)
+            track.ToggleSolo();
+        else if (state == VSMTrackSoloState.Defeat)
+            track.ToggleSoloDefeat();
+        if (track.SoloState != state)
+            throw new InvalidOperationException("Native solo state update failed.");
     }
             internal static bool SetVoice(WIVSMMidiPart part, string value) => Track(part).SetVoiceBankID(value);
             internal static bool SetSecondaryVoice(WIVSMMidiPart part, string value) => Track(part).SetSecondaryVoiceBankID(value);

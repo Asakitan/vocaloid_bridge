@@ -18,6 +18,8 @@ RESOURCE_BYTES = b"v7-control-preservation\x00\x01"
                       "project_library", "project_open", "project_save", "project_render_part",
                       "project_inspect", "project_ai_adjust", "vocaloid_features")
 async def controls(check):
+    if (await check.call("vocaloid_features"))["product"] != "VOCALOID7":
+        raise verification.Skipped("V7 controls require the VOCALOID7 native host")
     banks = (await check.call("voicebanks"))["voices"]
     candidates = [bank for bank in banks if str(bank.get("version", "")).startswith("7.")
                   and bank.get("available_in_sequence") and bank.get("is_ai")]
@@ -103,6 +105,11 @@ async def controls(check):
         initial_pitches = [await check.edit(identifier, "pitch.list", **PART, note_index=index) for index in (0, 1)]
         verification.require(all(not pitches["points"] for pitches in initial_pitches),
                               "The AI fixture unexpectedly contains direct pitches")
+        initial_ai = await check.edit(identifier, "ai.status", **PART)
+        direct_ai = await check.edit(identifier, "ai.generate", **PART)
+        verification.require(initial_ai["generation"] == "native_ai_synthesis" and direct_ai["generated"]
+                      and direct_ai["status"]["rendered_score_valid"],
+                      "Direct native AI status/generation failed", direct_ai)
         automatic = await check.call("project_ai_adjust", session_id=identifier, **PART)
         verification.require(automatic["generation"]["result"]["generated"], "Native AI generation did not complete")
         verification.require(automatic["generation"]["result"]["status"]["rendered_score_valid"],
@@ -160,6 +167,79 @@ async def controls(check):
         check.evidence("roundtrip", {"source": str(source), "saved": str(saved_path), "performance": changed})
     finally:
         await check.close(identifier)
+
+
+@verification.feature("v7.attack_native_50", "v7", "voicebanks", "vocaloid_features", "project_create",
+                      "project_edit", "project_library", "project_save", "project_open", "project_render_part")
+async def attack_native(check):
+    import numpy as np
+
+    if (await check.call("vocaloid_features"))["product"] != "VOCALOID7":
+        raise verification.Skipped("V7 Attack requires the VOCALOID7 native host")
+    voices = (await check.call("voicebanks"))["voices"]
+    candidates = [item for item in voices if str(item["version"]).startswith("7.")
+                  and item["is_ai"] and item["available_in_sequence"]]
+    if not candidates:
+        raise verification.Blocked("An installed available V7 AI voicebank is required")
+    voice = next((item for item in candidates if item["name"] == "GekiyakuV"), candidates[0])
+    async with check.project() as identifier:
+        await check.edit(identifier, "track.create", type="MidiAi", name="V7 native Attack")
+        await check.edit(identifier, "part.create", track_index=0, start_tick=0, duration_tick=3840)
+        await check.edit(identifier, "voice.set", **SCOPE, ai_voice_bank_id=voice["comp_id"])
+        for start, pitch, lyric, phonemes in ((0, 60, "か", "k a"), (480, 64, "た", "t a"),
+                                               (960, 67, "さ", "s a")):
+            await check.edit(identifier, "note.add", **PART, start_tick=start, duration_tick=380,
+                             number=pitch, lyric=lyric, phonemes=phonemes, lang_id=0)
+        actual_voice = await check.edit(identifier, "voice.get", **SCOPE)
+        verification.require(actual_voice["ai_voice_bank_id"] == voice["comp_id"] and actual_voice["voice_type_supported"],
+                             "V7 Attack fixture did not retain the selected V7 voice", actual_voice)
+        await check.edit(identifier, "performance.set", **SCOPE, bypass={"VoiceColor": False})
+        before = await check.edit(identifier, "performance.get", **SCOPE)
+        attack = next(item for item in before["voice_colors"] if item["name"] == "S5Attack")
+        verification.require(attack["applicable_to_current_track"] and attack["requires_voice_bank_major_version"] == 7,
+                             "Native V7 Attack was not applicable", attack)
+        low = attack["setting"]["LowerBoundValue"]
+        high = attack["setting"]["UpperBoundValue"]
+        target = high if abs(high - attack["value"]) >= abs(attack["value"] - low) else low
+        verification.require(target != attack["value"], "Native V7 Attack has no distinct test value", attack)
+        target_note = {**PART, "note_index": 0}
+        skill_before = await check.library("note_skill_get", identifier, **target_note)
+        baseline = await check.call("project_render_part", session_id=identifier, **PART,
+                                    output_name=check.output("v7-attack-before", ".wav"))
+        before_info, before_pcm = verification.read_audio(baseline["path"])
+        changed = await check.edit(identifier, "performance.set", **SCOPE, voice_colors={"S5Attack": target})
+        changed_attack = next(item for item in changed["voice_colors"] if item["name"] == "S5Attack")
+        verification.require(changed_attack["value"] == target and
+                             await check.library("note_skill_get", identifier, **target_note) == skill_before,
+                             "Native V7 Attack changed the note HMM state or did not read back")
+        rendered = await check.call("project_render_part", session_id=identifier, **PART,
+                                    output_name=check.output("v7-attack-after", ".wav"))
+        after_info, after_pcm = verification.read_audio(rendered["path"])
+        verification.require(before_pcm.shape == after_pcm.shape and before_info["peak"] > 0 and after_info["peak"] > 0,
+                             "Native V7 Attack comparison has invalid audio")
+        difference = after_pcm - before_pcm
+        delta_rms = float(np.sqrt(np.mean(difference ** 2)))
+        verification.require(np.any(difference != 0), "Native V7 Attack did not alter the tested audio")
+        sequence, path = await check.save(identifier, "v7-attack-native")
+        verification.require(sequence["tracks"][0]["voice"]["compID"] == voice["comp_id"],
+                             "Saved V7 Attack fixture lost its V7 voice")
+        await check.edit(identifier, "undo")
+        undone = await check.edit(identifier, "performance.get", **SCOPE)
+        verification.require(next(item for item in undone["voice_colors"] if item["name"] == "S5Attack")["value"] == attack["value"],
+                             "Native V7 Attack undo did not restore its value")
+        await check.edit(identifier, "redo")
+        reopened = (await check.call("project_open", path=str(path)))["session_id"]
+        try:
+            restored = await check.edit(reopened, "performance.get", **SCOPE)
+            reopened_voice = await check.edit(reopened, "voice.get", **SCOPE)
+            verification.require(next(item for item in restored["voice_colors"] if item["name"] == "S5Attack")["value"] == target
+                                 and reopened_voice["ai_voice_bank_id"] == voice["comp_id"]
+                                 and await check.library("note_skill_get", reopened, **target_note) == skill_before,
+                                 "V7 Attack, voice or note HMM state changed after reopen")
+        finally:
+            await check.close(reopened)
+        check.evidence("v7_attack_native", {"product": "VOCALOID7", "voice": voice, "before": attack["value"],
+                       "after": target, "delta_rms": delta_rms, "frames": len(before_pcm), "vpr": str(path)})
 
 
 if __name__ == "__main__":

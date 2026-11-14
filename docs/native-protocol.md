@@ -2,7 +2,7 @@
 
 ## Startup and Ownership
 
-The production command is `dotnet native/bin/Release/net8.0-windows/VocaloidBridge.Host.dll --serve INSTALL WORKSPACE`.
+The production command is `dotnet native/bin/Release/<product>/net10.0-windows/VocaloidBridge.Host.dll --serve INSTALL WORKSPACE`.
 It must be launched through the bridge's private-Windows-desktop launcher. The host
 reads its actual thread desktop and rejects `Default`, `Winlogon`, and `Disconnect`
 before creating a native manager. `ping.desktop` is that observed desktop name.
@@ -59,7 +59,7 @@ automatic retry are implemented. Startup failures go to stderr and exit nonzero.
 | --- | --- | --- |
 | `ping` | `{}` | backend, pid, version, sessions, actual desktop, cache_namespace, render_cache_bytes |
 | `create` | title; bpm=120; sample_rate=44100 | session summary |
-| `open` | absolute VPR path | session summary |
+| `open` | absolute VPR path, or VPRX with VOCALOID7 | session summary |
 | `session` | session_id | session summary |
 | `save` | session_id; output_name; overwrite=false | session_id, path, saved=true, native=true |
 | `render_part` | session_id; track_index=0; part_index=0; output_name; overwrite=false | session_id, path, native=true, result, lua_result, render_observation, bytes, channels, sample_rate, bits_per_sample, frames |
@@ -81,6 +81,13 @@ The MCP `vocaloid_status` wrapper also returns `server_pid` for the Python proce
 separate from the native host's `pid`. Verification attributes foreground windows
 to these PIDs without activating or restoring any window.
 
+VOCALOID7 `open`, `import_project`, `save` and `revert_project` accept `.vprx`
+as well as `.vpr`, case-insensitively. Both use the same validated ZIP archive
+and `Project/sequence.json` native loader. VOCALOID6 rejects `.vprx` before
+opening or publishing a native project. Output remains under workspace/output;
+even explicit overwrite cannot replace the opened original. Choosing a suffix
+does not convert the serialized project schema or change the selected product.
+
 The historical real-MCP acceptance receipt is
 `artifacts/feature-acceptance-19d5e92a5f26/summary.json`: 44 feature cases plus
 cleanup pass, covering all 35 advertised tools and the 81 structured operations.
@@ -88,7 +95,7 @@ This does not certify every raw native member, voice, effect, or file format.
 The current 37-tool, 125-operation surface and subsequent focused receipts are
 listed in `STATUS.md`. Open/load and save/clone now check native track and voice
 identity. The known no-classic-bank condition reports `missing_classic_bank`
-before loading a classic VPR; a lossy native snapshot reports
+before loading a classic VPR or a VSQX containing vocal tracks; a lossy native snapshot reports
 `project_integrity` before publication. These checks preserve existing files,
 not add a missing voice model or promise classic synthesis.
 
@@ -176,7 +183,10 @@ unless `discard=true`. Unknown/already-closed IDs return an explicit error.
 
 `open` initializes the normal database/DSE context and extracts a ZIP into `WORKSPACE/.runtime/SESSION`, including embedded audio,
 and calls `OpenSequence(Project/sequence.json, Project, settings)`. There is no
-fake JSON fallback. Extraction rejects absolute paths, traversal, reserved Windows
+fake JSON fallback. Before native loading, AI notes with both a `singingSkill`
+object and a nonempty Attack/Release object are rejected because native loading
+would discard the former; explicit file-copy repair is described in
+[project preservation](project-preservation.md). Extraction rejects absolute paths, traversal, reserved Windows
 names, alternate streams, links/reparse points, special files, duplicate
 case-insensitive archive paths, more than 16384 entries, or over 8 GiB expanded
 data. Extracted files remain until the session is closed; originals are read-only.
@@ -261,6 +271,12 @@ are checked. Writable nested struct references write back through their parent;
 read-only struct snapshots are detached values. Set/call mutations mark dirty
 conservatively, including failed native calls that could have partially changed
 state. Get/Can/Has/Is/Contains/IndexOf methods are treated as reads.
+Direct calls also reject AI DVQM setters/reset and note-level Singing Skill
+setters/reset on AI notes containing Attack/Release; those native mutations
+cannot preserve both representations and undo. The restriction does not apply
+to classic-note DVQM methods or read-only inspection. Structured `library_op`
+can separately manage AI note annotations with explicit `storage=bridge_metadata`;
+those receipts are `native=false` and do not change native DVQM or AI synthesis.
 
 Enumeration is explicit and bounded: limit 1..1000, offset 0..100000. Normal
 enumerables obtain a fresh enumerator for every page. One-shot enumerator references

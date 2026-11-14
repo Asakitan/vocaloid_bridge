@@ -54,6 +54,158 @@ async def freeze_lifecycle(check):
         check.evidence("freeze_authoring", {"saved": str(path), "state": state, "authoring_equal": True})
 
 
+@v.feature("freeze.dvqm_noop", "freeze", "project_create", "project_edit", "project_library", "project_status", "voicebanks", "vocaloid_features")
+async def freeze_dvqm_noop(check):
+    product = (await check.call("vocaloid_features"))["product"]
+    voices = (await check.call("voicebanks"))["voices"]
+    voice = next(item for item in voices if item["name"] == "asa" and item["available_in_sequence"])
+    async with check.project() as sid:
+        await check.edit(sid, "track.create", type="MidiAi", name="Frozen no-op")
+        await check.edit(sid, "part.create", track_index=0, start_tick=0, duration_tick=1920)
+        scope = {"track_index": 0, "part_index": 0}
+        await check.edit(sid, "voice.set", **scope, **({"scope": "track"} if product == "VOCALOID7" else {}),
+                         ai_voice_bank_id=voice["comp_id"])
+        await check.edit(sid, "note.add", **scope, start_tick=0, duration_tick=480,
+                         number=60, lyric="\u3042", phonemes="a", lang_id=0)
+        state = await check.edit(sid, "track.freeze", track_index=0)
+        v.require(state["frozen"] and state["owned"], "Native freeze did not create an owned cache")
+        caches = list((v.ROOT / ".runtime" / sid).glob("frozen-*.wav"))
+        v.require(len(caches) == 1 and caches[0].stat().st_size > 44, "Frozen cache is missing")
+        cache_bytes = caches[0].read_bytes()
+        status = await check.call("project_status", session_id=sid)
+        history = await check.edit(sid, "history.status")
+        for is_attack in (True, False):
+            target = {**scope, "note_index": 0, "is_attack": is_attack}
+            selection = await check.library("dvqm_get", sid, **target)
+            v.require(selection["is_empty"] and await check.library("dvqm_clear", sid, **target) == selection,
+                      "Frozen-track empty DVQM clear did not remain a no-op")
+        v.require((await check.call("project_status", session_id=sid))["dirty"] == status["dirty"]
+                  and await check.edit(sid, "history.status") == history and caches[0].read_bytes() == cache_bytes
+                  and (await check.edit(sid, "track.freeze_state", track_index=0))["frozen"],
+                  "Empty DVQM clear changed a frozen track, cache or history")
+        await check.rejected("project_edit", "unfreeze", session_id=sid, operation="note.update",
+                             options={**scope, "note_index": 0, "number": 61})
+        await check.edit(sid, "track.unfreeze", track_index=0)
+        v.require(not caches[0].exists(), "Unfreeze left the owned cache behind")
+
+
+@v.feature("freeze.extended", "freeze", "score_compose", "project_edit", "project_library", "project_audio",
+           "project_open", "project_save", "project_clone", "project_inspect", "vocaloid_features", "vocaloid_operations")
+async def freeze_extended(check):
+    is_v7 = (await check.call("vocaloid_features"))["product"] == "VOCALOID7"
+    attack_catalog = await check.library("dvqm_catalog", is_attack=True, limit=1)
+    if not attack_catalog["entries"]:
+        raise v.Blocked("An installed native Attack preset is required")
+    attack = attack_catalog["entries"][0]
+    async with check.project(score=True) as sid:
+        scope = {"track_index": 0, "part_index": 0}
+        await check.edit(sid, "pitch.set", **scope, note_index=0, points=[{"tick": 100, "value": 60.5}])
+        await check.edit(sid, "controller.set", **scope, type="Dynamics", points=[{"tick": 100, "value": 42}])
+        lane = await check.edit(sid, "automation.list", scope="track_volume", track_index=0)
+        await check.edit(sid, "automation.set", scope="track_volume", track_index=0,
+                         points=[{"tick": 480, "value": lane["minimum"]}])
+        styles = (await check.library("style_list", query="asa"))["styles"]
+        style = next(item for item in styles if item["name"] == "asa Warm Chorus")
+        await check.library("style_apply", sid, **scope, **({"scope": "track"} if is_v7 else {}),
+                            style_id=style["style_id"], include_audio=True)
+        sequence, native_path = await check.save(sid, "freeze-extension-native")
+    _, members = v.read_vpr(native_path)
+    marker = "x_freeze_48"
+    track = sequence["tracks"][0]
+    part = track["parts"][0]
+    note = part["notes"][0]
+    sequence[marker], track[marker], part[marker], note[marker] = "root", "track", "part", "note"
+    conflict_note = part["notes"][1]
+    conflict_note.pop("singingSkill", None)
+    conflict_note["dvqm"] = {"attack": {"compID": attack["component_id"], "levelNames": attack["level_names"],
+                                        "isProtected": True, "speed": 77, "topFactor": 1.0}}
+    note["directPitches"][0][marker] = "pitch"
+    next(item for item in part["controllers"] if item["name"].lower() == "dynamics")["events"][0][marker] = "controller"
+    next(item for item in track["volume"]["events"] if item["pos"] == 480)[marker] = "automation"
+    effect = (track if is_v7 else part)["audioEffects"][0]
+    effect[marker] = "effect"
+    if effect.get("parameters"):
+        effect["parameters"][0][marker] = "parameter"
+    extra = "Project/bridge-probe/freeze-extra.bin"
+    members[extra] = b"freeze-extra-resource\x00\x01"
+    members["Project/sequence.json"] = json.dumps(sequence, ensure_ascii=False).encode("utf-8")
+    source = v.ROOT / "output" / check.output("freeze-extension-source")
+    with zipfile.ZipFile(source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items():
+            archive.writestr(name, payload)
+    original = source.read_bytes()
+    sid = (await check.call("project_open", path=str(source)))["session_id"]
+    try:
+        original_state, _ = await check.save(sid, "freeze-extension-original")
+        await check.edit(sid, "note.update", track_index=0, part_index=0, note_index=0, number=61)
+        baseline, _ = await check.save(sid, "freeze-extension-before")
+        history = await check.edit(sid, "history.status")
+        discovery = await check.call("project_inspect", session_id=sid, feature="freeze", track_index=0)
+        templates = {item["arguments"]["operation"]: item for item in discovery["contract"]["write_calls"]}
+        v.require(set(templates) == {"track.freeze", "track.unfreeze"} and all(
+              item["tool"] == "project_edit" and item["arguments"]["session_id"] == sid
+              and item["arguments"]["options"] == {"track_index": 0} for item in templates.values()),
+              "Freeze templates did not bind the selected session and track")
+        catalog = await check.call("vocaloid_operations", domain="score", operation="track.freeze")
+        v.require("freeze" in catalog["domains"]["score"]["operations"][0]["features"],
+              "Track freeze operation is not linked to its feature")
+        presend = (await check.edit(sid, "sequence.get"))["presend_time_sec"]
+        mix = await check.audio(sid, "mixdown", track_indices=[0], output_name=check.output("freeze-extension-mix", ".wav"),
+                    sample_rate=44100, channels=2, bits_per_sample=16, bypass_effects=False)
+        mix_metadata, mix_samples = v.read_audio(mix["path"])
+        state = await check.edit(sid, "track.freeze", **templates["track.freeze"]["arguments"]["options"])
+        v.require(state["frozen"] and state["owned"], "Extension project did not freeze")
+        conflict_target = {"track_index": 0, "part_index": 0, "note_index": 1, "is_attack": True}
+        conflict_before = await check.library("dvqm_get", sid, **conflict_target)
+        v.require(not conflict_before["is_empty"], "Frozen conflict fixture lost its Attack")
+        await check.rejected("project_library", "identity transaction|unfreeze|cannot preserve", session_id=sid,
+                     operation="dvqm_clear", options=conflict_target)
+        v.require(await check.library("dvqm_get", sid, **conflict_target) == conflict_before,
+              "Rejected frozen Attack clear changed the selection")
+        caches = list((v.ROOT / ".runtime" / sid).glob("frozen-*.wav"))
+        v.require(len(caches) == 1, "Extension project frozen cache is missing")
+        cache_metadata, cache_samples = v.read_audio(caches[0])
+        padding = round(presend * mix_metadata["sample_rate"])
+        v.require(cache_metadata["peak"] > 0 and len(cache_samples) == len(mix_samples) + padding
+              and np.all(cache_samples[:padding] == 0)
+              and np.allclose(cache_samples[padding:], mix_samples, atol=2 / 32768, rtol=0),
+              "Extension project frozen cache differs from the native mix or presend alignment")
+        saved, path = await check.save(sid, "freeze-extension-frozen")
+        v.require(saved == baseline and v.read_vpr(path)[1][extra] == members[extra],
+                  "Frozen save changed extension-bearing authoring data")
+        clone = (await check.call("project_clone", session_id=sid))["session_id"]
+        try:
+            clone_state = await check.edit(clone, "track.freeze_state", track_index=0)
+            cloned, clone_path = await check.save(clone, "freeze-extension-clone")
+            v.require(not clone_state["frozen"] and cloned == baseline and v.read_vpr(clone_path)[1][extra] == members[extra],
+                      "Frozen clone lost extension data or retained the cache")
+        finally:
+            await check.close(clone)
+        await check.edit(sid, "track.unfreeze", **templates["track.unfreeze"]["arguments"]["options"])
+        unfrozen, unfrozen_path = await check.save(sid, "freeze-extension-unfrozen")
+        v.require(unfrozen == baseline and v.read_vpr(unfrozen_path)[1][extra] == members[extra]
+                  and not caches[0].exists() and await check.edit(sid, "history.status") == history,
+                  "Unfreeze changed extension data, history, or retained the cache")
+        await check.edit(sid, "undo")
+        undone, undo_path = await check.save(sid, "freeze-extension-undo")
+        v.require(undone == original_state and v.read_vpr(undo_path)[1][extra] == members[extra],
+                  "Undo after unfreeze did not restore extension-bearing history")
+        await check.edit(sid, "redo")
+        redone, redo_path = await check.save(sid, "freeze-extension-redo")
+        v.require(redone == baseline and v.read_vpr(redo_path)[1][extra] == members[extra],
+                  "Redo after unfreeze did not restore extension-bearing history")
+        reopened = (await check.call("project_open", path=str(path)))["session_id"]
+        try:
+            restored, restored_path = await check.save(reopened, "freeze-extension-reopened")
+            v.require(restored == baseline and v.read_vpr(restored_path)[1][extra] == members[extra],
+                      "Reopening lost extension data or resources")
+        finally:
+            await check.close(reopened)
+    finally:
+        await check.close(sid)
+    v.require(source.read_bytes() == original, "Source extension project changed")
+
+
 async def mcp_smoke(fixture, run):
     original = fixture.read_bytes()
     params = StdioServerParameters(command=sys.executable, args=["-m", "vocaloid_bridge"], cwd=str(ROOT),

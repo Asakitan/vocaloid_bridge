@@ -56,8 +56,8 @@ internal sealed partial class EngineHost
             throw new InvalidOperationException("Reverting discards changes; set discard_changes=true.");
         string path = current.LastSavedPath ?? current.OriginalPath
             ?? throw new InvalidOperationException("The project has no saved version to restore.");
-        if (!string.Equals(Path.GetExtension(path), ".vpr", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Save the imported project as a VPR before reverting it.");
+        if (!IsProjectArchivePath(path))
+            throw new InvalidOperationException("Save the imported project as a VPR or VPRX before reverting it.");
         EngineSession replacement = Open(path);
         try { Close(id, true); }
         catch
@@ -345,10 +345,10 @@ internal sealed partial class EngineHost
         path = Path.GetFullPath(path);
         PathGuard.NoLinks(path);
         string extension = Path.GetExtension(path).ToLowerInvariant();
-        if (extension == ".vpr")
+        if (IsProjectArchivePath(path))
             return Open(path);
         if (extension is not (".vsqx" or ".ppsf" or ".mid" or ".midi" or ".smf" or ".vsq"))
-            throw new ArgumentException("Supported imports: VPR, VSQX, PPSF, MIDI, SMF and VSQ.");
+            throw new ArgumentException("Supported imports: VPR, VPRX (VOCALOID7), VSQX, PPSF, MIDI, SMF and VSQ.");
         FileInfo source = new(path);
         if (!source.Exists || source.Length > MaxArchiveBytes)
             throw new IOException("Import source is missing or exceeds 8 GiB.");
@@ -364,6 +364,7 @@ internal sealed partial class EngineHost
             VSMSequenceData settings = SequenceSettings(VSMSamplingRate._44100);
             if (extension == ".vsqx")
             {
+                ValidateVsqxOpenRequirements(stagedInput);
                 string schemaDirectory = Path.GetDirectoryName(typeof(WVSMModuleIF).Assembly.Location)!;
                 sequence = manager.OpenSequence(stagedInput, schemaDirectory, settings);
             }

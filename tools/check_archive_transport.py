@@ -11,7 +11,12 @@ DEVICE = "DS:062aa9fc-7997-489c-84e3-0ad0e162ac2b"  # Previously validated HECAT
 
 @v.feature("preservation.archive_transport", "transport_device", "score_compose", "project_open", "project_audio", "project_edit", "project_save", "project_close", "project_status", "project_library")
 async def archive_transport(check):
-    report = {"device_id": DEVICE, "mute_output": True}
+    product = (await check.call("vocaloid_features"))["product"]
+    is_v7 = product == "VOCALOID7"
+    effect_scope = {"scope": "track", "track_index": 0} if is_v7 else {"scope": "part", "track_index": 0, "part_index": 0}
+    style_scope = {"scope": "track", "track_index": 0} if is_v7 else {"track_index": 0, "part_index": 0}
+    report = {"device_id": DEVICE, "mute_output": True, "product": product,
+              "effect_fixture_scope": effect_scope, "part_effect_supported": not is_v7}
     check.evidence("archive_transport", report)
     async with check.project(score=True) as seed:
         _, path = await check.save(seed, "archive-transport-seed")
@@ -43,21 +48,24 @@ async def archive_transport(check):
         v.require(not (await audio("transport_status"))["prepared"], "Failed prepare retained transport")
         async with check.project(score=True) as other:
             effects = await check.audio(other, "effects", scope="catalog")
-            chain = await check.audio(other, "effects", scope="part", track_index=0, part_index=0)
+            if is_v7:
+                await check.rejected("project_audio", "VOCALOID7.*part audio effects", session_id=other,
+                                     operation="effects", options={"scope": "part", "track_index": 0, "part_index": 0})
+            chain = await check.audio(other, "effects", **effect_scope)
             existing = {effect["effect_id"] for effect in chain["effects"]}
             effect_id = next(effect["effect_id"] for effect in effects["effects"] if effect["effect_id"] not in existing)
-            await check.audio(other, "set_effect", scope="part", action="add", effect_id=effect_id, track_index=0, part_index=0)
-            style = (await check.library("style_capture", other, track_index=0, part_index=0, name="Transport style " + check.run_id))["style"]
+            await check.audio(other, "set_effect", **effect_scope, action="add", effect_id=effect_id)
+            style = (await check.library("style_capture", other, **style_scope, name="Transport style " + check.run_id))["style"]
             style_id = style["style_id"]
             try:
                 state = await audio("transport_prepare", device_id=DEVICE, sample_rate=44100, mute_output=True)
                 prepared = True
                 v.require(state["session_id"] == sid and state["prepared"] and state["muted"], "Wrong source identity or state", state)
                 await check.rejected("project_save", "release|transport", session_id=sid, output_name=check.output("busy-save"))
-                await check.rejected("project_edit", "release|transport", session_id=sid, operation="track.rename", options={"track_index": 0, "name": "blocked"})
+                await check.rejected("project_edit", "release|transport", session_id=sid, operation="track.update", options={"track_index": 0, "name": "blocked"})
                 await check.rejected("project_audio", "transport|release|busy", session_id=other, operation="effects", options={"scope": "catalog"})
-                await check.rejected("project_library", "transport|release|busy", session_id=other, operation="style_capture", options={"track_index": 0, "part_index": 0, "name": "blocked"})
-                await check.rejected("project_library", "transport|release|busy", session_id=other, operation="style_apply", options={"track_index": 0, "part_index": 0, "style_id": style_id})
+                await check.rejected("project_library", "transport|release|busy", session_id=other, operation="style_capture", options={**style_scope, "name": "blocked"})
+                await check.rejected("project_library", "transport|release|busy", session_id=other, operation="style_apply", options={**style_scope, "style_id": style_id})
                 start = await audio("transport_play"); await asyncio.sleep(.4); progress = await audio("transport_status")
                 v.require(progress["session_id"] == sid and progress["playing"] and progress["seconds"] > start["seconds"] + .05 and max(progress["output_peak_db"]) <= -120, "Muted playback did not advance", progress)
                 v.require(not (await audio("transport_stop"))["playing"], "Stop failed")
@@ -65,8 +73,8 @@ async def archive_transport(check):
                 observed = await audio("transport_status")
                 v.require(seek["session_id"] == sid and abs(observed["seconds"] - 1.2) < .1, "Seek not observed", observed)
                 await audio("transport_release"); prepared = False
-                await check.library("style_apply", other, style_id=style_id, track_index=0, part_index=0)
-                await check.library("style_capture", other, track_index=0, part_index=0, name="Transport resumed " + check.run_id, overwrite_style_id=style_id)
+                await check.library("style_apply", other, style_id=style_id, **style_scope)
+                await check.library("style_capture", other, **style_scope, name="Transport resumed " + check.run_id, overwrite_style_id=style_id)
                 report.update(play=progress, seek=observed)
             finally:
                 if prepared:

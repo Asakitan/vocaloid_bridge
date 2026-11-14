@@ -93,17 +93,26 @@ async def recovery_resolution(check):
         await check.library('media_delete', sid, clip_id=clip_id)
 
 
-@v.feature('library.voices_phrases_33', 'library', 'voicebanks', 'project_create', 'project_edit', 'project_library', 'project_save', 'project_open')
+@v.feature('library.voices_phrases_33', 'library', 'vocaloid_features', 'voicebanks', 'project_create', 'project_edit', 'project_library', 'project_save', 'project_open')
 async def voices_phrases(check):
+    is_v7 = (await check.call('vocaloid_features'))['product'] == 'VOCALOID7'
     voices = [item for item in (await check.call('voicebanks'))['voices']
-              if item['kind'] == 'Dnn' and item['available_in_sequence']]
+              if item['kind'] == 'Dnn' and item['available_in_sequence']
+              and (not is_v7 or str(item['version']).startswith('7.'))]
     v.require(voices, 'No AI voices installed')
+    targets = []
     async with check.project() as sid:
-        await check.edit(sid, 'track.create', type='MidiAi', name='AI voices')
+        if not is_v7:
+            await check.edit(sid, 'track.create', type='MidiAi', name='AI voices')
         for index, voice in enumerate(voices):
-            scope = {'track_index': 0, 'part_index': index}
-            await check.edit(sid, 'part.create', track_index=0, start_tick=index * 3840, duration_tick=2880, name=voice['name'])
-            await check.edit(sid, 'voice.set', **scope, ai_voice_bank_id=voice['comp_id'])
+            if is_v7:
+                await check.edit(sid, 'track.create', type='MidiAi', name=voice['name'])
+            scope = {'track_index': index if is_v7 else 0, 'part_index': 0 if is_v7 else index}
+            settings_scope = {**scope, **({'scope': 'track'} if is_v7 else {})}
+            targets.append(settings_scope)
+            await check.edit(sid, 'part.create', track_index=scope['track_index'], start_tick=0 if is_v7 else index * 3840,
+                             duration_tick=2880, name=voice['name'])
+            await check.edit(sid, 'voice.set', **settings_scope, ai_voice_bank_id=voice['comp_id'])
             note = await check.edit(sid, 'note.add', **scope, start_tick=0, duration_tick=240, number=60, lyric='い', lang_id=0)
             v.require(note['is_valid_phonemes'] and note['phonemes'], 'Voice produced no valid first note', voice['name'])
         for index in range(1, 6):
@@ -128,7 +137,7 @@ async def voices_phrases(check):
     reopened = (await check.call('project_open', path=str(saved)))['session_id']
     try:
         for index, voice in enumerate(voices):
-            actual = await check.edit(reopened, 'voice.get', track_index=0, part_index=index)
+            actual = await check.edit(reopened, 'voice.get', **targets[index])
             v.require(actual['ai_voice_bank_id'] == voice['comp_id'], 'Voice identity did not roundtrip', voice['name'])
     finally:
         await check.close(reopened)

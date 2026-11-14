@@ -1,47 +1,33 @@
 # 当前目标
 
-交付供 Agents 使用的 VOCALOID6/7 后台功能；仅 AI 声库，保留创建、打开、编辑、保存。当前版本 0.30.0：41 工具/130 操作，V7 身份误报及 Robot 后台修复、参数检查与原生 AI 生成/音高保留已完成定向验收，见 [会话 46](docs/session-log/session-46.md)。
+交付供 Agents 使用的 VOCALOID6/7 后台功能；默认使用本机 V7，V6 显式选择。当前 0.30.0 含未发布修复，41 工具/130 操作；版本与声库证据分开记录。
 
-## 已完成历史
+## 活跃任务
 
-- [x] 0.28.0：临时文件自动清理。MCP 启动时及之后每 10 分钟删除超过一小时的 `output/` 生成文件、`.runtime/mcp-temp` 旧临时文件和已退出宿主的临时目录；手动入口默认 dry-run，`--keep` 可保留匹配项。真实工作区首次清理删除 4573 个文件 / 5.5 GB，失败 0。
-- [x] 会话 38：样式捕获关联来源声部，细项参数默认启用对应效果且显式旁路优先；样式应用一次提交，普通/扩展工程保存重开和撤销/重做通过。
-- [x] 会话 37：多片段混缩超时修复。目标波形有效且整条原生渲染队列完成后才释放控制器；实际 12 段工程单段、整体混缩及逐段非零样本通过，超时值未改。
-- [x] 0.27.0：Agent 作曲流程。`vocaloid_workflow` 给出步骤、歌词写法和 AI 实际演唱的控制项；AI 音符改词时重新生成音素；歌词被拒绝时提示写法；适用范围、取值范围和已安装声库写进返回值。依据是 asa 的逐样本审计和 Haiku 子 agent 的试做。
-- [x] 0.26.0：VOCALOID 后台实例由 MCP 按需启动、启停/重启及确认退出后的新建/重开；活动工程保护和不重放失联请求。
+- [ ] 提供已安装可用且匹配夹具的经典声库后，完成经典 VSQX/PPSF、DVQM 和 Singing Skill 往返；本机 `Dse=0`，不替换声库来伪造通过。
+- [ ] 提供外部多片段 VPR 夹具以完成对应验收；原生生成的多片段混缩用例已通过。
+- [ ] V7 VMM 素材、独立片段音频效果及编辑器原生变声尚无本桥实现；分别研究实际接口或明确设计桥接替代，不把轨道效果伪装成片段效果。V7 受限 WAV 反转已由桥接支持。
+- [ ] AI 音符原生旧 DVQM 与 HMM 共存的无损编辑仍未实现；两种 setter 顺序不能同时保留保存与撤销。显式 `bridge_metadata` 仅存注记，不影响合成；V7 `S5Attack` 是已验证的独立原生控件。
+- [ ] 客户端先保存并关闭工程，再重新连接 `vocaloid6-native` 以加载未发布修复；当前聊天没有直接 VOCALOID MCP 工具，独立 stdio 不证明当前客户端已重连。
+- [ ] V7 复杂工程混缩、全部参数音频差异、复杂扩展迁移及所有声库仍未逐项验收；物理 MIDI 和实际 DAW 未验，V6 历史矩阵不等于 V7 证据。
 
-- [x] 复杂扩展时间编辑：跨片段边界、MIDI/AI/音频、音高/控制器/自动化元数据和起始 tempo。
-- [x] 素材元数据：控制器、直接音高、其他数组及音频片段字段的捕获/导入与原生历史。
-- [x] 其他对象数组：自然键/已知投影、提交前核对、删除/替换和冲突回滚。
-- [x] 事务边界：读回异常在提交前回滚；元数据地图合并与原生 no-op 历史。
+## 当前验证
 
-## 交付项
-
-- [x] 公开仓库与 MIT 许可证：`Asakitan/vocaloid_bridge` 为 PUBLIC，默认分支 `master`；`LICENSE` 由 GitHub 识别为 MIT；远端 315 个文件，未包含 `curves/` 或运行产物。
-
-- [x] 客户端绑定确认 0.26.0：新建的 Claude Code 聊天经自身 MCP 连接列出 38 个工具，单次 `vocaloid_status` 返回 `mcp_version=0.26.0`、原生引擎 6.13.3.1、0 会话，实际 desktop 与预期私有 desktop 一致。随后用 `vocaloid_runtime stop` 结束这次拉起的空闲实例，缓存、运行副本和私有临时目录已清理。只查了这一次状态，没有重跑功能测试；原 Codex 聊天返回 `Transport closed` 的旧传输没有再重试，也不称为已恢复。回执：`artifacts/mcp-binding-confirmed-36.json`。
-
-- [ ] 客户端重新连接后确认 0.30.0：先保存关闭工程，再重新连接 `vocaloid6-native`，确认 VOCALOID7、41 工具及 `project_inspect`/`project_ai_adjust`。独立真实 stdio 已通过，当前聊天未暴露 VOCALOID MCP 工具；未替用户重启其他活动实例。
-- [ ] V7 混缩、完整参数声音差异与复杂扩展迁移仍未逐项验收；本次到此停止，不自动运行全量。VMM 素材、片段音频效果、反转/变声为明确不支持，见 [V7 兼容说明](docs/vocaloid7.md)。
-
-会话 37 的混缩补丁和会话 38 的样式/参数补丁都需要新宿主：先保存并关闭工程，再重启 MCP 或调用 `vocaloid_runtime restart`。当前聊天没有可直接使用的 VOCALOID MCP 工具，未替用户重启其他活动实例。
-
-V6 历史功能矩阵仍有 7 个 I 行，范围说明见 [STATUS](STATUS.md)；不能直接当作 V7 的验证范围。
+- 会话51补齐 V7 `.vprx` 原生生命周期及离线编排入口；V7三项定向分别在 `2c741f35eabf`、`7566f0ec8393` 通过，V6同组三项及清理 `36cc8e4f2085` 通过。原生缺失能力与经典声库阻塞未因此解除。
+- V7 最终全套 `4edcb24890f5`：165 通过、0 失败、13 原生不支持、8 阻塞、2 跳过；41 工具均有通过用例中的正向调用，8 个媒体和 3 个标准轨 Singing Skill 操作仍无正向覆盖。未实现与环境阻塞不计通过。
+- V7/GekiyakuV 与 V6/asa 的原生旧 DVQM/HMM 冲突、两种 setter 顺序分别复现；V7 `S5Attack` 音频差异及历史、重开通过。详见 [状态](STATUS.md)。
+- 同代 V7 VoiceColor 四类参数与旁路音频差异定向通过 `69705fa877b9`；V6 片段级回归通过 `8aefac3f9629`。
+- V7 Breath 多间隔试句 `8cacc4346b8f` 与最终全套均通过，原失败 `14556982650d` 来自试句无区分力；V6 共享变更 7 功能用例加清理通过 `c12fa57e23c3`。两产品专属构建成功，详见 [状态](STATUS.md)。
 
 ## 固定约定
 
-主 agent 负责集成和验收；简单修改直接处理，复杂独立模块可按当前工作区指令分派。全后台，仅必要测试，生成文件在工作区 output 并由既有清理机制管理。硬件 MIDI、真实 DAW、经典试用与主观听音不属于验收范围。身份歧义、原生能力/范围错误继续明确返回错误，不静默丢字段。
+仅操作私有后台宿主和工作副本，不操作交互编辑器或更改授权；不使用替代合成引擎，不自动重放不确定写入，身份歧义和未验证原生能力明确报错。
 
-## 历史
+## 历史索引
 
 - [会话索引](docs/session-log/README.md)
-- [会话 46](docs/session-log/session-46.md)：V7 身份保护、Robot 后台兼容、功能导航、原生 AI 生成/音高保留；定向 stdio 验收通过。
-- [会话 33](docs/session-log/session-33.md)：冲突决策与扩展基本事务。
-- [会话 34](docs/session-log/session-34.md)：剩余实现、三项必要验收及最终连接切换。
-- [会话 35](docs/session-log/session-35.md)：MCP 托管后台实例的按需启动、启停与恢复。
-- [会话 36](docs/session-log/session-36.md)：Claude Code 新聊天的绑定确认，以及 0.27.0 的 Agent 作曲流程。
-- [会话 37](docs/session-log/session-37.md)：多片段混缩超时修复与实际工程回归。
-- [会话 38](docs/session-log/session-38.md)：样式与细项参数修复，普通/扩展工程的定向验收。
-- [会话 39](docs/session-log/session-39.md)：整曲制作中的 `points_file`、逐音符批量补丁与 `batch.run`，AI 声库实测。
-- [会话 40](docs/session-log/session-40.md)：公开仓库、MIT 许可证与远端回读。
-- [会话 41](docs/session-log/session-41.md)：README 猫娘化、本机记录移出与 CHANGELOG 分离。
+- [会话51](docs/session-log/session-51.md)：V7 VPRX 工程入口、资源保持和 V6 拒绝边界。
+- [会话50](docs/session-log/session-50.md)：剩余回归修复及真实原生/环境阻塞分类。
+- [会话 49](docs/session-log/session-49.md)：V7 全套复测、扩展 MIDI 录音、同代 DVQM 与 V7 Attack/Breath。
+- [会话 48](docs/session-log/session-48.md)：V7 WAV 反转及双产品保护。
+- [会话 47](docs/session-log/session-47.md)：双产品样式与原生 DVQM 保护。

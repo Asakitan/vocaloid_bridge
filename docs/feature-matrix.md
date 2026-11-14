@@ -100,7 +100,7 @@ V 不由工具数量或能够枚举签名推导。当前为 41 个工具、130 �
 | C-08 | 声库列表与可用性 | voicebanks | V | 43,53 |
 | C-09 | 主、副声库与 AI 声库选择 | voice.get/set；双 AI 声库素材往返已验，结果附 installed_voice 说明 ID 对应的已安装声库；传统声库需对应 DSE 资源 | I | 43,53 |
 | C-10 | 样式预设查询及应用 | project_library；含音频效果链的样式保存重开；21 个已安装 AI 声库均有 `<声库名> Default` 样式，新建声部应用后才具备编辑器默认音色 | V | 43,54-55 |
-| C-11 | Singing Skill、Attack、Release | singing_skill_catalog/get/set 与 note_skill_get/set/reset；目录及参数可调，经典声音和完整往返需 DSE 声库；手册标明均为标准 VOCALOID 声部功能，AI 声部上 Attack/Release 与 note_skill 权重不改变合成，singing_skill_set 明确拒绝 | I | 55,58 |
+| C-11 | Singing Skill、Attack、Release | 目录和经典声部参数可调；经典声音完整往返需 DSE 声库。AI 音符已有原生 Attack/Release 可读取，原生写入及冲突的 note_skill 编辑仍拒绝；显式桥接注记可编辑但不影响 AI 声音 | I | 55,58 |
 | C-12 | Robot Voice | performance.get/set；禁用原生结果缓存后 Hard 声音差异、保存重开和混缩通过，同宿主另一会话音频保持 | V | 43 |
 | C-13 | Breath 模式、类型与呼气量 | 参数保存重开通过；启用、频率和呼气量有 PCM 差异，受测 AI 中 Male/Female 声音相同，不声称类型听感差异 | V | 44 |
 | C-14 | Take 车道选择 | performance.get/set；0 与 9 车道声音差异及保存重开通过 | V | 44 |
@@ -145,7 +145,7 @@ V 不由工具数量或能够枚举签名推导。当前为 41 个工具、130 �
 | L-05 | 删除工作区自有媒体 | project_library media_delete；禁止删除用户原有素材 | V | 71 |
 | L-06 | 预设目录及音素语言信息 | project_library 目录查询已有原生返回值；具体经典效果的声音边界另见 C-11 | V | 53-58,77-91 |
 | L-07 | 五种语言静态音素符号表 | project_library phoneme_table；手册参考数据，非原生动态枚举 | V | 77-91 |
-| L-08 | 特殊表现素材的无损捕获 | 已验传统与 AI Attack/Release、无效音素标志；部分字段使用桥接扩展。AI 音符上的 Attack/Release 选择可随素材往返，但不改变 AI 合成；其余组合及实际演唱属于标准声部，需 DSE 声库 | I | 19,71 |
+| L-08 | 特殊表现素材的无损捕获 | V6 既有 AI Attack/Release 选择及无效音素标志可随受测素材往返；AI DVQM 原生写入仍拒绝，显式桥接注记仅保存元数据。其余组合及标准声部实际演唱需 DSE 声库 | I | 19,71 |
 | L-09 | 非零起点的音频裁剪素材捕获 | project_library media_capture / media_import；PCM16 单声道样本跨速度变化逐帧验证 | V | 19,71 |
 | L-10 | AI 次声库素材捕获与恢复 | project_library media_capture / media_import；两套已安装 AI 声库实际往返 | V | 19,71 |
 | L-11 | 私有样式捕获、覆盖、改名、标签与删除 | style_capture/update/delete；捕获关联来源声部，应用为一次事务；普通/扩展工程保存重开、撤销/重做与未知字段保留已验，用户原样式只读 | V | 54-55 |

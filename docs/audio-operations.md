@@ -20,10 +20,15 @@ windows, or `App`, and never sends UI input.
 ## Output Rules
 
 VOCALOID7 effects support track/master scope, not part scope. Its installed WOR
-does not expose the V6 reverse or VOCALO CHANGER entry points used here;
-`process_audio` with `reverse` or `voice_change` returns unsupported. Other
-routes compile against their version-specific API, but the historical V6
+does not expose the V6 reverse or VOCALO CHANGER entry points. `voice_change`
+returns unsupported; `reverse` processes PCM or IEEE-float RIFF WAV frames in
+the bridge using bounded buffers. Its result reports `native=false`,
+`backend=bridge.pcm_frame_reverse` and a `metadata_warning`, not a WOR render.
+Other routes compile against their version-specific API, but the historical V6
 mixdown and device evidence below is not V7 runtime acceptance.
+V7 has separate focused evidence for a two-track native-vocal audio fixture:
+44.1 kHz stereo master/stem comparison and a 192 kHz mono master-effect
+comparison passed in `artifacts/feature-acceptance-4c197f2d178a/summary.json`.
 
 - `output_name` is relative to the existing workspace `output` directory.
 - `overwrite` defaults to `false`; publication uses exclusive file movement.
@@ -54,7 +59,7 @@ Indices are zero-based. Fields marked optional have the defaults shown.
 | `import_audio` | `path`; optional `track_index`, `position_tick=0`, `name=source stem` | Imports a WAV with `WIVSMAudioPart.SetOriginalWaveFile`. Omitting `track_index` creates an Audio track using `InsertTrackEx`; supplying it requires an existing Audio track. Returns the actual sorted part index, region, asset paths, and duration. |
 | `edit_audio` | `track_index`, `part_index`; optional `position_tick`, `begin_tick`, `end_tick`, `name` | Calls `SetRegion`, `MovePart`, and `SetName`; returns the new native sorted part index. Region tick offsets are relative to the underlying audio asset, not the project start. |
 | `export_audio` | `track_index`, `part_index`, `output_name`; optional `overwrite=false`, `original=false` | Copies the current native stored WAV, or original stored asset with `original=true`. This is **whole-asset export**, not region trimming, effects rendering, or resynthesis. |
-| `process_audio` | `path`, `action` (`reverse`, `normalize`, `time_stretch`, `pitch_shift`, or `voice_change`), `output_name`; optional `overwrite=false`, `ratio=1`, `pitch_cents=0`; `voice_id` required for voice change | Calls the installed WOR offline renderer directly; see action table below. Creates a separate WAV without changing the imported part. |
+| `process_audio` | `path`, `action` (`reverse`, `normalize`, `time_stretch`, `pitch_shift`, or `voice_change`), `output_name`; optional `overwrite=false`, `ratio=1`, `pitch_cents=0`; `voice_id` required for voice change | Uses the installed WOR renderer, except V7 `reverse` uses bridge PCM/float frame reversal with `native=false`; see action table. Creates a separate WAV without changing the imported part. |
 | `mixdown` | `output_name`; optional `track_indices`, `sample_rate=44100` (or 48000, 96000, 192000), `bits_per_sample=24` (or 16), `channels=2` (or 1), `bypass_effects=false`, `timeout_seconds=120`, `overwrite=false` | Native VAE manual mixdown with VEM effects, file placements, and VSM-rendered vocal parts. The file ends at the end of the last part. |
 | `mixdown_stems` | `output_prefix`; optional `track_indices`, `sample_rate=44100`, `bits_per_sample=24`, `channels=2`, `bypass_effects=false`, `timeout_seconds=120`, `overwrite=false` | One native mix per selected track, named `PREFIX-track-INDEX.wav`. Existing destinations are preflighted before the first stem. Earlier completed stems remain if a later native render fails. |
 | `effects` | optional `scope=catalog`, `effect_id`, `track_index`, `part_index` | Bundled VEM effect discovery or current master/track/part chain inspection. |
@@ -73,6 +78,11 @@ redone.
 Applying a style stages its complete MIDI/audio chain and identity in one score
 transaction, including on supported extension-bearing projects. One undo restores
 the prior chain; constituent effects no longer commit independently.
+Style effects initialize the native controller and apply mode parameters before
+converting the other preset values. V6 part-effect readback uses the persisted
+part parameter map and its selected mode for mode-dependent bounds; track and
+master effect readback uses their native controllers. Native parameter values
+can be quantized, so use their returned values for subsequent comparisons.
 In 0.24.0, extension-bearing effect edits use the same transaction and validate existing curve owners; add/undo has focused evidence. The actual master-effect transaction and rollback case passed in
 `artifacts/feature-acceptance-f97d35cd5451/audio.effect_history.json`; that
 batch also records two later-corrected test failures in other cases.
@@ -95,7 +105,7 @@ roundtrip pass the final actual MCP acceptance.
 
 | `action` | Additional input | Native call |
 | --- | --- | --- |
-| `reverse` | None | `WOR.ReverseRenderer.RenderAudioFile(input, output, 0)` |
+| `reverse` | None | V6: `WOR.ReverseRenderer.RenderAudioFile(input, output, 0)`; V7: bounded bridge PCM/IEEE-float RIFF WAV frame reversal, `native=false` |
 | `normalize` | None | `WOR.NormalizeRenderer.RenderAudioFile(input, output)`; native normalization target is not overridden. |
 | `time_stretch` | `ratio=1`, `pitch_cents=0` | `WOR.TimeStretchRenderer.RenderAudioFile(input, output, ratio, pitch_cents)` |
 | `pitch_shift` | `pitch_cents=0` | Same renderer with native `bpmMag=1`. |
@@ -105,6 +115,25 @@ roundtrip pass the final actual MCP acceptance.
 Bounds come from the installed `TimeStretchRenderer.MinBpmMag`, `MaxBpmMag`,
 `MinPitchShift`, and `MaxPitchShift`. `WORError` values are included in failures,
 including no-op `HaveNoUseRenderer`; no no-op is disguised as a render.
+
+V7 reverse combines frame-aligned multiple data chunks into one data chunk and
+preserves the input sample format. Valid standard integer `smpl` loop endpoints
+are mapped to the reversed frame indices. Cue points are also mapped when
+there is exactly one data chunk, no `smpl` or `plst` chunk, and their data-chunk
+offsets and play-order positions match the supported PCM layout. A `LIST/adtl`
+containing well-formed `labl`, `note` and `ltxt` records is permitted. A unique,
+in-range `ltxt` region is mapped using its sample length; conflicting lengths,
+duplicate cue IDs, zero-length or out-of-range regions stay unchanged. Duplicate
+IDs are detected across cue chunks, whether or not labels or regions exist.
+At most 65536 distinct cue IDs and region references are processed; exceeding
+either limit or encountering other or malformed lists leaves cue points unchanged.
+Fractional, invalid, unknown-type or sampler-specific loops,
+playlist-linked or ambiguous cue points and other time-dependent metadata remain unchanged. The response
+reports `sampler_loops_reversed`, `sampler_loops_unchanged`,
+`sampler_chunks_unchanged`, `cue_points_reversed`, `cue_points_unchanged` and
+`cue_chunks_unchanged`; malformed chunks have no reliable point or loop count.
+Compressed or unknown extensible formats, incomplete frames and non-RIFF formats
+are rejected. The source file is unchanged.
 
 VOCALO CHANGER initializes the existing VDM/DSE services, resolves `voice_id`
 explicitly in `VDMVoiceBankType.Dnn`, requires `IsAvailableForVoiceChanger` and

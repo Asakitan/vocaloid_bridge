@@ -315,11 +315,27 @@ internal sealed partial class EngineHost : IDisposable
         }
     }
 
+    private static bool IsProjectArchivePath(string path) =>
+        Path.GetExtension(path).ToLowerInvariant() is ".vpr" or ".vprx";
+
+    private static string ProjectArchiveExtension(string path)
+    {
+        if (!IsProjectArchivePath(path))
+            throw new ArgumentException("Project filename must end in .vpr or .vprx.");
+        string extension = Path.GetExtension(path).ToLowerInvariant();
+#if !VOCALOID7
+        if (extension == ".vprx")
+            throw new NotSupportedException("VPRX requires VOCALOID7; VOCALOID6 accepts .vpr projects.");
+#endif
+        return extension;
+    }
+
     internal EngineSession Open(string path)
     {
         CheckThread();
-        if (!Path.IsPathFullyQualified(path) || !string.Equals(Path.GetExtension(path), ".vpr", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("path must be an absolute VPR filename.");
+        if (!Path.IsPathFullyQualified(path))
+            throw new ArgumentException("path must be an absolute VPR or VPRX filename.");
+        ProjectArchiveExtension(path);
         path = Path.GetFullPath(path);
         PathGuard.NoLinks(path);
         EnsureVoiceServices();
@@ -355,7 +371,7 @@ internal sealed partial class EngineHost : IDisposable
     internal object Save(string id, string outputName, bool overwrite)
     {
         EngineSession session = GetSession(id);
-        string destination = PrepareOutput(session, outputName, ".vpr", overwrite);
+        string destination = PrepareOutput(session, outputName, ProjectArchiveExtension(outputName), overwrite);
         string stage = Path.Combine(session.Directory, "save-" + Guid.NewGuid().ToString("N"));
         PathGuard.CreateDirectory(stage);
         if (session.Sequence.IsStaged && !session.Sequence.Commit(false))

@@ -74,6 +74,16 @@ Notes outside the part, zero-tick lengths, native note-range errors, and event
 overflow fail rather than producing a partial batch. An attempted write whose
 result is uncertain requires cancel rather than replaying a batch.
 
+Recording into an extension-bearing project uses the same archive identity
+transaction as native note insertion. Existing tracked curve owners and points
+remain subject to their pre-commit checks; unsupported mutations are still
+rejected. A recorded note batch that creates indistinguishable serialized note
+identities in an extension-bearing project is rolled back before commit. The
+tested V6/V7 synthetic streams preserve existing note, pitch,
+controller and track-automation extensions plus an extra archive resource
+through save/reopen and undo/redo. This does not establish arbitrary extension
+combinations or physical MIDI-device behavior.
+
 By default this is a free-running monotonic recording clock with an explicit
 project origin. With `sync_to_transport=true`, start instead requires the same
 session's already-playing native transport with looping disabled, captures its

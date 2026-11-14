@@ -107,8 +107,7 @@ internal sealed partial class EngineHost
             throw new ArgumentException("options must be an object.");
         bool mediaOperation = operation.StartsWith("media_", StringComparison.Ordinal);
     #if VOCALOID7
-        if (mediaOperation)
-            throw new NotSupportedException("VOCALOID7 removed MediaManager; media_* operations and journal recovery require VOCALOID6.");
+        RequireLibrarySupport(operation);
     #endif
         using MediaLibraryLease? lease = mediaOperation ? new MediaLibraryLease(Workspace) : null;
         if (mediaOperation)
@@ -162,13 +161,22 @@ internal sealed partial class EngineHost
                     LibraryText(options, "choice"), LibraryText(options, "expected_revision")),
                 _ => throw new ArgumentException("Unknown library operation: " + operation)
             };
-            return new { session_id = id, operation, native = operation != "phoneme_table", result };
+            bool bridgeDvqm = operation is ("dvqm_get" or "dvqm_set" or "dvqm_clear") && BridgeDvqmRequested(options);
+            return new { session_id = id, operation, native = operation != "phoneme_table" && !bridgeDvqm, result };
         }
         finally { if (mediaOperation) mediaAccessDepth--; }
     }
 
     private EngineSession LibrarySession(string? id) => GetSession(id
         ?? throw new ArgumentException("session_id is required for this operation."));
+
+    internal static void RequireLibrarySupport(string operation)
+    {
+#if VOCALOID7
+        if (operation.StartsWith("media_", StringComparison.Ordinal))
+            throw new NotSupportedException("VOCALOID7 removed MediaManager; media_* operations and journal recovery require VOCALOID6.");
+#endif
+    }
 
     private static JsonElement LibraryOption(JsonElement options, string name) =>
         options.ValueKind == JsonValueKind.Object && options.TryGetProperty(name, out JsonElement value)
@@ -321,7 +329,13 @@ internal sealed partial class EngineHost
     {
         bool isAttack = LibraryBool(options, "is_attack", true);
         WIVSMMidiPart part = LibraryMidiPart(session, options);
-        WIVSMDvqm selection = LibraryNote(part, options).GetDvqm(isAttack)
+        WIVSMNote note = LibraryNote(part, options);
+        string storage = LibraryText(options, "storage", "native");
+        if (storage == "bridge_metadata")
+            return BridgeDvqmView(session, part, note, isAttack);
+        if (storage != "native")
+            throw new ArgumentException("DVQM storage must be native or bridge_metadata.");
+        WIVSMDvqm selection = note.GetDvqm(isAttack)
             ?? throw new NotSupportedException("The native note has no Attack/Release record.");
         string? componentId = null;
         string[] levels = [];
@@ -344,9 +358,20 @@ internal sealed partial class EngineHost
 
     private object LibraryDvqmEdit(EngineSession session, string operation, JsonElement options)
     {
+        string storage = LibraryText(options, "storage", "native");
+        if (storage == "bridge_metadata")
+            return BridgeDvqmEdit(session, operation, options);
+        if (storage != "native")
+            throw new ArgumentException("DVQM storage must be native or bridge_metadata.");
         bool isAttack = LibraryBool(options, "is_attack", true);
-        WIVSMDvqm selection = LibraryNote(LibraryMidiPart(session, options), options).GetDvqm(isAttack)
+        WIVSMMidiPart part = LibraryMidiPart(session, options);
+        WIVSMNote note = LibraryNote(part, options);
+        WIVSMDvqm selection = note.GetDvqm(isAttack)
             ?? throw new NotSupportedException("The native note has no Attack/Release record.");
+        if (operation == "dvqm_clear" && selection.IsEmpty)
+            return LibraryDvqmView(session, options);
+        if (part.IsAi && (operation == "dvqm_set" || !selection.IsEmpty))
+            throw new NotSupportedException("AI Attack/Release edits cannot preserve note Singing Skill and native undo history. VOCALOID7 supports the S5Attack macro for compatible voice banks.");
         if (operation == "dvqm_clear")
             return ScoreMutate(session, operation, () =>
             {
@@ -513,6 +538,10 @@ internal sealed partial class EngineHost
     private object LibraryNoteSkillEdit(EngineSession session, string operation, JsonElement options)
     {
         WIVSMNote note = LibraryNote(LibraryMidiPart(session, options), options);
+        ArchiveRequireKnownNoteSubtree(session, note, "/singingSkill");
+        ArchiveRequireKnownNoteSubtree(session, note, "/dvqm");
+        if (note.IsAi && (note.GetDvqm(true) is { IsEmpty: false } || note.GetDvqm(false) is { IsEmpty: false }))
+            throw new NotSupportedException("VOCALOID cannot persist AI note Singing Skill while Attack or Release is present.");
         int duration = options.TryGetProperty("duration_tick", out _) ? ScoreInt(options, "duration_tick", 0, checked((int)note.DurationTick.Value)) : note.HmmWeightDuration;
         int pre = options.TryGetProperty("pre_weight", out _) ? ScoreInt(options, "pre_weight", 0, 127) : note.PreHmmWeight;
         int post = options.TryGetProperty("post_weight", out _) ? ScoreInt(options, "post_weight", 0, 127) : note.PostHmmWeight;
@@ -1089,11 +1118,17 @@ internal sealed partial class EngineHost
                     throw new NotSupportedException("Style contains a virtual or duplicate audio effect: " + effectId);
                 WEffectController controller = block.AddLoadEffect(effectId)
                     ?? throw new InvalidOperationException("Native style effect could not be loaded: " + effectId);
+                if (!Yamaha.VOCALOID.WEffectControllerExtension.PrepareForUse(controller, source))
+                    throw new InvalidOperationException("Native style effect preparation failed: " + effectId);
+                int modeIndex = AudioEffectModeIndex(effectId);
+                string? modeName = modeIndex >= 0 ? controller.ParameterName((ulong)modeIndex) : null;
                 Dictionary<string, float> parameters = new(StringComparer.Ordinal);
                 bool bypass = false;
+                List<Parameter> sourceParameters = [];
                 for (ulong parameterIndex = 0; parameterIndex < source.NumParameter; parameterIndex++)
+                    sourceParameters.Add(source.Parameter(parameterIndex));
+                foreach (Parameter parameter in sourceParameters.OrderBy(value => value.Name == modeName ? 0 : 1))
                 {
-                    Parameter parameter = source.Parameter(parameterIndex);
                     if (parameter.Type != VSStyleEffectParameterType.Int)
                         throw new NotSupportedException("Native style audio parameter is not a plain integer: " + parameter.Name);
                     if (parameter.Name == "Bypass")

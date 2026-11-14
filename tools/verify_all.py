@@ -51,11 +51,15 @@ import check_runtime_35
 
 baseline_ids = {case.identifier for case in v.CASES}
 import check_interchange_remaining
+import check_agent_song_36
+import check_v7_controls_46
 
 # Historical probes and the broader resource-collision audio scenario remain
 # individually callable; the targeted 0.24 extension-audio case is maintained.
 release_interchange = {"remaining.clone_audio", "remaining.vsqx3", "remaining.vsqx4", "remaining.ppsf3",
-                       "remaining.integrity_guard", "remaining.integrity_ai", "remaining.ppsf3_selected_voice"}
+                       "remaining.integrity_guard", "remaining.integrity_ai", "remaining.ppsf3_selected_voice",
+                       "remaining.vprx", "remaining.vprx_compose"}
+release_features = {"agent.guidance_36", "v7.controls_46", "v7.attack_native_50", "preservation.ai_dvqm_version_probe_50"}
 experimental = {"preservation.audio_mutation", "preservation.controller_split_native_probe",
                 "preservation.controller_split_generated_probe", "preservation.metadata_native_marker_probe",
                 "preservation.metadata_tempo_marker_probe", "preservation.note_pitch_array_probe",
@@ -68,7 +72,7 @@ experimental = {"preservation.audio_mutation", "preservation.controller_split_na
 # time/media/array transactions; retain their original receipts and source.
 experimental |= {"preservation.media_entities", "preservation.master_volume_extensions",
                  "preservation.timeline_delete_extensions_21"}
-v.CASES[:] = [case for case in v.CASES if case.identifier in baseline_ids | release_interchange
+v.CASES[:] = [case for case in v.CASES if case.identifier in baseline_ids | release_interchange | release_features
               and case.identifier not in experimental]
 
 if __name__ == "__main__":

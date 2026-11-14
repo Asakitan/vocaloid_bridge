@@ -9,7 +9,9 @@
 Style apply/capture and Singing Skill get/set require explicit `scope="track"`
 and affect all parts on the track. V6 retains part scope. V7 G2PA uses typed
 native note/part getters. V7 has no VMM backend here: all `media_*` operations
-return an explicit unsupported error. The historical V6 media and effect
+return an explicit unsupported error before archive mutation checks, including
+on extension-bearing projects, without changing their history or dirty state.
+The historical V6 media and effect
 evidence below does not establish V7 acceptance.
 
 ## Entry Point and Ownership
@@ -58,15 +60,15 @@ integers; the default `track_index`, `part_index`, and `note_index` is `0`.
 | `languages` | Optional | `{}` | Array of `{language_id,name,default_lyric}` from real native managers |
 | `phoneme_table` | Optional | `language_id=0` | Manual symbol inventory, source pages, and documented Japanese AI restriction; `native_enumeration=false` |
 | `dvqm_catalog` | Optional | `is_attack=true`, `voice_id=""`, `offset=0`, `limit=100` (1..256) | Installed native Attack/Release component IDs, numeric IDs, level names, capabilities and total |
-| `dvqm_get` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true` | Native selection, component/level names, speed, top factor and protection, with `applies_to` (`Midi`) and `applicable_to_current_part` |
-| `dvqm_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true`, `db_id`, `name_id`, optional `speed`, `top_factor`, `is_protected`. Attack/Release is a standard VOCALOID part function; an AI note stores the selection without singing it | Committed native selection readback |
-| `dvqm_clear` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true` | Cleared native selection readback |
+| `dvqm_get` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true`, `storage="native"` or explicit AI `storage="bridge_metadata"` | Selected native or bridge metadata, component/level names and applicability; bridge receipt is `native=false` |
+| `dvqm_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true`, `db_id`, `name_id`, optional `speed`, `top_factor`, `is_protected`, `storage="native"` or explicit AI `storage="bridge_metadata"` | Committed selection readback; AI bridge metadata is not synthesized |
+| `dvqm_clear` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true`, `storage="native"` or explicit AI `storage="bridge_metadata"`. An already-empty selection is read-only, including on supported extension-bearing or frozen projects | Cleared selection readback; nonempty native AI clear remains rejected |
 | `singing_skill_catalog` | Optional | `{}` | Installed Singing Skill plugin IDs, names, tags, timing and script availability |
 | `singing_skill_get` | Required | Target classic part on V6; V7 explicit `scope="track"`; optional `track_index=0`, V6 `part_index=0` | Skill, amount, plugin ID, bypass and native bounds |
 | `singing_skill_set` | Required | Target classic part on V6; V7 explicit `scope="track"`; optional `track_index=0`, V6 `part_index=0`, `plugin_id`, `skill`, `amount`, `bypassed` | Committed Singing Skill readback |
 | `note_skill_get` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`) | `duration_tick`, `pre_weight`, `post_weight` |
-| `note_skill_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`); optional `duration_tick`, `pre_weight`, `post_weight` (weights 0..127). Changing them left VOCALOID:AI synthesis unchanged | Committed note-level HMM weights |
-| `note_skill_reset` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`) | Native default HMM weights |
+| `note_skill_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`); optional `duration_tick`, `pre_weight`, `post_weight` (weights 0..127). AI notes with existing Attack/Release are rejected | Committed note-level HMM weights |
+| `note_skill_reset` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`). AI notes with existing Attack/Release are rejected | Native default HMM weights |
 | `lyrics_can_convert` | Optional | `language_id=0, lyrics, is_ai=false, use_extension_dictionary=false` | `{language_id,lyrics,can_convert}` |
 | `lyrics_candidates` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `lyrics`, optional `language_id` (default note language), `use_extension_dictionary=false` | `{language_id,lyrics,candidates:[[{lyric,phonemes}]]}` |
 | `lyrics_apply` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `lyrics`, optional `language_id`, `use_extension_dictionary=false`, `protect`. A word or phrase is spread over the following notes; write kana, plain English words or unmarked pinyin | Mutation result below |
@@ -87,6 +89,28 @@ integers; the default `track_index`, `part_index`, and `note_index` is `0`.
 | `media_import` | Required | `clip_id`, `track_index=0`, `position_tick=0`, optional `name` | MIDI: `{session_id,clip_id,track_index,position_tick,duration,notes}`; audio: `{session_id,clip_id,track_index,imported}` |
 | `media_recovery_list` | Optional | `{}` | Pending journals with token, clip ID, state, opaque revision, source-match flag, digests and recovery path; no automatic resolution |
 | `media_recovery_resolve` | Optional | `journal_token`, `choice=keep_current/restore_original`, `expected_revision` from the list | Explicit conflict resolution; stale revisions are rejected, all alternatives are retained in the returned recovery archive |
+
+On AI notes, existing Attack/Release remains readable, but native mutations can
+replace the Singing Skill representation and fail to restore its weights,
+duration or protection in undo. The same write restrictions apply to direct
+`project_call` methods. VOCALOID7 `voice_colors.S5Attack` is a separate macro
+for compatible V7 AI voicebanks. Extension-bearing projects also reject note
+skill edits when the target `singingSkill` or `dvqm` subtree contains unknown
+fields; unrelated recognized owners and resources remain protected.
+For AI notes, explicitly selecting `storage="bridge_metadata"` stores an
+independent note-owned `vocaloid_bridge_ai_dvqm_v1` extension. Its get/set/clear
+receipts are `native=false` and `applicable_to_current_part=false`: the records
+do not modify native DVQM or the synthesized AI voice. Component and level names
+are resolved against the installed native catalog. Save/reopen, clone, undo/redo,
+note deletion/undo, duplication, split/join, skill edits and frozen-track guards
+are verified on both V6 and V7. Native audio before and after annotation was
+sample-identical for the tested project on V7 `artifacts/feature-acceptance-edbda98e1c1e/summary.json`
+and V6 `artifacts/feature-acceptance-fbcfee057c8b/summary.json`. Other software
+may ignore the bridge-specific extension.
+Native open and file-level VPR outputs reject AI notes combining nonempty
+Attack/Release and `singingSkill`, because native reopening loses the latter.
+The caller may explicitly remove either complete subtree with `score_patch` in a
+separate copy; the original file is not changed.
 
 `Style` contains `style_id,name,type,path,vendor,languages,singers,genres,
 sub_genres,colors,midi_effect_count,audio_effect_count`. For `style_get`,

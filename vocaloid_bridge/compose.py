@@ -10,7 +10,7 @@ from typing import Any
 
 from .music import _notes, _output_destination, _reject_links
 from .native_client import NativeClient
-from .projects import PHONEME_VALIDITY_MEMBER, ProjectStore, _ai_voice, _part, _validate_phoneme_validity
+from .projects import PHONEME_VALIDITY_MEMBER, PROJECT_EXTENSIONS, ProjectStore, _ai_voice, _part, _validate_phoneme_validity
 
 
 # First two default lyric/phoneme pairs from the installed editor's
@@ -121,6 +121,8 @@ def replace_notes(store: ProjectStore, client: NativeClient, source: str, output
 
 def _write_prepared(store: ProjectStore, client: NativeClient, preparation, output_name: str,
                     notes: list[dict], *, retain_session: bool) -> dict:
+    if Path(output_name).suffix.lower() == ".vprx" and client.installation.product != "VOCALOID7":
+        raise ValueError("VPRX requires VOCALOID7; VOCALOID6 accepts .vpr projects.")
     with preparation as (archive, data, origins):
         track_index, part_index, _ = origins
         track, part = _part(data, track_index, part_index)
@@ -144,7 +146,7 @@ def _write_prepared(store: ProjectStore, client: NativeClient, preparation, outp
         if any(language not in _SEEDS for _, _, language in pending):
             raise ValueError("Automatic phonemes require a supported native G2PA language.")
 
-        destination = _output_destination(store.workspace, output_name, (".vpr",))
+        destination = _output_destination(store.workspace, output_name, PROJECT_EXTENSIONS)
         if destination.exists():
             raise FileExistsError(f"Output already exists: {destination}")
         output_root = (store.workspace / "output").resolve(strict=True)

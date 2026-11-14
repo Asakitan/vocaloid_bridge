@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Xml;
 using Yamaha.VOCALOID.VDM;
 using Yamaha.VOCALOID.VSM;
 
@@ -47,14 +48,68 @@ internal sealed partial class EngineHost
         JsonElement tracks = IntegrityArray(document.RootElement, "tracks");
         bool classic = false;
         for (int index = 0; index < IntegrityLength(tracks); index++)
-            classic |= IntegrityTrackType(tracks[index], index) == VSMTrackType.Midi;
+        {
+            JsonElement track = tracks[index];
+            VSMTrackType type = IntegrityTrackType(track, index);
+            classic |= type == VSMTrackType.Midi;
+            if (type != VSMTrackType.MidiAi)
+                continue;
+            JsonElement parts = IntegrityArray(track, "parts");
+            for (int partIndex = 0; partIndex < IntegrityLength(parts); partIndex++)
+            {
+                JsonElement part = parts[partIndex];
+                if (part.ValueKind != JsonValueKind.Object)
+                    continue;
+                JsonElement notes = IntegrityArray(part, "notes");
+                for (int noteIndex = 0; noteIndex < IntegrityLength(notes); noteIndex++)
+                {
+                    JsonElement note = notes[noteIndex];
+                    if (note.ValueKind != JsonValueKind.Object ||
+                        !note.TryGetProperty("singingSkill", out JsonElement skill) || skill.ValueKind != JsonValueKind.Object ||
+                        !note.TryGetProperty("dvqm", out JsonElement dvqm) || dvqm.ValueKind != JsonValueKind.Object)
+                        continue;
+                    foreach (string name in new[] { "attack", "release" })
+                        if (dvqm.TryGetProperty(name, out JsonElement selection) && selection.ValueKind == JsonValueKind.Object &&
+                            selection.EnumerateObject().Any())
+                            throw new InvalidDataException($"project_integrity: AI note {index}/{partIndex}/{noteIndex} combines Attack/Release and Singing Skill; native reopening loses Singing Skill. Use score_patch to remove one representation in a separate VPR.");
+                }
+            }
+        }
         if (!classic)
             return;
+        ValidateClassicVoiceBanks("native VPR loading");
+    }
+
+    private void ValidateVsqxOpenRequirements(string path)
+    {
+        using XmlReader reader = XmlReader.Create(path, new XmlReaderSettings
+        {
+            DtdProcessing = DtdProcessing.Prohibit,
+            XmlResolver = null,
+            MaxCharactersInDocument = MaxArchiveBytes
+        });
+        reader.MoveToContent();
+        string schema = reader.NamespaceURI;
+        if (!((reader.LocalName == "vsq3" && schema == "http://www.yamaha.co.jp/vocaloid/schema/vsq3/") ||
+              (reader.LocalName == "vsq4" && schema == "http://www.yamaha.co.jp/vocaloid/schema/vsq4/")))
+            return;
+        while (reader.Read())
+        {
+            if (reader.NodeType != XmlNodeType.Element || reader.Depth != 1 ||
+                reader.LocalName != "vsTrack" || reader.NamespaceURI != schema)
+                continue;
+            ValidateClassicVoiceBanks("native VSQX loading");
+            return;
+        }
+    }
+
+    private void ValidateClassicVoiceBanks(string operation)
+    {
         DatabaseManager current = EnsureDatabase();
         ulong dse = current.GetNumVoiceBanks(VDMVoiceBankType.Dse);
         ulong dnn = current.GetNumVoiceBanks(VDMVoiceBankType.Dnn);
         if (dse == 0 && dnn != 0)
-            throw new InvalidOperationException($"missing_classic_bank: native VPR loading would convert classic MIDI tracks to AI (Dse={dse}, Dnn={dnn}); source remains unchanged.");
+            throw new InvalidOperationException($"missing_classic_bank: {operation} would convert classic MIDI tracks to AI (Dse={dse}, Dnn={dnn}); source remains unchanged.");
     }
 
     private static void ValidateNativeSnapshot(WIVSMSequence sequence, string jsonPath) =>

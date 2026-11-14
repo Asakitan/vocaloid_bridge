@@ -1,5 +1,61 @@
 # Native VPR unknown-data preservation
 
+The same preservation path applies to VOCALOID7 `.vprx` archives. Native
+open/import, save and revert retain tracked extensions and embedded resources;
+the original-file overwrite guard applies to both suffixes. Offline patch and
+note-composition outputs accept `.vprx`; native-assisted composition requires
+VOCALOID7. A suffix change is not a project schema conversion. Session 51 covers
+uppercase input, an unknown root field, a binary resource and source-byte
+preservation through native open/import, revert and save.
+
+## Note Skill and Attack/Release
+
+On supported extension-bearing projects, `note_skill_set` and
+`note_skill_reset` use the existing note-owner and history protection. Unknown
+fields inside the target `singingSkill` or `dvqm` subtree cause rejection;
+unrelated note, curve, controller, automation and ZIP resource data are
+preserved. AI notes with existing Attack/Release reject these edits, and AI
+DVQM writes are rejected even through direct native reflection because native
+history cannot reliably preserve both representations. V6 and V7 tests cover
+set/reset, undo/redo, save/reopen and the guarded conflict fixture.
+Clearing an already-empty Attack/Release is a read-only no-op and is allowed on
+extension-bearing projects without changing the archive, history or references.
+The explicit AI `bridge_metadata` storage keeps Attack/Release annotations in
+the note-owned `vocaloid_bridge_ai_dvqm_v1` extension, separately from native
+`dvqm` and `singingSkill`. It participates in the existing identity and history
+journal; it is not an audible native AI parameter. Unknown selection fields
+block edits rather than being discarded.
+Native open and file-level VPR output reject an AI note containing both a
+nonempty Attack/Release object and a `singingSkill` object. The file-output check
+runs before the destination is created, including for `score_patch` and
+`score_replace_notes`. V6/V7 native reopen of a copied project with both
+representations lost the Singing Skill state.
+
+Use `score_inspect` to inspect the conflicting note, then use `score_patch` to
+remove either complete subtree in a separate VPR. For example, the following
+operation keeps Singing Skill and removes both Attack and Release from track 0,
+part 0, note 0:
+
+```json
+[{"op":"remove","path":"/tracks/0/parts/0/notes/0/dvqm"}]
+```
+
+Removing `/tracks/0/parts/0/notes/0/singingSkill` instead keeps the DVQM record
+and deliberately discards those skill weights. Use the indices reported by the
+open error, include every conflicting note in the same patch, and choose the
+representation explicitly. Other data and the original VPR are preserved.
+V6/V7 conflict rejection, both repair choices and resource preservation passed
+in `artifacts/feature-acceptance-8936678672bb/summary.json` and
+`artifacts/feature-acceptance-b48c40ba8f6a/summary.json` respectively.
+
+## Session-Owned Freeze
+
+Freeze and unfreeze are permitted on extension-bearing projects using the
+existing session-owned cache and authoring-state restoration. Focused V6/V7
+tests preserve unrelated note, pitch, controller, automation, effect and ZIP
+resource data across save, clone, reopen and undo/redo after unfreeze. Other
+unknown-field combinations remain subject to their existing identity checks.
+
 ## V7 track identity and AI edits
 
 V7 stores primary and secondary voices on the track. Its archive identity
@@ -7,6 +63,24 @@ signature now includes both track compIDs and checks them against native IDs;
 different-voice tracks with otherwise identical shapes are no longer falsely
 rejected. Identical signatures with conflicting opaque fields remain errors.
 The snapshot voice-table and structural checks remain unchanged.
+
+Track volume and pan event positions/values also distinguish otherwise equal
+tracks. They are checked against the native automation arrays before use;
+unknown event fields do not contribute to identity. Equal known identities
+with conflicting opaque data still fail instead of being matched by index.
+Volume and pan edits on extended multi-track projects preflight an isolated
+native clone, including save and archive overlay. Edits that collapse distinct
+identities with conflicting opaque data leave the source state/history intact.
+
+V7's `soloState` also participates in track identity and is checked against
+the native track on load and snapshot. Tracks distinguished by `Off` versus
+`Defeat` can carry different opaque fields and survive reorder/reopen. Before
+an identity-changing `track.update` on an extension-bearing V6 or V7 project,
+an isolated clone is edited and saved with archive preservation; a resulting
+identity collision is rejected before changing the source session. Identical
+signatures with different opaque fields remain rejected. V7 evidence:
+`artifacts/feature-acceptance-ae04d8be8cbc/summary.json`; V6 evidence:
+`artifacts/feature-acceptance-9922cd58c241/summary.json`.
 
 `batch.run` dispatches each child through its own archive preflight. `ai.status`
 is read-only; `ai.generate` admits the existing performance preparation and,

@@ -541,22 +541,48 @@ internal sealed partial class EngineHost
                     }
                 }).ToArray(),
                 metadata = live.EffectController(effect.Id) is WEffectController controller
-                    ? DescribeEffectController(controller) : null
+                    ? DescribeEffectController(controller, live) : null
             }).ToArray()
         };
     }
 
-    private static object DescribeEffectController(WEffectController controller)
+    private static int AudioEffectModeIndex(string effectId) =>
+        effectId.Equals(WEffectController.GetGuid(WEffectController.Type.CHORUS), StringComparison.OrdinalIgnoreCase) ||
+        effectId.Equals(WEffectController.GetGuid(WEffectController.Type.PHASER), StringComparison.OrdinalIgnoreCase) ? 18 :
+        effectId.Equals(WEffectController.GetGuid(WEffectController.Type.REVERB), StringComparison.OrdinalIgnoreCase) ? 11 : -1;
+
+    private static object DescribeEffectController(WEffectController controller, WEffectBlock? block = null)
     {
         if (controller.NumParameter > 4096 || controller.NumPreset > 4096)
             throw new InvalidDataException("Native effect metadata exceeds the 4096-entry limit.");
+#if !VOCALOID7
+        if (block is WPartEffectBlock)
+        {
+            int modeIndex = AudioEffectModeIndex(controller.EffectGUID);
+            if (modeIndex >= 0 && controller.IsValidParameter((ulong)modeIndex))
+            {
+                string modeName = controller.ParameterName((ulong)modeIndex);
+                float mode = block.GetParameterValue(controller.EffectGUID, modeName);
+                if (mode != float.MinValue && (!float.IsFinite(mode) || !controller.SetParamNormalized((ulong)modeIndex, mode)))
+                    throw new InvalidDataException("Native part effect mode could not be read: " + modeName);
+            }
+        }
+#endif
         List<object> parameters = [];
         for (ulong index = 0; index < controller.NumParameter; index++)
         {
             if (!controller.IsValidParameter(index))
                 continue;
             bool hasRange = controller.PlainParamRange(index, out int minimum, out int maximum);
+            string name = controller.ParameterName(index);
             float normalized = controller.ParamNormalized(index);
+#if !VOCALOID7
+            if (block is WPartEffectBlock)
+            {
+                float stored = block.GetParameterValue(controller.EffectGUID, name);
+                if (stored != float.MinValue) normalized = stored;
+            }
+#endif
             float defaultValue = controller.DefaultParamNormalized(index);
             if (!float.IsFinite(normalized) || !float.IsFinite(defaultValue))
                 throw new InvalidDataException("Native effect returned a non-finite parameter value.");
@@ -564,7 +590,7 @@ internal sealed partial class EngineHost
             parameters.Add(new
             {
                 index,
-                name = controller.ParameterName(index),
+                name,
                 label = controller.ParameterLabel(index),
                 normalized,
                 default_normalized = defaultValue,
@@ -770,7 +796,7 @@ internal sealed partial class EngineHost
     private object ProcessAudio(EngineSession session, JsonElement options)
     {
         string source = AudioInputPath(options);
-        InspectWave(source);
+        var sourceWave = InspectWave(source);
         string action = AudioText(options, "action");
         string destination = AudioDestination(session, options, source);
         string temporary = AudioTemporary(session);
@@ -787,7 +813,16 @@ internal sealed partial class EngineHost
             {
 #if VOCALOID7
                 case "reverse":
-                    throw new NotSupportedException("VOCALOID7 removed the native ReverseRenderer.");
+                    var metadata = ReverseWaveFrames(source, temporary, sourceWave.Channels, sourceWave.Bits, sourceWave.Frames);
+                    var reversed = PublishAudio(session, temporary, destination, AudioFlag(options, "overwrite"), "bridge.pcm_frame_reverse", false);
+                    reversed["sampler_loops_reversed"] = metadata.LoopsReversed;
+                    reversed["sampler_loops_unchanged"] = metadata.LoopsUnchanged;
+                    reversed["sampler_chunks_unchanged"] = metadata.SamplerChunksUnchanged;
+                    reversed["cue_points_reversed"] = metadata.CuePointsReversed;
+                    reversed["cue_points_unchanged"] = metadata.CuePointsUnchanged;
+                    reversed["cue_chunks_unchanged"] = metadata.CueChunksUnchanged;
+                    reversed["metadata_warning"] = "Some cue and other time references are not reversed; fractional, unsupported, or sampler-specific loops may remain unchanged.";
+                    return reversed;
 #else
                 case "reverse":
                     using (ReverseRenderer renderer = new())
@@ -836,6 +871,346 @@ internal sealed partial class EngineHost
         }
     }
 
+#if VOCALOID7
+    private static bool ReadCueAssociatedList(BinaryReader reader, long offset, Dictionary<uint, uint?> regions)
+    {
+        Stream input = reader.BaseStream;
+        input.Position = offset + 4;
+        uint size = reader.ReadUInt32();
+        if (size < 4 || reader.ReadUInt32() != 0x6c746461)
+            return false;
+        long end = offset + 8L + size;
+        while (input.Position < end)
+        {
+            if (end - input.Position < 8)
+                return false;
+            uint id = reader.ReadUInt32();
+            uint length = reader.ReadUInt32();
+            long payloadEnd = input.Position + length;
+            long next = payloadEnd + (length & 1);
+            if (next > end)
+                return false;
+            if (id is 0x6c62616c or 0x65746f6e)
+            {
+                if (length < 5)
+                    return false;
+                input.Position = payloadEnd - 1;
+                if (reader.ReadByte() != 0)
+                    return false;
+            }
+            else if (id == 0x7478746c)
+            {
+                if (length < 20)
+                    return false;
+                uint pointId = reader.ReadUInt32();
+                uint regionLength = reader.ReadUInt32();
+                if (regions.TryGetValue(pointId, out uint? previous))
+                {
+                    if (previous != regionLength)
+                        regions[pointId] = null;
+                }
+                else
+                {
+                    if (regions.Count >= 65536)
+                        return false;
+                    regions.Add(pointId, regionLength == 0 ? null : regionLength);
+                }
+                if (length > 20)
+                {
+                    input.Position = payloadEnd - 1;
+                    if (reader.ReadByte() != 0)
+                        return false;
+                }
+            }
+            else
+                return false;
+            input.Position = next;
+        }
+        return input.Position == end;
+    }
+
+    private static (long LoopsReversed, long LoopsUnchanged, long SamplerChunksUnchanged,
+        long CuePointsReversed, long CuePointsUnchanged, long CueChunksUnchanged) ReverseWaveFrames(
+        string source, string destination, ushort channels, ushort bits, long expectedFrames)
+    {
+        int frameBytes = checked(channels * ((bits + 7) / 8));
+        using FileStream input = new(source, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using BinaryReader reader = new(input, System.Text.Encoding.UTF8, true);
+        if (reader.ReadUInt32() != 0x46464952)
+            throw new InvalidDataException("Audio input is not RIFF WAV.");
+        long end = reader.ReadUInt32() + 8L;
+        if (end > input.Length || end < 44 || reader.ReadUInt32() != 0x45564157)
+            throw new InvalidDataException("Audio input has an invalid RIFF boundary.");
+        List<(long Offset, long Length)> chunks = [];
+        List<(uint Id, long Offset, long Length)> layout = [];
+        bool formatSeen = false;
+        long dataBytes = 0;
+        while (input.Position + 8 <= end)
+        {
+            long headerOffset = input.Position;
+            uint id = reader.ReadUInt32();
+            uint size = reader.ReadUInt32();
+            long offset = input.Position;
+            long payloadEnd = offset + size;
+            long next = payloadEnd + (size & 1);
+            if (payloadEnd > end || (next > end && (id != 0x61746164 || payloadEnd != end)))
+                throw new InvalidDataException("Audio input contains a truncated WAV chunk.");
+            if (id == 0x20746d66)
+            {
+                if (formatSeen || size < 16)
+                    throw new InvalidDataException("Audio input has an invalid or duplicate WAV format chunk.");
+                formatSeen = true;
+                ushort format = reader.ReadUInt16();
+                ushort actualChannels = reader.ReadUInt16();
+                _ = reader.ReadUInt32();
+                _ = reader.ReadUInt32();
+                ushort alignment = reader.ReadUInt16();
+                ushort actualBits = reader.ReadUInt16();
+                if (actualChannels != channels || actualBits != bits || alignment != frameBytes)
+                    throw new InvalidDataException("Audio input WAV format changed during inspection.");
+                if (format == 0xfffe)
+                {
+                    if (size < 40)
+                        throw new InvalidDataException("Audio input has a truncated extensible WAV format.");
+                    ushort extraBytes = reader.ReadUInt16();
+                    if (extraBytes < 22 || extraBytes > size - 18)
+                        throw new InvalidDataException("Audio input has a truncated extensible WAV format.");
+                    _ = reader.ReadUInt16();
+                    _ = reader.ReadUInt32();
+                    Guid subtype = new(reader.ReadBytes(16));
+                    if (subtype != new Guid("00000001-0000-0010-8000-00aa00389b71") &&
+                        subtype != new Guid("00000003-0000-0010-8000-00aa00389b71"))
+                        throw new NotSupportedException("WAV reverse requires PCM or IEEE float audio.");
+                }
+                else if (format is not (1 or 3))
+                    throw new NotSupportedException("WAV reverse requires PCM or IEEE float audio.");
+            }
+            else if (id == 0x61746164)
+            {
+                if (!formatSeen)
+                    throw new InvalidDataException("WAV format must precede audio data.");
+                if (size % frameBytes != 0)
+                    throw new InvalidDataException("Each WAV data chunk must contain complete audio frames.");
+                chunks.Add((offset, size));
+                dataBytes += size;
+            }
+            layout.Add((id, headerOffset, Math.Min(next, end) - headerOffset));
+            input.Position = Math.Min(next, end);
+        }
+        if (!formatSeen || dataBytes / frameBytes != expectedFrames)
+            throw new InvalidDataException("Audio input WAV frames changed during inspection.");
+        long unparsedOffset = input.Position;
+        Dictionary<uint, uint?> regions = [];
+        bool cueContextUncertain = chunks.Count != 1 || layout.Any(entry =>
+            entry.Id is 0x6c706d73 or 0x74736c70 ||
+            (entry.Id == 0x5453494c && !ReadCueAssociatedList(reader, entry.Offset, regions)));
+        Dictionary<uint, bool> cueIdentities = [];
+        if (!cueContextUncertain)
+        {
+            foreach (var entry in layout.Where(entry => entry.Id == 0x20657563))
+            {
+                input.Position = entry.Offset + 4;
+                uint size = reader.ReadUInt32();
+                if (size < 4)
+                {
+                    cueContextUncertain = true;
+                    break;
+                }
+                uint count = reader.ReadUInt32();
+                if (4L + 24L * count != size)
+                {
+                    cueContextUncertain = true;
+                    break;
+                }
+                for (long index = 0; index < count; index++)
+                {
+                    input.Position = entry.Offset + 12 + 24 * index;
+                    uint pointId = reader.ReadUInt32();
+                    if (cueIdentities.ContainsKey(pointId))
+                        cueIdentities[pointId] = false;
+                    else if (cueIdentities.Count < 65536)
+                        cueIdentities.Add(pointId, true);
+                    else
+                    {
+                        cueContextUncertain = true;
+                        break;
+                    }
+                }
+                if (cueContextUncertain)
+                    break;
+            }
+        }
+        byte[] buffer = new byte[Math.Max(frameBytes, (65536 / frameBytes) * frameBytes)];
+        using FileStream output = new(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        using BinaryWriter writer = new(output, System.Text.Encoding.UTF8, true);
+        void CopyRange(long offset, long length)
+        {
+            input.Position = offset;
+            while (length > 0)
+            {
+                int count = checked((int)Math.Min(buffer.Length, length));
+                input.ReadExactly(buffer.AsSpan(0, count));
+                output.Write(buffer.AsSpan(0, count));
+                length -= count;
+            }
+        }
+        writer.Write(0x46464952u);
+        writer.Write(0u);
+        writer.Write(0x45564157u);
+        long audioOffset = -1;
+        long samplerLoopsReversed = 0;
+        long samplerLoopsUnchanged = 0;
+        long samplerChunksUnchanged = 0;
+        long cuePointsReversed = 0;
+        long cuePointsUnchanged = 0;
+        long cueChunksUnchanged = 0;
+        foreach (var entry in layout)
+        {
+            if (entry.Id != 0x61746164)
+            {
+                long outputChunkOffset = output.Position;
+                CopyRange(entry.Offset, entry.Length);
+                if (entry.Id == 0x6c706d73)
+                {
+                    long outputChunkEnd = output.Position;
+                    input.Position = entry.Offset + 4;
+                    uint size = reader.ReadUInt32();
+                    if (size < 36)
+                        samplerChunksUnchanged++;
+                    else
+                    {
+                        input.Position = entry.Offset + 8 + 28;
+                        uint loopCount = reader.ReadUInt32();
+                        uint extraSize = reader.ReadUInt32();
+                        if (extraSize != 0 || 36L + 24L * loopCount != size)
+                        {
+                            samplerChunksUnchanged++;
+                            if (36L + 24L * loopCount + extraSize == size)
+                                samplerLoopsUnchanged += loopCount;
+                        }
+                        else
+                        {
+                            for (long loopIndex = 0; loopIndex < loopCount; loopIndex++)
+                            {
+                                long loopOffset = 8 + 36 + 24 * loopIndex;
+                                input.Position = entry.Offset + loopOffset + 4;
+                                uint type = reader.ReadUInt32();
+                                uint start = reader.ReadUInt32();
+                                uint endSample = reader.ReadUInt32();
+                                uint fraction = reader.ReadUInt32();
+                                if (type > 2 || fraction != 0 || start > endSample || endSample >= expectedFrames)
+                                {
+                                    samplerLoopsUnchanged++;
+                                    continue;
+                                }
+                                output.Position = outputChunkOffset + loopOffset + 8;
+                                writer.Write(checked((uint)(expectedFrames - 1 - endSample)));
+                                writer.Write(checked((uint)(expectedFrames - 1 - start)));
+                                samplerLoopsReversed++;
+                            }
+                        }
+                    }
+                    output.Position = outputChunkEnd;
+                }
+                else if (entry.Id == 0x20657563)
+                {
+                    long outputChunkEnd = output.Position;
+                    input.Position = entry.Offset + 4;
+                    uint size = reader.ReadUInt32();
+                    if (size < 4)
+                        cueChunksUnchanged++;
+                    else
+                    {
+                        uint pointCount = reader.ReadUInt32();
+                        if (4L + 24L * pointCount != size)
+                            cueChunksUnchanged++;
+                        else if (cueContextUncertain)
+                        {
+                            cueChunksUnchanged++;
+                            cuePointsUnchanged += pointCount;
+                        }
+                        else
+                        {
+                            for (long pointIndex = 0; pointIndex < pointCount; pointIndex++)
+                            {
+                                long pointOffset = 8 + 4 + 24 * pointIndex;
+                                input.Position = entry.Offset + pointOffset;
+                                uint pointId = reader.ReadUInt32();
+                                uint position = reader.ReadUInt32();
+                                uint chunkId = reader.ReadUInt32();
+                                uint chunkStart = reader.ReadUInt32();
+                                uint blockStart = reader.ReadUInt32();
+                                uint sampleOffset = reader.ReadUInt32();
+                                if (!cueIdentities[pointId] || chunkId != 0x61746164 || chunkStart != 0 || blockStart != 0 ||
+                                    position != sampleOffset || sampleOffset >= expectedFrames)
+                                {
+                                    cuePointsUnchanged++;
+                                    continue;
+                                }
+                                long reversedSample = expectedFrames - 1 - sampleOffset;
+                                if (regions.TryGetValue(pointId, out uint? regionLength))
+                                {
+                                    if (!regionLength.HasValue || (long)sampleOffset + regionLength.Value > expectedFrames)
+                                    {
+                                        cuePointsUnchanged++;
+                                        continue;
+                                    }
+                                    reversedSample = expectedFrames - sampleOffset - regionLength.Value;
+                                }
+                                uint reversedPosition = checked((uint)reversedSample);
+                                output.Position = outputChunkOffset + pointOffset + 4;
+                                writer.Write(reversedPosition);
+                                output.Position = outputChunkOffset + pointOffset + 20;
+                                writer.Write(reversedPosition);
+                                cuePointsReversed++;
+                            }
+                        }
+                    }
+                    output.Position = outputChunkEnd;
+                }
+                continue;
+            }
+            if (audioOffset >= 0)
+                continue;
+            writer.Write(0x61746164u);
+            writer.Write(checked((uint)dataBytes));
+            audioOffset = output.Position;
+            output.Position += dataBytes;
+            if ((dataBytes & 1) != 0)
+                writer.Write((byte)0);
+            if (output.Length < output.Position)
+                output.SetLength(output.Position);
+        }
+        CopyRange(unparsedOffset, end - unparsedOffset);
+        long outputEnd = output.Position;
+        if (outputEnd - 8 > uint.MaxValue)
+            throw new InvalidDataException("Reversed WAV exceeds the RIFF size limit.");
+        output.Position = 4;
+        writer.Write((uint)(outputEnd - 8));
+        output.Position = outputEnd;
+        CopyRange(end, input.Length - end);
+        output.Position = audioOffset;
+        for (int sourceIndex = chunks.Count - 1; sourceIndex >= 0; sourceIndex--)
+        {
+            var chunk = chunks[sourceIndex];
+            long remaining = chunk.Length;
+            while (remaining > 0)
+            {
+                int count = checked((int)Math.Min(buffer.Length, remaining));
+                input.Position = chunk.Offset + remaining - count;
+                input.ReadExactly(buffer.AsSpan(0, count));
+                for (int left = 0, right = count - frameBytes; left < right; left += frameBytes, right -= frameBytes)
+                    for (int index = 0; index < frameBytes; index++)
+                        (buffer[left + index], buffer[right + index]) = (buffer[right + index], buffer[left + index]);
+                output.Write(buffer.AsSpan(0, count));
+                remaining -= count;
+            }
+        }
+        return (samplerLoopsReversed, samplerLoopsUnchanged, samplerChunksUnchanged,
+            cuePointsReversed, cuePointsUnchanged, cueChunksUnchanged);
+    }
+#endif
+
     private string AudioDestination(EngineSession session, JsonElement options, string? source = null)
     {
         string destination = PrepareOutput(session, AudioText(options, "output_name"), ".wav", AudioFlag(options, "overwrite"));
@@ -847,24 +1222,24 @@ internal sealed partial class EngineHost
     private string AudioTemporary(EngineSession session) =>
         PrepareOutput(session, ".audio-" + Guid.NewGuid().ToString("N") + ".wav", ".wav", false);
 
-    private static object PublishAudio(EngineSession session, string temporary, string destination, bool overwrite, string backend)
+    private static Dictionary<string, object> PublishAudio(EngineSession session, string temporary, string destination, bool overwrite, string backend, bool native = true)
     {
         PathGuard.NoLinks(temporary);
         var wave = InspectWave(temporary);
         PathGuard.NoLinks(destination);
         File.Move(temporary, destination, overwrite);
-        return new
+        return new Dictionary<string, object>
         {
-            session_id = session.Id,
-            path = destination,
-            native = true,
-            backend,
-            bytes = wave.Bytes,
-            channels = wave.Channels,
-            sample_rate = wave.SampleRate,
-            bits_per_sample = wave.Bits,
-            frames = wave.Frames,
-            duration_seconds = (double)wave.Frames / wave.SampleRate
+            ["session_id"] = session.Id,
+            ["path"] = destination,
+            ["native"] = native,
+            ["backend"] = backend,
+            ["bytes"] = wave.Bytes,
+            ["channels"] = wave.Channels,
+            ["sample_rate"] = wave.SampleRate,
+            ["bits_per_sample"] = wave.Bits,
+            ["frames"] = wave.Frames,
+            ["duration_seconds"] = (double)wave.Frames / wave.SampleRate
         };
     }
 

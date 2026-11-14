@@ -52,9 +52,10 @@ internal sealed partial class EngineHost
             throw new InvalidOperationException("Unfreeze the session's cached tracks before a raw native mutation.");
     }
 
-    internal void CheckFrozenExternalOperation(string? id, string domain, string operation)
+    internal void CheckFrozenExternalOperation(string? id, string domain, string operation, JsonElement options = default)
     {
         if (id is null || !HasFrozenAuthoring(GetSession(id))) return;
+        if (domain == "library" && IsEmptyDvqmClear(id, operation, options)) return;
         bool readOnly = domain == "clipboard" ? operation is "list" or "clear" :
             operation is "languages" or "phoneme_table" or "lyrics_can_convert" or "lyrics_candidates" or
                 "style_list" or "style_get" or "media_list" or "media_get" or "dvqm_catalog" or "dvqm_get" or

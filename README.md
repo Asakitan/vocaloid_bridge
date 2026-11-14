@@ -4,6 +4,8 @@
 
 只走原生引擎这一条路喵：没有 UI 回退，也不会拿别的音源或者静音文件假装合成成功喵。
 
+V7 工程可以使用 `.vprx` 打开、导入、保存、还原和编排，原有 `.vpr` 调用保持兼容喵。V6 原生入口只接受 `.vpr`；改后缀不代表工程内容已经迁移喵。实际验收见 [会话51](docs/session-log/session-51.md) 喵。
+
 ## 许可证喵
 
 桥接代码用 [MIT 许可证](LICENSE) 发布，版权署名 Asakitan（2026）喵。VOCALOID 引擎、声库和其他第三方组件不在这份许可证里，跑起来仍然需要本机已安装、已正常授权的 VOCALOID6 或 VOCALOID7 喵。源码住在 [Asakitan/vocaloid_bridge](https://github.com/Asakitan/vocaloid_bridge) 喵。
@@ -31,7 +33,9 @@ powershell -NoProfile -File .\tools\setup.ps1
 
 安装和新宿主启动都会按实际 DLL 版本选引擎，V6/V7 的构建产物分开保存，运行中的工程不会中途切换版本喵。`VOCALOID_INSTALL` 可以明确指定 Editor 目录，构建时也可用 `setup.ps1 -Install 'C:\Program Files\VOCALOID6\Editor'` 喵。新安装或更新引擎后先重新运行 setup，再重新连接 MCP；旧服务名和任务标签保留，现有注册不用改喵。完整选择规则与验收范围见 [V7 兼容说明](docs/vocaloid7.md) 喵。
 
-V7 的声库、样式和表现设置要显式传 `scope="track"`，会作用于整轨；V6 仍按片段处理喵。V7 的 VMM 素材库、片段音频效果、反转和 VOCALO CHANGER 暂不支持，会明确返回错误喵。历史功能矩阵是 V6 的证据，不等于 V7 全量验收喵。
+V7 的声库、样式和表现设置要显式传 `scope="track"`，会作用于整轨；V6 仍按片段处理喵。V7 的 VMM 素材库、片段音频效果和 VOCALO CHANGER 暂不支持，会明确返回错误喵。V7 反转支持 PCM/浮点 RIFF WAV，由桥接分块逐帧倒序，回执标为 `native=false`；符合条件的整数 `smpl` 循环及 cue 点（含普通标签和区域）会同步反转，其他时间标记保持原样喵。历史功能矩阵是 V6 的证据，不等于 V7 全量验收喵。
+
+AI 音符的旧版 Attack/Release 原生写入及非空清除仍受保护：原生引擎无法同时可靠保留 Singing Skill 和撤销历史喵。可显式用 `storage="bridge_metadata"` 读写独立注记，但它不改变 AI 歌声；V7 兼容 AI 声库可使用独立的 `S5Attack` 参数喵。
 
 客户端注册按各自的习惯来喵：VS Code 用 `servers`，Claude Code/Desktop 用 `mcpServers`，Codex 用 `mcp_servers` 喵。注册时把 `VOCALOID_WORKSPACE` 和 `PYTHONPATH` 指向本仓库，再设 `PYTHONUTF8=1`，从别的目录启动也会把输出写回本仓库的 `output` 喵。本机的具体注册位置、声库状态和历次验收记录放在本地笔记里，不跟着公开 README 跑喵。
 
@@ -63,7 +67,7 @@ V7 的声库、样式和表现设置要显式传 `scope="track"`，会作用于�
 
 原生对象用会话内的 `$ref` 当门牌号喵。先 `project_members` 问清楚真实属性、参数类型和 `member_id`，再动其他对象工具喵；重载签名不要猜喵。会话一关，引用就作废喵。
 
-`vocaloid_features` 按产品列出功能、作用域和调用模板，`project_inspect` 读取选中轨道/片段/音符的真实参数喵。[功能矩阵](docs/feature-matrix.md) 与 `vocaloid://features` 保留的是 V6 历史证据，V7 的截图对照和实测见 [V7 说明](docs/vocaloid7.md) 喵。`vocaloid_operations` 会列出全部结构化操作名和对应文档喵，用 `domain`、`operation` 找接口，`include_documentation=true` 拿完整约定喵。参数说明在 [乐谱操作](docs/score-operations.md)、[音频操作](docs/audio-operations.md)、[MIDI 录制](docs/midi-recording.md)、[媒体与音素操作](docs/library-operations.md) 和 [原生协议](docs/native-protocol.md) 喵。能发现接口不等于已经验收过喵。
+`vocaloid_features` 按产品列出功能、作用域和调用模板，`project_inspect` 读取选中轨道/片段/音符的真实参数，包括 `feature="freeze"` 的冻结状态与操作喵。[功能矩阵](docs/feature-matrix.md) 与 `vocaloid://features` 保留的是 V6 历史证据，V7 的截图对照和实测见 [V7 说明](docs/vocaloid7.md) 喵。`vocaloid_operations` 会列出全部结构化操作名和对应文档喵，用 `domain`、`operation` 找接口，`include_documentation=true` 拿完整约定喵。参数说明在 [乐谱操作](docs/score-operations.md)、[音频操作](docs/audio-operations.md)、[MIDI 录制](docs/midi-recording.md)、[媒体与音素操作](docs/library-operations.md) 和 [原生协议](docs/native-protocol.md) 喵。能发现接口不等于已经验收过喵。
 
 `score_compose` 先拿编辑器生成的模板写音符，再让原生引擎打开生成的工程喵。音符时间单位是四分音符拍，`pitch` 可以写 MIDI 数字或 `C4` 喵，`lang_id` 是模板声明支持的语言编号喵。缺省模板引用项目自带的 `asa` 声库，换其他声库时用相应模板或原生声库设置接口喵。省略音素的 AI 音符会实际调用目标声库和原生 G2PA，在临时会话里转换完整单音节并检查结果喵；不接受的输入要显式给音素，或者走原生歌词分配喵。已测范围和限制在 [自动音素转换](docs/compose-phonemes-29.md) 喵。`score_replace_notes` 复用同一套转换，但返回仍然只有 `path` 和 `summary`，跑完会关掉内部原生会话喵。
 

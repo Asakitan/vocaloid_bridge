@@ -94,10 +94,11 @@ internal sealed class RpcServer(EngineHost host, string desktop)
             string operation = RequiredString(parameters, "operation");
             JsonElement options = Required(parameters, "options");
             host.CheckSessionExternalAccess(id);
+            EngineHost.RequireLibrarySupport(operation);
             if (!host.IsIndependentArchiveLibraryOperation(id, operation, options) &&
                 !host.IsPreservedMidiMediaImport(id, operation, options))
                 host.CheckArchiveExternalOperation(id, "library", operation);
-            host.CheckFrozenExternalOperation(id, "library", operation);
+            host.CheckFrozenExternalOperation(id, "library", operation, options);
             return host.LibraryOperation(id, operation, options);
         }
         if (method == "clipboard")
@@ -319,6 +320,13 @@ internal sealed class RpcServer(EngineHost host, string desktop)
         MethodInfo method = Methods(target.Value.GetType())
             .SingleOrDefault(candidate => MemberId(candidate) == memberId)
             ?? throw new MissingMethodException("No permitted method has this exact member_id.");
+        if (target.Value is WIVSMDvqm selection && selection.Parent is { IsAi: true } &&
+            (method.Name.StartsWith("Set", StringComparison.Ordinal) || method.Name == "Reset"))
+            throw new NotSupportedException("AI Attack/Release edits cannot preserve note Singing Skill and native undo history. VOCALOID7 supports the S5Attack macro for compatible voice banks.");
+        if (target.Value is WIVSMNote note && note.IsAi &&
+            (method.Name is "SetHmmWeight" or "SetHmmWeightDuration" or "ResetHmmWeightDefault") &&
+            (note.GetDvqm(true) is { IsEmpty: false } || note.GetDvqm(false) is { IsEmpty: false }))
+            throw new NotSupportedException("AI notes with Attack/Release cannot preserve Singing Skill edits and native undo history.");
         object?[] converted = ConvertArguments(session, method, arguments);
         bool readOnly = IsReadOnly(method.Name) || ReviewedDataMethod(method);
         if (!readOnly)

@@ -388,7 +388,7 @@
         {
           "operation": "track.update",
           "contract_rows": [
-            "| `track.update` | `track_index`; one or more of `name`, native palette `color` (0..15), `mute`, `solo`, `bus_no`, MIDI-only `midi_recording` | Updated track summary |"
+            "| `track.update` | `track_index`; one or more of `name`, native palette `color` (0..15), `mute`, `solo`, V7 `solo_state` (`Off`, `On`, `Defeat`), `bus_no`, MIDI-only `midi_recording` | Updated track summary |"
           ]
         },
         {
@@ -491,7 +491,7 @@
         {
           "operation": "process_audio",
           "contract_rows": [
-            "| `process_audio` | `path`, `action` (`reverse`, `normalize`, `time_stretch`, `pitch_shift`, or `voice_change`), `output_name`; optional `overwrite=false`, `ratio=1`, `pitch_cents=0`; `voice_id` required for voice change | Calls the installed WOR offline renderer directly; see action table below. Creates a separate WAV without changing the imported part. |"
+            "| `process_audio` | `path`, `action` (`reverse`, `normalize`, `time_stretch`, `pitch_shift`, or `voice_change`), `output_name`; optional `overwrite=false`, `ratio=1`, `pitch_cents=0`; `voice_id` required for voice change | Uses the installed WOR renderer, except V7 `reverse` uses bridge PCM/float frame reversal with `native=false`; see action table. Creates a separate WAV without changing the imported part. |"
           ]
         },
         {
@@ -552,19 +552,19 @@
         {
           "operation": "dvqm_clear",
           "contract_rows": [
-            "| `dvqm_clear` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true` | Cleared native selection readback |"
+            "| `dvqm_clear` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true`, `storage=\"native\"` or explicit AI `storage=\"bridge_metadata\"`. An already-empty selection is read-only, including on supported extension-bearing or frozen projects | Cleared selection readback; nonempty native AI clear remains rejected |"
           ]
         },
         {
           "operation": "dvqm_get",
           "contract_rows": [
-            "| `dvqm_get` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true` | Native selection, component/level names, speed, top factor and protection, with `applies_to` (`Midi`) and `applicable_to_current_part` |"
+            "| `dvqm_get` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true`, `storage=\"native\"` or explicit AI `storage=\"bridge_metadata\"` | Selected native or bridge metadata, component/level names and applicability; bridge receipt is `native=false` |"
           ]
         },
         {
           "operation": "dvqm_set",
           "contract_rows": [
-            "| `dvqm_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true`, `db_id`, `name_id`, optional `speed`, `top_factor`, `is_protected`. Attack/Release is a standard VOCALOID part function; an AI note stores the selection without singing it | Committed native selection readback |"
+            "| `dvqm_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`), `is_attack=true`, `db_id`, `name_id`, optional `speed`, `top_factor`, `is_protected`, `storage=\"native\"` or explicit AI `storage=\"bridge_metadata\"` | Committed selection readback; AI bridge metadata is not synthesized |"
           ]
         },
         {
@@ -654,13 +654,13 @@
         {
           "operation": "note_skill_reset",
           "contract_rows": [
-            "| `note_skill_reset` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`) | Native default HMM weights |"
+            "| `note_skill_reset` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`). AI notes with existing Attack/Release are rejected | Native default HMM weights |"
           ]
         },
         {
           "operation": "note_skill_set",
           "contract_rows": [
-            "| `note_skill_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`); optional `duration_tick`, `pre_weight`, `post_weight` (weights 0..127). Changing them left VOCALOID:AI synthesis unchanged | Committed note-level HMM weights |"
+            "| `note_skill_set` | Required | Target note (optional `track_index=0`, `part_index=0`, `note_index=0`); optional `duration_tick`, `pre_weight`, `post_weight` (weights 0..127). AI notes with existing Attack/Release are rejected | Committed note-level HMM weights |"
           ]
         },
         {

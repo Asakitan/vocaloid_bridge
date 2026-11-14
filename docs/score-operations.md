@@ -17,6 +17,11 @@ alternate engine, JSON reconstruction of projects, or audio synthesis in these
 operations. The caller opens a session and saves it through the existing project
 lifecycle. Original project files are not written by score operations.
 
+On extension-bearing multi-track projects, track-volume and pan mutations first
+run on an isolated native clone and verify its saved identities. A resulting
+collision between tracks with different opaque data rejects the request before
+changing the source session or its history. Master-volume edits are unaffected.
+
 ## Native AI Generation
 
 VOCALOID:AI estimates the performance from notes, lyrics, voice and expression
@@ -66,10 +71,10 @@ Each successful staged mutation calls native `Commit()` with history enabled,
 sets session `Dirty`, and invalidates child references. The session/root reference
 is retained. Failed mutation attempts also invalidate children; staged edits are
 rolled back and rollback failure is reported explicitly. No save occurs here.
-Track and pitch responses are read after commit. A post-commit readback mismatch
-raises an error with the session still dirty; it cannot roll back an already
-committed change. Redundant track fields are not written and do not create
-artificial history entries.
+Track and pitch readbacks used by these mutations are checked before archive
+validation and commit, while a staged change can still be rolled back.
+Redundant track fields are not written and do not create artificial history
+entries.
 
 Read/list operations do not set `Dirty` or invalidate references. `undo` and
 `redo` call native history methods and set `Dirty`; they fail if history is
@@ -82,13 +87,17 @@ made undoable by this wrapper. History is not a transaction journal for files.
 | --- | --- | --- |
 | `track.list` | None | `tracks`: track summaries |
 | `track.create` | Optional `type` (`Midi`, `MidiAi`, `Audio`; default `MidiAi`), `name` (default `Track`), insertion `index` (default append) | Created track summary |
-| `track.update` | `track_index`; one or more of `name`, native palette `color` (0..15), `mute`, `solo`, `bus_no`, MIDI-only `midi_recording` | Updated track summary |
+| `track.update` | `track_index`; one or more of `name`, native palette `color` (0..15), `mute`, `solo`, V7 `solo_state` (`Off`, `On`, `Defeat`), `bus_no`, MIDI-only `midi_recording` | Updated track summary |
 | `track.remove` | `track_index` | `removed`, old `track_index` |
 | `track.reorder` | `track_index`, `to_index` in the existing list | Moved track summary |
 | `track.duplicate` | `track_index`; optional insertion `index` (default immediately after source), `name` | Native duplicate summary |
 | `track.freeze_state` | `track_index` | Native `frozen`, `can_freeze`, and whether the cache is owned by this session |
 | `track.freeze` | `track_index` | Render a private native track cache; active only for this session, with authoring settings preserved on save/clone |
 | `track.unfreeze` | `track_index` | Release a cache owned by this session and restore editable native playback |
+
+Session-owned freeze also works on the tested extension-bearing V6/V7 projects;
+authoring extensions and resources remain protected on save and clone. Frozen
+sessions still reject edits that could invalidate the cached track.
 
 Track summaries contain `track_index`, native `type`, `name`, `color`, `mute`,
 `solo`, and `part_count`. Track duplication uses the installed public
@@ -102,7 +111,27 @@ The installed `TrackColorTable` has 16 entries; `color` is an index, not packed
 RGB or ARGB. Invalid colors fail validation before any supplied field is changed.
 Unchanged fields are skipped rather than treating native no-op setter results
 as failures. Changed color writes must succeed, and all requested fields must
-match freshly acquired native getters after commit.
+match freshly acquired native getters before commit.
+
+On VOCALOID7, `mute` is the stored native track mute flag and `channel_mute`
+is the effective channel state, which may differ when any track is soloed.
+Both stored mute and solo can be true. Updating mute while solo is active
+temporarily suspends and restores the session's solo tracks using native calls;
+the prepared transport must already be released. In the tested V7 project,
+standalone mute and solo changes do not create native undo entries.
+V7 `solo_state` selects native `Off`, `On` or `Defeat`; it cannot be supplied
+with `solo`. Boolean `solo=false` selects `Off`, including from `Defeat`.
+The track summary includes the native `solo_state`. VOCALOID6 rejects this
+V7-only option and retains the Boolean `solo` interface.
+Track types, solo states, performance modes, voice-color keys and bypass keys
+accept enum names case-insensitively, not numeric strings. Controller types
+require the exact case-sensitive native name.
+If a composite track update fails, the wrapper restores the pre-update mute,
+solo and recording state that is outside native history. If restoration itself
+fails, the error reports both failures and the session is marked dirty.
+The tested two-track native mix matched the audible stem both with stored mute
+on the soloed track and after solo ended with the other track muted; `Defeat`
+also included the other track: `artifacts/feature-acceptance-1fb9dfec16f3/summary.json`.
 
 A `track.update` containing only unchanged `name`, `color`, `mute`, `solo` and/or
 `bus_no` returns the current summary without changing a clean or already-dirty
@@ -141,6 +170,10 @@ delete, or rebuild notes. Voice services initialize through the existing host.
 ## Notes
 
 All note operations require `track_index` and `part_index`.
+`vocaloid_features` and `project_inspect(feature="notes")` expose bound edit
+templates, including `note.remove` and `note.clear`. Removal targets one
+zero-based note index; clear removes every note in the selected part. List the
+notes again after structural edits because indices can change.
 
 | Operation | Additional Options | `result` |
 | --- | --- | --- |
@@ -343,17 +376,19 @@ clears the addressed note's direct pitch using native clearing sentinels, before
 writing. A full `pitch.clear` also uses those sentinels; a partial clear uses the
 specified half-open note-relative range. The native primitive includes its end
 tick, so the bridge passes `end_tick - 1` and verifies the complete remaining
-point set while staged and again after commit. A pre-commit mismatch rolls back.
+point set while staged, including a readback from the reacquired note before
+commit. A pre-commit mismatch rolls back.
 The native-boundary probe is recorded in `artifacts/pitch-clear-native-08cb8e42a1df.json`;
 the actual MCP regression in `artifacts/feature-acceptance-ecd0ad6f2b5c/summary.json`
 passes exact and single-tick boundaries, empty and invalid intervals, native
 history, full clear and saved-project reopen.
 For `pitch.set`, requested anchors are checked in the staged transaction and
-again after commit, reacquiring the note for the latter check. A private native
+again after reacquiring the note, before commit. A private native
 probe (`artifacts/pitch-set-native-5c4bdb0f4c9b.json`) observed staged readback
 and rollback after an injected failure; a spontaneous mismatch was not observed.
-These checks require every requested anchor to have the correct native value. Readback failures are reported rather
-than accepting an empty or shortened curve. Uncommitted failures use the existing
+Each requested anchor must have its native value at that tick or an equivalent
+earlier sample-and-hold value. Readback failures are reported rather than
+accepting a missing or incorrect curve. Uncommitted failures use the existing
 staged rollback path.
 
 For tracked `directPitches` item extensions, the selected tick retains its

@@ -4,14 +4,13 @@ import verify_features as v
 
 
 @v.feature("library.lyrics_staged_guard_28", "library", "score_compose", "project_open",
-           "project_get", "project_items", "project_set", "project_edit", "project_library", "project_save")
+           "project_get", "project_items", "project_set", "project_edit", "project_library", "project_save",
+           "voicebanks", "vocaloid_features")
 async def lyrics_staged_guard(check):
-    seed = await check.call("score_compose", output_name=check.output("lyrics-stage-seed"),
-                            title="Lyric staging", bpm=120,
-                            notes=[{"start": 0, "duration": 1, "pitch": 60,
-                                    "lyric": "あ", "phoneme": "a", "lang_id": 0}])
-    await check.close(seed["native_session"]["session_id"])
-    sid = (await check.call("project_open", path=seed["path"]))["session_id"]
+    async with check.project() as seed:
+        await check.initialize_plain_ai(seed)
+        _, seed_path = await check.save(seed, "lyrics-stage-seed")
+    sid = (await check.call("project_open", path=str(seed_path)))["session_id"]
     try:
         notes_before = await check.edit(sid, "note.list", track_index=0, part_index=0)
         tempos = (await check.call("project_get", session_id=sid, member="Tempos"))["value"]

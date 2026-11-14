@@ -4,6 +4,7 @@ import sys
 import zipfile
 
 import verify_features as v
+from check_project_preservation import preserved_edit
 
 KEY = "x_track_automation_21"
 
@@ -80,16 +81,20 @@ async def track_automation_extensions(check, scope, prop):
         await check.edit(sid, "undo")
         restored, _ = await check.save(sid, "master-volume-remove-undo")
         v.require(events(restored) == replace_expected, "Master volume remove history lost fields", events(restored))
-        before_history = await check.edit(sid, "history.status")
-        await check.rejected("project_edit", "project_preservation", session_id=sid, operation="time.insert",
-                             options={"start_tick": 100, "duration_tick": 200, "include_tempo": False})
-        after_guard, _ = await check.save(sid, "master-volume-time-guard")
-        v.require(events(after_guard) == replace_expected and await check.edit(sid, "history.status") == before_history,
-                  "Rejected master-volume timeline edit changed state")
-        await check.rejected("project_edit", "project_preservation", session_id=sid, operation="track.duplicate",
-                             options={"track_index": 0})
-        v.require(await check.edit(sid, "history.status") == before_history,
-                  "Rejected track duplicate changed history")
+        _, shifted = await preserved_edit(check, sid, "time.insert",
+            start_tick=100, duration_tick=200, include_tempo=False)
+        boundary_value = round(default + (maximum - default) * 100 / 480)
+        expected_shifted = sorted([(tick + (200 if tick > 100 else 0), value, metadata)
+                                   for tick, value, metadata in replace_expected] +
+                                  [(100, boundary_value, None), (300, boundary_value, None)])
+        v.require(events(shifted) == expected_shifted,
+                  "Timeline insertion lost automation identity", events(shifted))
+        v.require(shifted["masterTrack"]["tempo"]["events"] == tempo_before,
+                  "Timeline insertion changed excluded tempo metadata")
+        _, duplicated = await preserved_edit(check, sid, "track.duplicate", track_index=0)
+        v.require(len(duplicated["tracks"]) == 2 and
+                  duplicated["tracks"][1][prop] == duplicated["tracks"][0][prop],
+                  "Track duplication lost automation metadata")
         clone = (await check.call("project_clone", session_id=sid))["session_id"]
         try:
             cloned, clone_path = await check.save(clone, "master-volume-clone")
@@ -107,11 +112,22 @@ async def track_automation_extensions(check, scope, prop):
     finally:
         await check.close(sid)
     async with check.project() as target:
-        target_before = await check.call("project_status", session_id=target)
-        await check.rejected("project_merge", "project_preservation", session_id=target,
-                             path=str(source), include_tracks=True, include_tempo=False)
-        v.require(await check.call("project_status", session_id=target) == target_before,
-                  "Rejected source migration changed target")
+        target_before, _ = await check.save(target, "track-automation-merge-before")
+        await check.call("project_merge", session_id=target,
+                         path=str(source), include_tracks=True, include_tempo=False)
+        merged, merged_path = await check.save(target, "track-automation-merge")
+        v.require(events(merged) == initial and merged["masterTrack"]["tempo"] == target_before["masterTrack"]["tempo"],
+                  "Track merge lost automation metadata or changed excluded tempo")
+        await check.edit(target, "undo")
+        undone, _ = await check.save(target, "track-automation-merge-undo")
+        v.require(undone == target_before, "Track automation merge undo differs")
+        await check.edit(target, "redo")
+        redone, _ = await check.save(target, "track-automation-merge-redo")
+        v.require(redone == merged, "Track automation merge redo differs")
+        reopened = (await check.call("project_open", path=str(merged_path)))["session_id"]
+        restored, _ = await check.save(reopened, "track-automation-merge-reopen")
+        v.require(restored == merged, "Track automation merge reopen differs")
+        await check.close(reopened)
     v.require(source.read_bytes() == original, "Track automation source archive changed")
     ambiguous = json.loads(json.dumps(sequence))
     same_track = json.loads(json.dumps(ambiguous["tracks"][0]))
@@ -125,6 +141,38 @@ async def track_automation_extensions(check, scope, prop):
     ambiguous_original = invalid_ambiguous.read_bytes()
     await check.rejected("project_open", "ambiguous|indistinguishable|project_preservation", path=str(invalid_ambiguous))
     v.require(invalid_ambiguous.read_bytes() == ambiguous_original, "Rejected ambiguous archive changed")
+    distinguishable = json.loads(json.dumps(ambiguous))
+    distinguishable["tracks"][1][prop]["events"][0]["value"] = minimum
+    members["Project/sequence.json"] = json.dumps(distinguishable, ensure_ascii=False).encode("utf-8")
+    collision_source = v.ROOT / "output" / check.output("track-automation-collision-source")
+    with zipfile.ZipFile(collision_source, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, payload in members.items():
+            archive.writestr(name, payload)
+    collision_original = collision_source.read_bytes()
+    collision_sid = (await check.call("project_open", path=str(collision_source)))["session_id"]
+    try:
+        collision_before, _ = await check.save(collision_sid, "track-automation-collision-before")
+        v.require(collision_before["tracks"][0][prop]["events"][0]["value"] == default and
+                  collision_before["tracks"][1][prop]["events"][0]["value"] == minimum and
+                  collision_before["tracks"][0][prop]["events"][0][KEY] !=
+                  collision_before["tracks"][1][prop]["events"][0][KEY],
+                  "Collision fixture lost distinct known values or opaque identities")
+        collision_history = await check.edit(collision_sid, "history.status")
+        collision_status = await check.call("project_status", session_id=collision_sid)
+        await check.rejected("project_edit", "ambiguous|indistinguishable|project_preservation",
+                             session_id=collision_sid, operation="automation.set",
+                             options={"scope": scope, "track_index": 1,
+                                      "points": [{"tick": 0, "value": default}]})
+        v.require(await check.edit(collision_sid, "history.status") == collision_history and
+                  await check.call("project_status", session_id=collision_sid) == collision_status,
+                  "Rejected automation identity collision changed history or dirty state")
+        collision_after, _ = await check.save(collision_sid, "track-automation-collision-after")
+        v.require(collision_after == collision_before and collision_source.read_bytes() == collision_original,
+                  "Rejected automation identity collision changed saved data or source")
+        check.evidence("automation_identity_collision", {"scope": scope, "rejected_before_mutation": True,
+                                                        "source": str(collision_source)})
+    finally:
+        await check.close(collision_sid)
     duplicate = json.loads(json.dumps(sequence))
     duplicate["tracks"][0][prop]["events"].append(
         json.loads(json.dumps(duplicate["tracks"][0][prop]["events"][1])))

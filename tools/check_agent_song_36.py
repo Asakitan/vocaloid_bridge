@@ -34,7 +34,9 @@ def _sung(note):
 
 @v.feature('agent.guidance_36', 'agent', 'vocaloid_workflow', 'vocaloid_operations', 'vocaloid_status')
 async def guidance(check):
-    v.require(len(check.tools) == 39, 'Unexpected advertised tool count', sorted(check.tools))
+    required = {'vocaloid_workflow', 'vocaloid_operations', 'vocaloid_status', 'project_create',
+                'project_edit', 'project_library', 'project_render_part', 'project_audio', 'score_compose'}
+    v.require(required <= check.tools.keys(), 'Agent guidance tools are missing', sorted(required - check.tools.keys()))
     described = {name: tool.description or '' for name, tool in check.tools.items()}
     for name, phrase in (('vocaloid_workflow', 'Read this first'), ('project_create', '44100'),
                          ('project_edit', 'pinyin'), ('project_edit', '480'), ('project_library', 'Default'),

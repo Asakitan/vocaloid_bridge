@@ -154,13 +154,19 @@ internal sealed partial class EngineHost
         name = track.Name,
         color = track.Color,
         mute = V7Compat.IsMute(track),
+    #if VOCALOID7
+        channel_mute = track.IsChannelMute,
+    #endif
         solo = V7Compat.IsSolo(track),
+    #if VOCALOID7
+        solo_state = track.SoloState.ToString(),
+    #endif
         bus_no = track.GetBusNo(),
         midi_recording = track.Type is VSMTrackType.Midi or VSMTrackType.MidiAi ? new WIVSMMidiTrack(track).IsEnabledMidiRecording : (bool?)null,
         part_count = track.NumParts
     };
 
-    private object ScoreTrackEdit(EngineSession session, string operation, JsonElement options)
+    private object ScoreTrackEdit(EngineSession session, string operation, JsonElement options, bool preflight = true)
     {
         WIVSMSequence sequence = session.Sequence;
         if (operation == "track.create")
@@ -168,7 +174,7 @@ internal sealed partial class EngineHost
             int index = ScoreInt(options, "index", 0, ScoreCount(sequence.NumTrack), ScoreCount(sequence.NumTrack));
             string name = ScoreString(options, "name", "Track");
             string typeName = ScoreString(options, "type", "MidiAi");
-            if (!Enum.TryParse(typeName, true, out VSMTrackType type) ||
+            if (!ScoreEnumName(typeName, true, out VSMTrackType type) ||
                 type is not (VSMTrackType.Midi or VSMTrackType.MidiAi or VSMTrackType.Audio))
                 throw new ArgumentException("type must be Midi, MidiAi, or Audio.");
             if (sequence.NumTrack >= sequence.MaxNumTrack)
@@ -224,49 +230,155 @@ internal sealed partial class EngineHost
         int? color = options.TryGetProperty("color", out _) ? ScoreInt(options, "color", 0, 15) : null;
         bool? mute = options.TryGetProperty("mute", out _) ? ScoreBool(options, "mute") : null;
         bool? solo = options.TryGetProperty("solo", out _) ? ScoreBool(options, "solo") : null;
+        bool hasSoloState = options.TryGetProperty("solo_state", out _);
+#if VOCALOID7
+        VSMTrackSoloState? desiredSoloState = null;
+        if (hasSoloState)
+        {
+            if (solo is not null)
+                throw new ArgumentException("Specify solo or solo_state, not both.");
+            string soloStateText = ScoreString(options, "solo_state");
+            if (!ScoreEnumName(soloStateText, true, out VSMTrackSoloState parsedSoloState) ||
+                parsedSoloState is not (VSMTrackSoloState.Off or VSMTrackSoloState.On or VSMTrackSoloState.Defeat))
+                throw new ArgumentException("solo_state must be Off, On, or Defeat.");
+            desiredSoloState = parsedSoloState;
+        }
+        else if (solo is not null)
+            desiredSoloState = solo.Value ? VSMTrackSoloState.On : VSMTrackSoloState.Off;
+        bool soloMatches = desiredSoloState is null || track.SoloState == desiredSoloState.Value;
+#else
+        if (hasSoloState)
+            throw new NotSupportedException("solo_state requires VOCALOID7.");
+        bool soloMatches = solo is null || V7Compat.IsSolo(track) == solo.Value;
+#endif
         int? bus = options.TryGetProperty("bus_no", out _) ? ScoreInt(options, "bus_no", 0, int.MaxValue) : null;
         bool? recording = options.TryGetProperty("midi_recording", out _) ? ScoreBool(options, "midi_recording") : null;
         if (recording is not null && track.Type is not (VSMTrackType.Midi or VSMTrackType.MidiAi))
             throw new ArgumentException("midi_recording requires a MIDI track.");
-        if (newName is null && color is null && mute is null && solo is null && bus is null && recording is null)
+        if (newName is null && color is null && mute is null && solo is null && !hasSoloState && bus is null && recording is null)
             throw new ArgumentException("track.update requires a track field to update.");
         // Return only when the existing mutation path would call no native setter.
         // MIDI recording deliberately stays on its original setter path.
         if (recording is null && (newName is null || track.Name == newName) &&
             (color is null || track.Color == color.Value) &&
             (mute is null || V7Compat.IsMute(track) == mute.Value) &&
-            (solo is null || V7Compat.IsSolo(track) == solo.Value) &&
+            soloMatches &&
             (bus is null || track.GetBusNo() == (uint)bus.Value))
         {
             ScoreRequireUnstaged(sequence);
             return ScoreTrackSummary(track, trackIndex);
         }
-        return ScoreMutate(session, operation, () =>
+        bool changesIdentity = (newName is not null && track.Name != newName) ||
+            (color is not null && track.Color != color.Value) ||
+            (mute is not null && V7Compat.IsMute(track) != mute.Value) || !soloMatches ||
+            (bus is not null && track.GetBusNo() != (uint)bus.Value);
+        if (preflight && changesIdentity && HasArchiveEntityExtensions(session))
         {
-            if (bus is not null && track.GetBusNo() != (uint)bus.Value)
-                ScoreRequire(track.SetBusNo((uint)bus.Value), operation + " bus_no", sequence);
-            if (recording is not null)
-                ScoreMidiTrack(session, trackIndex).IsEnabledMidiRecording = recording.Value;
-            if (newName is not null && track.Name != newName)
-                track.Name = newName;
-            if (color is not null && track.Color != color.Value)
-                ScoreRequire(track.SetColor(color.Value), operation, sequence);
-            if (mute is not null && V7Compat.IsMute(track) != mute.Value)
-                V7Compat.SetMute(track, mute.Value);
-            if (solo is not null && V7Compat.IsSolo(track) != solo.Value)
-                V7Compat.SetSolo(track, solo.Value);
-            return true;
-        }, () =>
+            ScoreRequireUnstaged(sequence);
+            EngineSession candidate = CloneProject(session.Id, null);
+            try
+            {
+                ScoreTrackEdit(candidate, operation, options, false);
+                string stage = Path.Combine(candidate.Directory, "track-preflight-" + Guid.NewGuid().ToString("N"));
+                PathGuard.CreateDirectory(stage);
+                if (!candidate.Sequence.Save(stage, false))
+                    throw new InvalidOperationException("Native track identity preflight snapshot failed: " + candidate.Sequence.LastError);
+                ValidateNativeSnapshot(candidate.Sequence, Path.Combine(stage, "Project", "sequence.json"));
+                ApplyArchivePreservation(candidate, stage);
+            }
+            finally { Close(candidate.Id, true); }
+        }
+        bool previousMute = V7Compat.IsMute(track);
+        bool? previousRecording = recording is null ? null : ScoreMidiTrack(session, trackIndex).IsEnabledMidiRecording;
+    #if VOCALOID7
+        VSMTrackSoloState previousSolo = track.SoloState;
+        bool desiredMute = mute ?? previousMute;
+    #else
+        bool previousSolo = V7Compat.IsSolo(track);
+    #endif
+        try
         {
-            WIVSMTrack updated = ScoreTrack(session, trackIndex);
-            ScoreRequire((newName is null || updated.Name == newName) &&
-                (color is null || updated.Color == color.Value) &&
-                (mute is null || V7Compat.IsMute(updated) == mute.Value) &&
-                (solo is null || V7Compat.IsSolo(updated) == solo.Value) &&
-                (bus is null || updated.GetBusNo() == (uint)bus.Value) &&
-                (recording is null || ScoreMidiTrack(session, trackIndex).IsEnabledMidiRecording == recording.Value), operation + " readback", sequence);
-            return ScoreTrackSummary(updated, trackIndex);
-        });
+            return ScoreMutate(session, operation, () =>
+            {
+                if (bus is not null && track.GetBusNo() != (uint)bus.Value)
+                    ScoreRequire(track.SetBusNo((uint)bus.Value), operation + " bus_no", sequence);
+                if (recording is not null)
+                    ScoreMidiTrack(session, trackIndex).IsEnabledMidiRecording = recording.Value;
+                if (newName is not null && track.Name != newName)
+                {
+                    track.Name = newName;
+                    ScoreRequire(track.Name == newName, operation + " name", sequence);
+                }
+                if (color is not null && track.Color != color.Value)
+                    ScoreRequire(track.SetColor(color.Value), operation, sequence);
+#if VOCALOID7
+                if (desiredSoloState == VSMTrackSoloState.Off && track.SoloState != VSMTrackSoloState.Off)
+                    V7Compat.SetSoloState(track, VSMTrackSoloState.Off);
+#endif
+                if (mute is not null && V7Compat.IsMute(track) != mute.Value)
+                    V7Compat.SetMute(track, mute.Value);
+#if VOCALOID7
+                if (desiredSoloState is not null && track.SoloState != desiredSoloState.Value)
+                    V7Compat.SetSoloState(track, desiredSoloState.Value);
+                if (V7Compat.IsMute(track) != desiredMute)
+                    V7Compat.SetMute(track, desiredMute);
+#else
+                if (solo is not null && V7Compat.IsSolo(track) != solo.Value)
+                    V7Compat.SetSolo(track, solo.Value);
+#endif
+                return true;
+            }, () =>
+            {
+                WIVSMTrack updated = ScoreTrack(session, trackIndex);
+                ScoreRequire((newName is null || updated.Name == newName) &&
+                    (color is null || updated.Color == color.Value) &&
+                    (mute is null || V7Compat.IsMute(updated) == mute.Value) &&
+#if VOCALOID7
+                    (desiredSoloState is null || updated.SoloState == desiredSoloState.Value) &&
+                    V7Compat.IsMute(updated) == desiredMute &&
+#else
+                    (solo is null || V7Compat.IsSolo(updated) == solo.Value) &&
+#endif
+                    (bus is null || updated.GetBusNo() == (uint)bus.Value) &&
+                    (recording is null || ScoreMidiTrack(session, trackIndex).IsEnabledMidiRecording == recording.Value), operation + " readback", sequence);
+                return ScoreTrackSummary(updated, trackIndex);
+            });
+        }
+        catch (Exception error)
+        {
+            if (sequence.IsStaged)
+                throw;
+            try
+            {
+                WIVSMTrack restored = ScoreTrack(session, trackIndex);
+#if VOCALOID7
+                if (restored.SoloState != previousSolo)
+                    V7Compat.SetSoloState(restored, previousSolo);
+#else
+                if (V7Compat.IsSolo(restored) != previousSolo)
+                    V7Compat.SetSolo(restored, previousSolo);
+#endif
+                if (V7Compat.IsMute(restored) != previousMute)
+                    V7Compat.SetMute(restored, previousMute);
+                if (previousRecording is not null && ScoreMidiTrack(session, trackIndex).IsEnabledMidiRecording != previousRecording.Value)
+                    ScoreMidiTrack(session, trackIndex).IsEnabledMidiRecording = previousRecording.Value;
+                if (V7Compat.IsMute(restored) != previousMute ||
+#if VOCALOID7
+                    restored.SoloState != previousSolo ||
+#else
+                    V7Compat.IsSolo(restored) != previousSolo ||
+#endif
+                    (previousRecording is not null && ScoreMidiTrack(session, trackIndex).IsEnabledMidiRecording != previousRecording.Value))
+                    throw new InvalidOperationException("Native track state restoration did not read back.");
+            }
+            catch (Exception restoreError)
+            {
+                session.Dirty = true;
+                throw new InvalidOperationException("Native track update and non-history state restoration both failed.",
+                    new AggregateException(error, restoreError));
+            }
+            throw;
+        }
     }
 
     private static WIVSMMidiPart ScorePart(WIVSMMidiTrack track, JsonElement options)
@@ -1239,7 +1351,7 @@ internal sealed partial class EngineHost
     private static VSMControllerType ScoreControllerType(JsonElement options)
     {
         string name = ScoreString(options, "type");
-        if (!Enum.TryParse(name, false, out VSMControllerType type) || !Enum.IsDefined(type))
+        if (!ScoreEnumName(name, false, out VSMControllerType type))
             throw new ArgumentException("Unknown native controller type: " + name);
         return type;
     }
@@ -1450,10 +1562,14 @@ internal sealed partial class EngineHost
 #endif
             ;
 
+    private static bool ScoreEnumName<T>(string text, bool ignoreCase, out T value) where T : struct, Enum
+        => Enum.TryParse(text, ignoreCase, out value) && Enum.GetNames<T>().Any(name =>
+            string.Equals(name, text, ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
+
     private static T ScorePerformanceEnum<T>(JsonElement options, string name) where T : struct, Enum
     {
         string text = ScoreString(options, name);
-        if (!Enum.TryParse(text, true, out T value) || !Enum.IsDefined(value))
+        if (!ScoreEnumName(text, true, out T value))
             throw new ArgumentException(name + " must be one of: " + string.Join(", ", Enum.GetNames<T>()));
         return value;
     }
@@ -1527,7 +1643,7 @@ internal sealed partial class EngineHost
                 throw new ArgumentException("voice_colors requires a native VoiceColor effect and an object of values.");
             foreach (JsonProperty entry in colorOptions.EnumerateObject())
             {
-                if (!Enum.TryParse(entry.Name, true, out VSMVoiceColor name) || !Enum.IsDefined(name) || colors.ContainsKey(name))
+                if (!ScoreEnumName(entry.Name, true, out VSMVoiceColor name) || colors.ContainsKey(name))
                     throw new ArgumentException("Unknown or duplicate voice color: " + entry.Name);
                 if (V7Compat.IsAi(track) != ScoreAiVoiceColor(name))
                     throw new NotSupportedException("Voice color is not applicable to the target track type: " + name);
@@ -1547,7 +1663,7 @@ internal sealed partial class EngineHost
                 throw new ArgumentException("bypass must be an object of native MIDI effect names and booleans.");
             foreach (JsonProperty entry in bypassOptions.EnumerateObject())
             {
-                if (!Enum.TryParse(entry.Name, true, out VSMMidiEffectType name) || !Enum.IsDefined(name) || bypass.ContainsKey(name)
+                if (!ScoreEnumName(entry.Name, true, out VSMMidiEffectType name) || bypass.ContainsKey(name)
                     || track.GetMidiEffect(name) is null || entry.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
                     throw new ArgumentException("Unavailable, duplicate, or invalid MIDI effect bypass: " + entry.Name);
                 bypass.Add(name, entry.Value.GetBoolean());
@@ -1625,7 +1741,7 @@ internal sealed partial class EngineHost
                 throw new ArgumentException("voice_colors requires a native VoiceColor effect and an object of values.");
             foreach (JsonProperty entry in colorOptions.EnumerateObject())
             {
-                if (!Enum.TryParse(entry.Name, true, out VSMVoiceColor name) || !Enum.IsDefined(name) || colors.ContainsKey(name))
+                if (!ScoreEnumName(entry.Name, true, out VSMVoiceColor name) || colors.ContainsKey(name))
                     throw new ArgumentException("Unknown or duplicate voice color: " + entry.Name);
                 VSMMidiEffectSetting bounds = color.VoiceColorSetting(name);
                 if (!entry.Value.TryGetInt32(out int value) || value < bounds.LowerBoundValue || value > bounds.UpperBoundValue)
@@ -1640,7 +1756,7 @@ internal sealed partial class EngineHost
                 throw new ArgumentException("bypass must be an object of native MIDI effect names and booleans.");
             foreach (JsonProperty entry in bypassOptions.EnumerateObject())
             {
-                if (!Enum.TryParse(entry.Name, true, out VSMMidiEffectType name) || !Enum.IsDefined(name) || bypass.ContainsKey(name)
+                if (!ScoreEnumName(entry.Name, true, out VSMMidiEffectType name) || bypass.ContainsKey(name)
                     || part.GetMidiEffect(name) is null || entry.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
                     throw new ArgumentException("Unavailable, duplicate, or invalid MIDI effect bypass: " + entry.Name);
                 bypass.Add(name, entry.Value.GetBoolean());
@@ -1722,7 +1838,7 @@ internal sealed partial class EngineHost
         };
     }
 
-    private object ScoreAutomationEdit(EngineSession session, string operation, JsonElement options)
+    private object ScoreAutomationEdit(EngineSession session, string operation, JsonElement options, bool preflight = true)
     {
         string scope = ScoreString(options, "scope");
         if (scope is not ("master_volume" or "track_volume" or "track_pan"))
@@ -1731,6 +1847,22 @@ internal sealed partial class EngineHost
         WIVSMTrack? track = scope == "master_volume" ? null : ScoreTrack(session, ScoreTrackIndex(session, options));
         ArchiveMasterVolumePreflight(session, scope);
         ArchiveTrackAutomationPreflight(session, scope, track);
+        if (preflight && track is not null && sequence.NumTrack > 1 && HasArchiveEntityExtensions(session))
+        {
+            ScoreRequireUnstaged(sequence);
+            EngineSession candidate = CloneProject(session.Id, null);
+            try
+            {
+                ScoreAutomationEdit(candidate, operation, options, false);
+                string stage = Path.Combine(candidate.Directory, "automation-preflight-" + Guid.NewGuid().ToString("N"));
+                PathGuard.CreateDirectory(stage);
+                if (!candidate.Sequence.Save(stage, false))
+                    throw new InvalidOperationException("Native automation identity preflight snapshot failed: " + candidate.Sequence.LastError);
+                ValidateNativeSnapshot(candidate.Sequence, Path.Combine(stage, "Project", "sequence.json"));
+                ApplyArchivePreservation(candidate, stage);
+            }
+            finally { Close(candidate.Id, true); }
+        }
         int minimum = scope == "master_volume" ? sequence.GetMinVolumeValue()
             : scope == "track_volume" ? track!.GetMinVolumeValue() : track!.GetMinPanpotValue();
         int maximum = scope == "master_volume" ? sequence.GetMaxVolumeValue()
@@ -2382,11 +2514,12 @@ internal sealed partial class EngineHost
         }
     }
 
-    private static object ScoreMutate(EngineSession session, string operation, Func<object> action, Func<object>? readback = null)
+    private static object ScoreMutate(EngineSession session, string operation, Func<object> action, Func<object>? readback = null,
+        string? archiveOperation = null)
     {
         WIVSMSequence sequence = session.Sequence;
         ScoreRequireUnstaged(sequence);
-        session.ArchiveBegin?.Invoke(operation);
+        session.ArchiveBegin?.Invoke(archiveOperation ?? operation);
         bool tracking = session.ArchiveEnd is not null;
         void End(string action) { if (tracking) { tracking = false; session.ArchiveEnd!(action); } }
         try

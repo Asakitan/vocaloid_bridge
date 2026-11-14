@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Yamaha.VOCALOID.MIDIInput;
@@ -405,6 +406,9 @@ internal sealed partial class EngineHost
                     if (part.InsertNote(new VSMRelTick(note.relative), new VSMNoteEvent(note.duration, note.Number, note.Velocity),
                         part.GetDefaultNoteExpression(), part.GetDefaultAiNoteExpression(), recording.Lyric, recording.Phonemes, true, recording.LangId) is null)
                         throw new InvalidOperationException("Native MIDI note insertion failed: " + part.LastError);
+                if (HasArchiveEntityExtensions(session) && part.Notes.GroupBy(note => (note.RelPosTick.Value,
+                    note.DurationTick.Value, note.NoteNumber, note.Lyric, note.Phonemes)).Any(group => group.Count() > 1))
+                    throw new InvalidDataException("project_preservation: ambiguous recorded note identities in snapshot.");
                 return true;
             }, () => {
                 WIVSMMidiPart current = ScoreMidiTrack(session, recording.TrackIndex).GetPart((ulong)recording.PartIndex)
@@ -417,7 +421,7 @@ internal sealed partial class EngineHost
                     ScoreRequire(after.GetValueOrDefault(group.Key) == beforeNotes.GetValueOrDefault(group.Key) + group.Count(),
                         "midi.recording.stop note readback", session.Sequence);
                 return new { inserted = prepared.Length, closed_on_stop = closedOnStop, unmatched_off = unmatchedOff, ignored_non_note = recording.IgnoredNonNote };
-            });
+            }, archiveOperation: "note.add");
         midiRecordings.Remove(session.Id);
         return result;
     }

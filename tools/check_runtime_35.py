@@ -18,18 +18,24 @@ from vocaloid_bridge.native_client import NativeClient, NativeError
 @v.feature('runtime.lifecycle_35', 'runtime', 'vocaloid_runtime', 'vocaloid_status', 'project_create',
            'project_edit', 'project_save', 'project_open', 'project_close', 'voicebanks')
 async def lifecycle(check):
+    initial = await check.call('vocaloid_runtime', operation='status')
+    if initial['running']:
+        v.require(initial['managed_by_mcp'] and initial['sessions'] == 0, 'Runtime fixture is not an idle owned host', initial)
+        await check.call('vocaloid_runtime', operation='stop')
     cold = await check.call('vocaloid_runtime', operation='status')
-    v.require(not cold['running'] and cold['generation'] == 0, 'Status started the engine')
+    generation = cold['generation']
+    v.require(not cold['running'], 'Status started the engine')
     sid = (await check.call('project_create', title='MCP-owned startup'))['session_id']
     running = await check.call('vocaloid_runtime', operation='status')
     check.owned_pids.add(running['pid'])
-    v.require(running['running'] and running['generation'] == 1 and running['mcp_version'] == __version__,
+    v.require(running['running'] and running['generation'] == generation + 1 and running['mcp_version'] == __version__,
               'Project create did not start the native runtime', running)
     await check.edit(sid, 'track.create', type='MidiAi', name='AI')
     await check.edit(sid, 'part.create', track_index=0, start_tick=0, duration_tick=1920)
     voice = next(item for item in (await check.call('voicebanks'))['voices']
                  if item['kind'] == 'Dnn' and item['available_in_sequence'])
-    await check.edit(sid, 'voice.set', track_index=0, part_index=0, ai_voice_bank_id=voice['comp_id'])
+    scope = {'scope': 'track'} if running['product'] == 'VOCALOID7' else {}
+    await check.edit(sid, 'voice.set', track_index=0, part_index=0, ai_voice_bank_id=voice['comp_id'], **scope)
     await check.edit(sid, 'note.add', track_index=0, part_index=0, start_tick=0, duration_tick=240, number=60)
     await check.rejected('vocaloid_runtime', 'Close or save', operation='restart')
     state = await check.call('vocaloid_runtime', operation='status')
@@ -38,7 +44,7 @@ async def lifecycle(check):
     await check.close(sid)
     restarted = await check.call('vocaloid_runtime', operation='restart')
     check.owned_pids.add(restarted['pid'])
-    v.require(restarted['pid'] != running['pid'] and restarted['generation'] == 2, 'Explicit restart did not replace the owned process')
+    v.require(restarted['pid'] != running['pid'] and restarted['generation'] == generation + 2, 'Explicit restart did not replace the owned process')
     sid = (await check.call('project_open', path=str(saved)))['session_id']
     await check.edit(sid, 'note.update', track_index=0, part_index=0, note_index=0, number=64)
     _, edited = await check.save(sid, 'runtime-edited')
@@ -52,7 +58,7 @@ async def lifecycle(check):
     sid = (await check.call('project_open', path=str(edited)))['session_id']
     recovered = await check.call('vocaloid_runtime', operation='status')
     check.owned_pids.add(recovered['pid'])
-    v.require(recovered['generation'] == 3 and recovered['pid'] != restarted['pid'], 'Known-exited runtime was not started on demand')
+    v.require(recovered['generation'] == generation + 3 and recovered['pid'] != restarted['pid'], 'Known-exited runtime was not started on demand')
     notes = await check.edit(sid, 'note.list', track_index=0, part_index=0)
     v.require(notes['notes'][0]['number'] == 64, 'Saved project did not reopen after process replacement')
     cache_root = Path(os.environ['LOCALAPPDATA']) / 'VOCALOID6'
@@ -63,7 +69,7 @@ async def lifecycle(check):
     v.require(not stopped['running'], 'Stop retained the native runtime')
     started = await check.call('vocaloid_runtime', operation='start')
     check.owned_pids.add(started['pid'])
-    v.require(started['generation'] == 4, 'Explicit MCP start did not start a new generation')
+    v.require(started['generation'] == generation + 4, 'Explicit MCP start did not start a new generation')
     await check.call('vocaloid_runtime', operation='stop')
     check.evidence('generations', [running['pid'], restarted['pid'], recovered['pid'], started['pid']])
 

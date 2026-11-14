@@ -9,7 +9,8 @@ Unfreeze acts only on the exact wave registered by this session. Frozen audio is
 temporary: saving or cloning produces the original unfrozen authoring state;
 the live session remains frozen until unfreeze or close. Changes that could
 invalidate the frozen authoring snapshot are rejected while the session is
-frozen. This is not an assertion that every effect, device, or sample rate has
+frozen. Clearing an already-empty note Attack/Release is a read-only no-op and
+does not invalidate the frozen cache. This is not an assertion that every effect, device, or sample rate has
 been acoustically validated.
 
 `artifacts/freeze-mcp-59c5a9b898b7.json` records a real MCP smoke of the three
@@ -17,6 +18,18 @@ operations, mutation rejection, save/clone authoring equality, unfreeze,
 source-file preservation and failure cleanup on an empty track.
 The maintained `freeze.lifecycle` case also passes in the integrated receipt
 `artifacts/feature-acceptance-26a71f9b1dc5/`.
+
+V6/V7 extension-bearing projects can freeze and unfreeze through the same
+session-owned cache. Focused tests preserve root/track/part/note, pitch,
+controller, automation, effect and parameter extensions plus an extra ZIP
+resource across freeze, save, clone, unfreeze, reopen and existing undo/redo.
+After presend alignment, frozen-cache PCM matches the pre-freeze native mix
+within 2/32768 for the tested project. `project_inspect(feature="freeze")`
+binds state, freeze and unfreeze templates to the selected track. Clearing an
+existing AI Attack remains rejected during freeze. Evidence: V7
+`artifacts/feature-acceptance-382ecd42cead/summary.json`, V6
+`artifacts/feature-acceptance-bc5654ce2c9d/summary.json`. Other extension
+combinations and real-time playback are not established by these cases.
 
 ## Native surface and editor evidence
 

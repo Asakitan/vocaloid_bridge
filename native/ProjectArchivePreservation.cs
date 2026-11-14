@@ -632,12 +632,22 @@ internal sealed partial class EngineHost
 
     private static void ArchiveValidateTrackDetails(WIVSMTrack track, JsonObject json)
     {
+        foreach (string scope in new[] { "track_volume", "track_pan" })
+        {
+            string property = ArchiveTrackAutomationProperty(scope);
+            if (json[property] is not JsonObject lane || lane["events"] is not JsonArray events)
+                continue;
+            ProjectArchiveArrays.ValidateController(ProjectArchiveArrays.ReadController(events, true),
+                ArchiveNativeTrackAutomation(track, scope));
+        }
         if ((json["color"] is not null && json["color"]!.GetValue<int>() != track.Color) ||
             (json["isMuted"] is not null && json["isMuted"]!.GetValue<bool>() != V7Compat.IsMute(track)) ||
             (json["isSoloMode"] is not null && json["isSoloMode"]!.GetValue<bool>() != V7Compat.IsSolo(track)) ||
             (json["busNo"] is not null && json["busNo"]!.GetValue<uint>() != track.GetBusNo()))
             throw new InvalidDataException("project_preservation: native track order or identity differs from serialized data.");
 #if VOCALOID7
+    if (json["soloState"] is not null && json["soloState"]!.GetValue<int>() != (int)track.SoloState)
+        throw new InvalidDataException("project_preservation: native track solo state differs from serialized data.");
         if (track.Type is VSMTrackType.Midi or VSMTrackType.MidiAi)
         {
             WIVSMMidiTrack midi = track as WIVSMMidiTrack ?? new WIVSMMidiTrack(track);
@@ -666,7 +676,12 @@ internal sealed partial class EngineHost
             JsonObject track = ArchiveObject(trackNode, "tracks[]");
             HashSet<string> partKeys = new(StringComparer.Ordinal);
             List<string> trackShape = [Key(track, "type", "name", "color", "isMuted", "isSoloMode", "busNo")];
+            foreach (string property in new[] { "volume", "panpot" })
+                trackShape.Add(track[property] is JsonObject lane && lane["events"] is JsonArray events
+                    ? JsonSerializer.Serialize(events.Select(item => Key(ArchiveObject(item, property + "/events[]"), "pos", "value")))
+                    : "null");
 #if VOCALOID7
+            trackShape.Add(Key(track, "soloState"));
             foreach (string property in new[] { "voice", "secondaryVoice" })
                 trackShape.Add(track[property] is JsonObject voice ? Key(voice, "compID") : "null");
 #endif
@@ -1107,7 +1122,8 @@ internal sealed partial class EngineHost
                 return;
             }
             if (operation.EndsWith(".get", StringComparison.Ordinal) || operation.EndsWith(".list", StringComparison.Ordinal) ||
-                operation is "controller.types" or "note.expression_bounds" or "time.convert" or "history.status" or "track.freeze_state") return;
+                operation is "controller.types" or "note.expression_bounds" or "time.convert" or "history.status" or
+                    "track.freeze" or "track.unfreeze" or "track.freeze_state") return;
             RequireArchiveMutationSupported(session, operation);
             return;
         }
@@ -1138,7 +1154,8 @@ internal sealed partial class EngineHost
     {
         if (id is null || !HasArchiveEntityExtensions(GetSession(id))) return;
         RequireArchiveNoteArrayExternalOperation(GetSession(id), domain, operation);
-        if (domain == "library" && operation is ("lyrics_apply" or "lyrics_reset" or "phonemes_apply" or "phonemes_reset" or "style_capture" or "style_apply"))
+        if (domain == "library" && operation is ("lyrics_apply" or "lyrics_reset" or "phonemes_apply" or "phonemes_reset" or
+            "style_capture" or "style_apply" or "note_skill_set" or "note_skill_reset"))
         {
             RequireArchiveMutationSupported(GetSession(id), operation);
             return;
@@ -1169,7 +1186,8 @@ internal sealed partial class EngineHost
             "tuning.set" or "vibrato.set" or "phoneme_timing.set" or "phoneme_timing.reset" or
             "pitch.set" or "pitch.clear" or "performance.set" or "selection.set" or "sequence.update" or
             "undo" or "redo" or "history.rollback" or "time.insert" or "time.delete" or "clipboard.paste" or "clipboard.cut" or "project.merge" or "media_import" or
-            "lyrics_apply" or "lyrics_reset" or "phonemes_apply" or "phonemes_reset" or "audio.set_effect" or "style_capture" or "style_apply"))
+            "lyrics_apply" or "lyrics_reset" or "phonemes_apply" or "phonemes_reset" or "audio.set_effect" or "style_capture" or "style_apply" or
+            "note_skill_set" or "note_skill_reset" or "dvqm_metadata"))
             throw new InvalidOperationException("project_preservation: this mutation has no verified identity transaction: " + operation);
     }
 
@@ -1181,9 +1199,19 @@ internal sealed partial class EngineHost
         "note.split" or "note.join" or
         "clipboard.paste" or "project.merge" or "media_import" or
         "lyrics_apply" or "lyrics_reset" or "phonemes_apply" or "phonemes_reset" or "audio.set_effect" or "style_capture" or "style_apply" or
+        "note_skill_set" or "note_skill_reset" or "dvqm_metadata" or
         "voice.set" or "vibrato.set" or "phoneme_timing.set" or "phoneme_timing.reset" or "pitch.set" or "pitch.clear" or
         "performance.set" or "selection.set" or "sequence.update" or "tempo.set" or "tempo.remove" or
         "time_signature.set" or "time_signature.remove" or "loop.set" or "tuning.set";
+
+    private void ArchiveRequireKnownNoteSubtree(EngineSession session, WIVSMNote note, string pointer)
+    {
+        if (!archiveStates.TryGetValue(session.Id, out ArchiveState? state) ||
+            !state.Live.TryGetValue(ArchiveKey(note), out ArchiveEntry? entry)) return;
+        if (entry.Extra.Any(field => field.Key == pointer || field.Key.StartsWith(pointer + "/", StringComparison.Ordinal) ||
+            field.Key == ArrayPrefix + pointer || field.Key.StartsWith(ArrayPrefix + pointer + "/", StringComparison.Ordinal)))
+            throw new InvalidOperationException("project_preservation: note metadata has unknown fields under " + pointer + "; mutation is not supported.");
+    }
 
     private void BeginArchiveMutation(EngineSession session, string action)
     {
@@ -1308,7 +1336,8 @@ internal sealed partial class EngineHost
             "voice.set" or "tempo.set" or "tempo.remove" or "time_signature.set" or "time_signature.remove" or
             "controller.set" or "controller.remove" or "automation.set" or "automation.remove" or "loop.set" or
             "tuning.set" or "vibrato.set" or "phoneme_timing.set" or "phoneme_timing.reset" or
-            "pitch.set" or "pitch.clear" or "performance.set" or "selection.set" or "sequence.update" or "media_import";
+            "pitch.set" or "pitch.clear" or "performance.set" or "selection.set" or "sequence.update" or "media_import" or
+            "note_skill_set" or "note_skill_reset" or "dvqm_metadata";
         if (rebindEmpty)
         {
             try { ArchiveRebindEmpty(state); }
